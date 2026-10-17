@@ -52,6 +52,7 @@ import {
   generateRecoveryCodes,
   consumeRecoveryCode
 } from './clientSecurity';
+import { apiUrl } from './apiConfig';
 
 export interface Toast {
   id: string;
@@ -304,39 +305,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Registered Users list kept strictly IN-MEMORY (zero credential exposure to localStorage)
   const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
 
-  // Current authenticated user kept strictly IN-MEMORY (default to initial shop owner for immediate demo availability)
-  const [currentUser, setCurrentUser] = useState<UserProfile | null>(INITIAL_USERS[1]);
+  // Current authenticated user (null by default; authenticates upon login or registration)
+  const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
 
   const isAuthenticated = currentUser !== null;
 
   // Shops
   const [shops, setShops] = useState<Shop[]>(() => {
     const loaded = getStoredItem<Shop[]>('shops', INITIAL_SHOPS);
-    return loaded.map((s) => {
-      const existingKey = s.razorpaySettings?.keyId?.trim();
-      if (!existingKey || existingKey === 'rzp_live_GaneshShopXerox' || !existingKey.startsWith('rzp_')) {
-        return {
-          ...s,
-          razorpaySettings: {
-            ...s.razorpaySettings,
-            enabled: true,
-            isTestMode: true,
-            keyId: 'rzp_test_Tl1FsgiWYHksab',
-            keySecret: 'u1AC9o6gxag0OrwunBqCMrEs',
-            autoCapture: true,
-            upiId: s.razorpaySettings?.upiId || 'shreeganeshxerox@okaxis',
-            receiptPrefix: s.razorpaySettings?.receiptPrefix || 'SGX-'
-          }
-        };
-      }
-      return s;
-    });
+    const cleaned = loaded.filter((s) => s.id !== 'shop_shree_ganesh');
+    const list = cleaned.length > 0 ? cleaned : INITIAL_SHOPS;
+    return list;
   });
-  const [activeShopId, setActiveShopIdState] = useState<string>(() =>
-    getStoredItem('active_shop_id', 'shop_shree_ganesh')
-  );
 
-  const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || INITIAL_SHOPS[0];
+  const [activeShopId, setActiveShopIdState] = useState<string>(() => {
+    const stored = getStoredItem<string>('active_shop_id', '');
+    if (stored === 'shop_shree_ganesh' || !stored) {
+      return INITIAL_SHOPS[0]?.id || '';
+    }
+    return stored;
+  });
+
+  const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || INITIAL_SHOPS[0] || {
+    id: 'shop_default',
+    name: 'Counter Print Shop',
+    slug: 'counter-print-shop',
+    ownerId: 'usr_default',
+    ownerName: 'Counter Owner',
+    ownerEmail: 'counter@printflow.io',
+    ownerPhone: '9999999999',
+    status: 'ACTIVE' as const,
+    planId: 'plan_free',
+    planName: 'Free Starter',
+    address: 'Counter 1',
+    city: 'City',
+    businessHours: '9:00 AM - 9:00 PM',
+    minimumOrder: 5,
+    primaryColor: '#2563EB',
+    createdAt: new Date().toISOString()
+  };
 
   const setActiveShopId = (id: string) => {
     setActiveShopIdState(id);
@@ -1227,32 +1234,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const regenerateAgentToken = async (agentId: string) => {
     try {
-      const response = await fetch(`/api/agent/${encodeURIComponent(agentId)}/rotate-token`, {
+      const url = apiUrl(`/api/agent/${encodeURIComponent(agentId)}/rotate-token`);
+      const response = await fetch(url, {
         method: 'POST',
+        credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-role': currentUser?.role || '',
-          'x-shop-id': activeShop.id
+          'x-user-role': currentUser?.role || 'SHOP_OWNER',
+          'x-shop-id': activeShop.id,
+          ...(currentUser?.role === 'ADMIN' ? { Authorization: 'Bearer admin_token_active' } : {})
         },
         body: JSON.stringify({
+          agentId,
           shopId: activeShop.id,
           deviceName: `${(activeShop.slug || 'COUNTER').toUpperCase().slice(0, 8)}-PC01`
         })
       });
-      const data = (await response.json()) as { success?: boolean; newAuthToken?: string; error?: string };
-      if (!response.ok || !data.success || !data.newAuthToken) {
+      const data = (await response.json()) as {
+        success?: boolean;
+        newAuthToken?: string;
+        token?: string;
+        error?: string;
+      };
+      const newToken = data.newAuthToken || data.token;
+      if (!response.ok || !data.success || !newToken) {
         const error = data.error || `Token generation failed (HTTP ${response.status})`;
         showToast('Token Generation Failed', error, 'error', 4000);
         return { success: false, error };
       }
 
-      const newToken = data.newAuthToken;
       setAgents((prev) => {
         const exists = prev.some((agent) => agent.id === agentId);
         const next = exists
           ? prev.map((agent) =>
               agent.id === agentId
-                ? { ...agent, status: 'OFFLINE' as const, lastSeen: 'Not connected' }
+                ? { ...agent, authToken: newToken, status: 'OFFLINE' as const, lastSeen: 'Not connected' }
                 : agent
             )
           : [
@@ -1266,6 +1282,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 lastSeen: 'Not connected',
                 connectedPrintersCount: 0,
                 printerCount: 0,
+                authToken: newToken,
                 createdAt: new Date().toISOString()
               }
             ];
@@ -1273,7 +1290,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return next;
       });
       addAuditLog('AGENT_TOKEN_REGENERATED', 'SETTINGS', agentId, 'New auth token issued for print agent');
-      showToast('Token Regenerated', 'Copy the new token into PrintFlow Agent to reconnect.', 'success', 3000);
+      showToast('Token Generated Successfully', 'Token copied! Enter this in PrintFlow Desktop Agent.', 'success', 3000);
       return { success: true, token: newToken };
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unable to contact PrintFlow server';

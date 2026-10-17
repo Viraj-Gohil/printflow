@@ -243,37 +243,6 @@ export const INITIAL_SAAS_PLANS: SaasPlan[] = [
 
 export const INITIAL_SHOPS: Shop[] = [
   {
-    id: 'shop_shree_ganesh',
-    name: 'Shree Ganesh Xerox & Printing',
-    slug: 'shree-ganesh-xerox',
-    ownerId: 'usr_owner_1',
-    ownerName: 'Ramesh Patel',
-    ownerEmail: 'ramesh.ganeshxerox@gmail.com',
-    ownerPhone: '9825012345',
-    status: 'ACTIVE',
-    isOpen: true,
-    planId: 'plan_pro',
-    planName: 'Pro Xerox Hub',
-    address: 'Shop 4, Campus Square, Near University Gate',
-    city: 'Ahmedabad, Gujarat',
-    businessHours: '8:30 AM - 9:30 PM (Mon-Sat)',
-    minimumOrder: 5,
-    logoUrl: '',
-    primaryColor: '#2563EB',
-    createdAt: '2026-01-15T08:00:00Z',
-    razorpaySettings: {
-      enabled: true,
-      isTestMode: true,
-      keyId: 'rzp_test_Tl1FsgiWYHksab',
-      keySecret: 'u1AC9o6gxag0OrwunBqCMrEs',
-      webhookSecret: 'whsec_ganesh_events_live',
-      upiId: 'shreeganeshxerox@okaxis',
-      autoCapture: true,
-      receiptPrefix: 'SGX-',
-      lastVerifiedAt: '2026-10-07T10:00:00Z'
-    }
-  },
-  {
     id: 'shop_royal_cyber',
     name: 'Royal Cyber Xerox & Studio',
     slug: 'royal-cyber-xerox',
@@ -414,9 +383,9 @@ export const INITIAL_SHOPS: Shop[] = [
 
 export const INITIAL_SUBSCRIPTIONS: Subscription[] = [
   {
-    id: 'sub_sgx_01',
-    shopId: 'shop_shree_ganesh',
-    shopName: 'Shree Ganesh Xerox & Printing',
+    id: 'sub_rcx_01',
+    shopId: 'shop_royal_cyber',
+    shopName: 'Royal Cyber Xerox & Studio',
     planId: 'plan_pro',
     planName: 'Pro Xerox Hub',
     status: 'ACTIVE',
@@ -430,7 +399,7 @@ export const INITIAL_SUBSCRIPTIONS: Subscription[] = [
     storageUsedMb: 1860,
     devicesUsed: 3,
     staffUsed: 2,
-    paymentId: 'pay_sub_sgx_oct26',
+    paymentId: 'pay_sub_rcx_oct26',
     paymentStatus: 'PAID',
     autoRenew: true,
     createdAt: '2026-01-15T08:00:00Z',
@@ -552,22 +521,22 @@ export const INITIAL_SUBSCRIPTIONS: Subscription[] = [
 ];
 
 export const INITIAL_PRICING_RULES: PricingRule[] = [
-  { id: 'pr_1', shopId: 'shop_shree_ganesh', paperSize: 'A4', color: 'BW', sides: 'SINGLE', pricePerPage: 2.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_2', shopId: 'shop_shree_ganesh', paperSize: 'A4', color: 'BW', sides: 'DOUBLE', pricePerPage: 1.5, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_3', shopId: 'shop_shree_ganesh', paperSize: 'A4', color: 'COLOR', sides: 'SINGLE', pricePerPage: 10.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_4', shopId: 'shop_shree_ganesh', paperSize: 'A4', color: 'COLOR', sides: 'DOUBLE', pricePerPage: 8.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_5', shopId: 'shop_shree_ganesh', paperSize: 'A3', color: 'BW', sides: 'SINGLE', pricePerPage: 6.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_6', shopId: 'shop_shree_ganesh', paperSize: 'A3', color: 'COLOR', sides: 'SINGLE', pricePerPage: 20.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_7', shopId: 'shop_shree_ganesh', paperSize: 'A5', color: 'BW', sides: 'SINGLE', pricePerPage: 1.5, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_8', shopId: 'shop_shree_ganesh', paperSize: 'Letter', color: 'BW', sides: 'SINGLE', pricePerPage: 2.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_9', shopId: 'shop_shree_ganesh', paperSize: 'Legal', color: 'BW', sides: 'SINGLE', pricePerPage: 3.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
-  { id: 'pr_10', shopId: 'shop_shree_ganesh', paperSize: 'Photo 4x6', customWidth: 4, customHeight: 6, unit: 'inch', color: 'COLOR', sides: 'SINGLE', pricePerPage: 15.0, currency: 'INR', isActive: true, createdAt: '2026-02-01T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' }
+  { id: 'pr_1', shopId: 'shop_royal_cyber', paperSize: 'A4', color: 'BW', sides: 'SINGLE', pricePerPage: 2.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_2', shopId: 'shop_royal_cyber', paperSize: 'A4', color: 'BW', sides: 'DOUBLE', pricePerPage: 1.5, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_3', shopId: 'shop_royal_cyber', paperSize: 'A4', color: 'COLOR', sides: 'SINGLE', pricePerPage: 10.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_4', shopId: 'shop_royal_cyber', paperSize: 'A4', color: 'COLOR', sides: 'DOUBLE', pricePerPage: 8.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_5', shopId: 'shop_royal_cyber', paperSize: 'A3', color: 'BW', sides: 'SINGLE', pricePerPage: 6.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_6', shopId: 'shop_royal_cyber', paperSize: 'A3', color: 'COLOR', sides: 'SINGLE', pricePerPage: 20.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_7', shopId: 'shop_royal_cyber', paperSize: 'A5', color: 'BW', sides: 'SINGLE', pricePerPage: 1.5, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_8', shopId: 'shop_royal_cyber', paperSize: 'Letter', color: 'BW', sides: 'SINGLE', pricePerPage: 2.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_9', shopId: 'shop_royal_cyber', paperSize: 'Legal', color: 'BW', sides: 'SINGLE', pricePerPage: 3.0, currency: 'INR', isActive: true, createdAt: '2026-01-15T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' },
+  { id: 'pr_10', shopId: 'shop_royal_cyber', paperSize: 'Photo 4x6', customWidth: 4, customHeight: 6, unit: 'inch', color: 'COLOR', sides: 'SINGLE', pricePerPage: 15.0, currency: 'INR', isActive: true, createdAt: '2026-02-01T08:00:00Z', updatedAt: '2026-10-01T10:00:00Z' }
 ];
 
 export const INITIAL_PRINTERS: PrinterDevice[] = [
   {
     id: 'prn_1',
-    shopId: 'shop_shree_ganesh',
+    shopId: 'shop_royal_cyber',
     deviceId: 'DEV-WIN-COUNTER-1',
     name: 'HP LaserJet Pro M404dn (Counter 1)',
     model: 'HP LaserJet Pro M404dn',
@@ -586,7 +555,7 @@ export const INITIAL_PRINTERS: PrinterDevice[] = [
   },
   {
     id: 'prn_2',
-    shopId: 'shop_shree_ganesh',
+    shopId: 'shop_royal_cyber',
     deviceId: 'DEV-WIN-COUNTER-1',
     name: 'Canon imageRUNNER 2625i (Heavy-Duty Xerox)',
     model: 'Canon imageRUNNER 2625i',
@@ -605,7 +574,7 @@ export const INITIAL_PRINTERS: PrinterDevice[] = [
   },
   {
     id: 'prn_3',
-    shopId: 'shop_shree_ganesh',
+    shopId: 'shop_royal_cyber',
     deviceId: 'DEV-WIN-COUNTER-1',
     name: 'Epson EcoTank L8180 (Color Printing)',
     model: 'Epson EcoTank L8180',
@@ -626,10 +595,10 @@ export const INITIAL_PRINTERS: PrinterDevice[] = [
 
 export const INITIAL_AGENTS: ElectronAgent[] = [
   {
-    id: 'agent_sgx_1',
-    shopId: 'shop_shree_ganesh',
-    shopName: 'Shree Ganesh Xerox & Printing',
-    deviceName: 'DESKTOP-XEROX-01',
+    id: 'agent_rcx_1',
+    shopId: 'shop_royal_cyber',
+    shopName: 'Royal Cyber Xerox & Studio',
+    deviceName: 'DESKTOP-ROYAL-01',
     version: 'v1.4.2',
     agentVersion: 'v1.4.2',
     status: 'OFFLINE',
@@ -648,16 +617,6 @@ export const INITIAL_USERS = [
     fullName: 'Platform Super Admin',
     role: 'ADMIN' as const,
     createdAt: '2026-01-01T00:00:00Z'
-  },
-  {
-    id: 'usr_owner_1',
-    email: 'shop@printflow.io',
-    password: 'shop',
-    fullName: 'Ramesh Patel',
-    role: 'SHOP_OWNER' as const,
-    phone: '9825012345',
-    shopId: 'shop_shree_ganesh',
-    createdAt: '2026-01-15T08:00:00Z'
   },
   {
     id: 'usr_owner_2',
@@ -685,9 +644,9 @@ export const INITIAL_PRINT_JOBS: PrintJob[] = [
   {
     id: 'pj_8821',
     orderCode: 'ORD-8821',
-    trackingToken: 'TRK-SGX-8821',
-    shopId: 'shop_shree_ganesh',
-    shopName: 'Shree Ganesh Xerox & Printing',
+    trackingToken: 'TRK-RCX-8821',
+    shopId: 'shop_royal_cyber',
+    shopName: 'Royal Cyber Xerox & Studio',
     customerName: 'Pooja Dave',
     customerPhone: '9825123456',
     customerEmail: 'pooja.dave@gmail.com',
@@ -842,8 +801,8 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     id: 'tx_8821',
     orderId: 'pj_8821',
     orderCode: 'ORD-8821',
-    shopId: 'shop_shree_ganesh',
-    shopName: 'Shree Ganesh Xerox & Printing',
+    shopId: 'shop_royal_cyber',
+    shopName: 'Royal Cyber Xerox & Studio',
     customerName: 'Pooja Dave',
     amount: 126,
     platformFee: 3.15,
@@ -851,7 +810,7 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     status: 'SUCCESS',
     paymentMethod: 'UPI QR',
     paymentGateway: 'RAZORPAY',
-    gatewayPaymentId: 'pay_rzp_live_sgx8821',
+    gatewayPaymentId: 'pay_rzp_live_rcx8821',
     type: 'PRINT_JOB',
     createdAt: '2026-10-07T08:31:00Z'
   },
@@ -907,19 +866,19 @@ export const INITIAL_TRANSACTIONS: Transaction[] = [
     createdAt: '2026-10-07T11:21:00Z'
   },
   {
-    id: 'tx_sub_sgx',
-    orderId: 'sub_sgx_01',
-    orderCode: 'SUB-PRO-SGX',
-    shopId: 'shop_shree_ganesh',
-    shopName: 'Shree Ganesh Xerox & Printing',
-    customerName: 'Ramesh Patel (Shop Owner)',
+    id: 'tx_sub_rcx_pro',
+    orderId: 'sub_rcx_01',
+    orderCode: 'SUB-PRO-RCX',
+    shopId: 'shop_royal_cyber',
+    shopName: 'Royal Cyber Xerox & Studio',
+    customerName: 'Vikram Singh (Shop Owner)',
     amount: 999,
     platformFee: 999,
     netAmount: 0,
     status: 'SUCCESS',
     paymentMethod: 'Corporate Card',
     paymentGateway: 'RAZORPAY',
-    gatewayPaymentId: 'pay_rzp_sub_sgx_oct',
+    gatewayPaymentId: 'pay_rzp_sub_rcx_oct',
     type: 'SAAS_SUBSCRIPTION',
     createdAt: '2026-10-01T00:00:00Z'
   },
@@ -983,8 +942,8 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
   {
     id: 'tck_1041',
     ticketNumber: 'TCK-1041',
-    shopId: 'shop_shree_ganesh',
-    shopName: 'Shree Ganesh Xerox & Printing',
+    shopId: 'shop_royal_cyber',
+    shopName: 'Royal Cyber Xerox & Studio',
     subject: 'Color jobs coming out as grayscale on Canon IR 2625i',
     description: 'Whenever a customer orders color prints on our Canon imageRUNNER 2625i, the Windows Electron Agent sends the postscript spooler file in monochrome black and white. Paper size is A4. Please help us configure the color driver mapping.',
     category: 'PRINTING_ISSUE',
@@ -1463,8 +1422,8 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
   {
     id: 'tck_1047',
     ticketNumber: 'TCK-1047',
-    shopId: 'shop_shree_ganesh',
-    shopName: 'Shree Ganesh Xerox & Printing',
+    shopId: 'shop_royal_cyber',
+    shopName: 'Royal Cyber Xerox & Studio',
     subject: 'Feature Request: WhatsApp notification on print job ready',
     description: 'Can we send an automated WhatsApp message to customer when their print job finishes? Many students leave their files and return 10 minutes later.',
     category: 'FEATURE_REQUEST',

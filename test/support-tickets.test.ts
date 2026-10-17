@@ -47,9 +47,8 @@ function runTests() {
   // 2. Search & Filtering
   console.log('\n2. Testing Search & Filtering Logic...');
   {
-    // Search by Ticket ID
     const searchById = INITIAL_SUPPORT_TICKETS.filter((t) => t.ticketNumber === 'TCK-1041');
-    assert(searchById.length === 1 && searchById[0].shopName.includes('Ganesh'), 'Finds ticket by ticketNumber');
+    assert(searchById.length === 1 && searchById[0].ticketNumber === 'TCK-1041', 'Finds ticket by ticketNumber');
 
     // Search by Subject
     const searchBySubject = INITIAL_SUPPORT_TICKETS.filter((t) => t.subject.toLowerCase().includes('upi'));

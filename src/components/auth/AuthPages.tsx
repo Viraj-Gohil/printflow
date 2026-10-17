@@ -384,29 +384,16 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) =
                 <ArrowRight className="w-4 h-4" />
               </button>
 
-              {/* Demo Shop Credentials Helper */}
+              {/* Demo Credentials Helper */}
               <div className="pt-2">
                 <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
-                      Demo Shop Credentials
+                      Demo Credentials
                     </span>
                     <span className="text-[10px] font-medium text-slate-500">1-Click Quick Fill</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setLoginEmail('shop@printflow.io');
-                        setLoginPassword('shop');
-                        setErrorMessage(null);
-                      }}
-                      className="text-left p-2 rounded-lg bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 transition-all text-xs cursor-pointer group"
-                    >
-                      <div className="font-semibold text-slate-800 group-hover:text-blue-700">Shree Ganesh Xerox</div>
-                      <div className="text-[11px] text-slate-500 font-mono truncate">shop@printflow.io</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5">Password: <span className="font-mono text-slate-600 font-semibold">shop</span></div>
-                    </button>
                     <button
                       type="button"
                       onClick={() => {
@@ -418,6 +405,19 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) =
                     >
                       <div className="font-semibold text-slate-800 group-hover:text-purple-700">Royal Cyber Xerox</div>
                       <div className="text-[11px] text-slate-500 font-mono truncate">vikram.royalcyber@gmail.com</div>
+                      <div className="text-[10px] text-slate-400 mt-0.5">Password: <span className="font-mono text-slate-600 font-semibold">shop</span></div>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setLoginEmail('sunita.campusprints@gmail.com');
+                        setLoginPassword('shop');
+                        setErrorMessage(null);
+                      }}
+                      className="text-left p-2 rounded-lg bg-white border border-slate-200 hover:border-blue-300 hover:bg-blue-50/50 transition-all text-xs cursor-pointer group"
+                    >
+                      <div className="font-semibold text-slate-800 group-hover:text-blue-700">Campus Fast Prints</div>
+                      <div className="text-[11px] text-slate-500 font-mono truncate">sunita.campusprints@gmail.com</div>
                       <div className="text-[10px] text-slate-400 mt-0.5">Password: <span className="font-mono text-slate-600 font-semibold">shop</span></div>
                     </button>
                   </div>
@@ -437,7 +437,7 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) =
                 <div className="relative">
                   <input
                     type="text"
-                    placeholder="e.g. Shree Ganesh Xerox & Graphics"
+                    placeholder="e.g. City Xerox & Graphics"
                     value={registerShopName}
                     onChange={(e) => setRegisterShopName(e.target.value)}
                     onBlur={() => setRegisterTouched((p) => ({ ...p, shopName: true }))}

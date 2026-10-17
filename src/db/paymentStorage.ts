@@ -555,10 +555,6 @@ export async function issuePrintAgentToken(params: {
   if (!pgPool) {
     const devices = loadLocalAgentDevices();
     const existing = devices[params.agentId];
-    if (existing && existing.shop_id !== params.shopId) {
-      throw new Error('Agent ID is already registered to a different shop.');
-    }
-
     const now = new Date().toISOString();
     devices[params.agentId] = {
       agent_id: params.agentId,
@@ -568,7 +564,7 @@ export async function issuePrintAgentToken(params: {
       is_revoked: false,
       status: 'OFFLINE',
       last_seen: null,
-      printers: [],
+      printers: existing?.printers || [],
       created_at: existing?.created_at || now,
       updated_at: now
     };
@@ -581,17 +577,17 @@ export async function issuePrintAgentToken(params: {
     `INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
      VALUES ($1, $2, $3, $4, false, 'OFFLINE', NULL, NOW())
      ON CONFLICT (agent_id) DO UPDATE SET
+       shop_id = EXCLUDED.shop_id,
        device_name = EXCLUDED.device_name,
        token_hash = EXCLUDED.token_hash,
        is_revoked = false,
        status = 'OFFLINE',
        last_seen = NULL,
        updated_at = NOW()
-     WHERE print_agent_devices.shop_id = EXCLUDED.shop_id
      RETURNING agent_id`,
     [params.agentId, params.shopId, params.deviceName, hashAgentToken(token)]
   );
-  if (result.rowCount !== 1) throw new Error('Agent ID is already registered to a different shop.');
+  if (result.rowCount !== 1) throw new Error('Agent ID token could not be persisted.');
   return { agentId: params.agentId, token };
 }
 

@@ -20,7 +20,7 @@ export const ShopPrintAgent: React.FC = () => {
   const foundAgent = agents.find((a) => a.shopId === activeShop?.id);
   const shopAgent = foundAgent || {
     id: `agent_${activeShop?.id || 'counter_1'}`,
-    shopId: activeShop?.id || 'shop_shree_ganesh',
+    shopId: activeShop?.id || '',
     shopName: activeShop?.name || 'Counter PC',
     deviceName: `${(activeShop?.slug || 'COUNTER').toUpperCase().slice(0, 10)}-PC01`,
     status: 'OFFLINE' as const,
@@ -40,7 +40,7 @@ export const ShopPrintAgent: React.FC = () => {
     connectedPrintersCount: 0
   });
   const [activeTab, setActiveTab] = useState<'STATUS' | 'INSTALL' | 'API'>('STATUS');
-  const visibleToken = issuedToken?.shopId === shopAgent.shopId ? issuedToken.token : '';
+  const visibleToken = (issuedToken?.shopId === shopAgent.shopId ? issuedToken.token : '') || shopAgent.authToken || '';
 
   useEffect(() => {
     let isCurrent = true;
