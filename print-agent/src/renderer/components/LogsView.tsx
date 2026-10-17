@@ -88,7 +88,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
               aria-label="Filter by log category"
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value as typeof categoryFilter)}
-              className="settings-input !w-auto !text-xs min-w-36"
+              className="settings-input pf-form-select !w-auto !text-xs min-w-36"
             >
               <option value="ALL">All Categories</option>
               {(['AGENT', 'SPOOLER', 'NETWORK', 'AUTH', 'RECOVERY', 'STORAGE'] as const).map((category) => (

@@ -300,6 +300,7 @@
 
 /* Form Controls */
 .settings-input,
+.pf-form-input,
 input[type="text"],
 input[type="url"],
 input[type="password"],
@@ -307,33 +308,106 @@ input[type="search"],
 select,
 textarea {
   width: 100%;
-  min-height: 38px;
-  padding: 8px 12px;
-  border-radius: var(--radius-md);
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: 11px;
   background-color: var(--bg-surface);
   color: var(--text-primary);
   border: 1px solid var(--border-default);
   font-size: 13px;
+  line-height: 1.4;
   transition: border-color var(--transition-fast), box-shadow var(--transition-fast), background-color var(--transition-fast);
 }
 
+.settings-input:hover:not(:disabled):not([readonly]),
+.pf-form-input:hover:not(:disabled):not([readonly]),
+input[type="text"]:hover:not(:disabled):not([readonly]),
+input[type="url"]:hover:not(:disabled):not([readonly]),
+input[type="password"]:hover:not(:disabled):not([readonly]),
+select:hover:not(:disabled) {
+  border-color: var(--border-strong);
+}
+
 .settings-input::placeholder,
+.pf-form-input::placeholder,
 input::placeholder,
 textarea::placeholder {
   color: var(--text-faint);
 }
 
 .settings-input:focus,
+.pf-form-input:focus,
 input:focus,
 select:focus,
 textarea:focus {
   outline: none;
   border-color: var(--border-focus);
-  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.15);
+  box-shadow: 0 0 0 3px rgba(13, 148, 136, 0.16);
+}
+
+.settings-input:disabled,
+.pf-form-input:disabled,
+input:disabled,
+select:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  background-color: var(--bg-subtle);
+}
+
+.settings-input[readonly],
+.pf-form-input[readonly],
+input[readonly] {
+  background-color: var(--bg-subtle);
+  color: var(--text-secondary);
+  border-color: var(--border-default);
+  cursor: default;
 }
 
 .settings-input.w-auto {
   width: auto;
+}
+
+/* Custom Select with Chevron */
+.pf-form-select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2364748b' stroke-width='2'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' d='M19 9l-7 7-7-7'%3E%3C/path%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 14px center;
+  background-size: 16px 16px;
+  padding-right: 40px !important;
+}
+
+/* Accessible Toggle Switch */
+.pf-switch-track {
+  position: relative;
+  width: 44px;
+  height: 24px;
+  border-radius: 9999px;
+  background-color: var(--border-strong);
+  transition: background-color var(--transition-fast);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.pf-switch-track[data-checked="true"] {
+  background-color: #0d9488;
+}
+
+.pf-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 20px;
+  height: 20px;
+  border-radius: 9999px;
+  background-color: #ffffff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform var(--transition-fast);
+}
+
+.pf-switch-track[data-checked="true"] .pf-switch-thumb {
+  transform: translateX(20px);
 }
 
 /* Card Surface Class */

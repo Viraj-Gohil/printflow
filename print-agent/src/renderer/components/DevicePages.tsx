@@ -1,8 +1,7 @@
-import React, { useState } from 'react';
-import { AgentConfig, AgentConnectionStatus } from '../types/agent';
+import React, { useState, useEffect } from 'react';
+import { AgentConfig, AgentConnectionStatus, DiscoveredPrinter } from '../types/agent';
 import {
   Activity,
-  Copy,
   ExternalLink,
   Fingerprint,
   Info,
@@ -13,405 +12,680 @@ import {
   Store,
   Wifi,
   WifiOff,
+  Laptop,
+  Globe,
+  SlidersHorizontal,
+  Printer,
+  ArrowRight,
+  RefreshCw,
   Check,
-  Laptop
+  AlertTriangle,
+  HardDrive
 } from 'lucide-react';
 import { AgentStatusBadge } from './StatusBadge';
+import {
+  FormField,
+  ReadOnlyField,
+  TextInput,
+  SelectInput,
+  ToggleSwitch,
+  SettingsCard,
+  SaveButton
+} from './ui/FormControls';
 import packageMetadata from '../../../package.json';
 
-interface ProfileDeviceViewProps {
+export interface DevicePreferencesViewProps {
   config: AgentConfig;
   status: AgentConnectionStatus;
   lastHeartbeat: string | null;
+  printers: DiscoveredPrinter[];
   onSave: (values: Partial<AgentConfig>) => Promise<{ success: boolean; error?: string }>;
   onTestConnection: () => Promise<{ success: boolean; error?: string }>;
+  onReset: () => Promise<{ success: boolean; error?: string }>;
   onOpenSettings: () => void;
   onOpenLogs: () => void;
+  onNavigatePrinters: () => void;
   onCopyDeviceId: (deviceId: string) => Promise<boolean>;
 }
 
-export const ProfileDeviceView: React.FC<ProfileDeviceViewProps> = ({
+export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
   config,
   status,
   lastHeartbeat,
+  printers,
   onSave,
   onTestConnection,
+  onReset,
   onOpenSettings,
   onOpenLogs,
+  onNavigatePrinters,
   onCopyDeviceId
 }) => {
-  const [deviceName, setDeviceName] = useState(config.deviceName);
-  const [isBusy, setIsBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-  const [hasCopied, setHasCopied] = useState(false);
+  // Terminal Device Name State
+  const [deviceName, setDeviceName] = useState(config.deviceName || '');
+  const [nameSaveStatus, setNameSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [nameError, setNameError] = useState<string | null>(null);
 
-  const runAction = async (action: () => Promise<{ success: boolean; error?: string }>, successText: string) => {
-    setIsBusy(true);
-    setMessage(null);
+  // Agent Preferences State
+  const [pollIntervalMs, setPollIntervalMs] = useState(config.pollIntervalMs || 5000);
+  const [autoStartOnBoot, setAutoStartOnBoot] = useState(config.autoStartOnBoot || false);
+  const [allowColorFallback, setAllowColorFallback] = useState(config.allowColorFallback ?? true);
+  const [prefSaveStatus, setPrefSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
+  const [prefError, setPrefError] = useState<string | null>(null);
+
+  // Connection Test & Diagnostics State
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [isRefreshingStatus, setIsRefreshingStatus] = useState(false);
+  const [globalMessage, setGlobalMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  // Synchronize state when config changes externally
+  useEffect(() => {
+    setDeviceName(config.deviceName || '');
+    setPollIntervalMs(config.pollIntervalMs || 5000);
+    setAutoStartOnBoot(config.autoStartOnBoot || false);
+    setAllowColorFallback(config.allowColorFallback ?? true);
+  }, [config]);
+
+  // Handle Terminal Device Name Save
+  const handleSaveDeviceName = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (nameSaveStatus === 'saving' || !deviceName.trim() || deviceName === config.deviceName) return;
+
+    setNameSaveStatus('saving');
+    setNameError(null);
+    setGlobalMessage(null);
+
     try {
-      const result = await action();
-      setError(!result.success);
-      setMessage(result.success ? successText : result.error || 'The requested operation failed.');
-    } catch (caught) {
-      setError(true);
-      setMessage(caught instanceof Error ? caught.message : 'The requested operation failed.');
+      const result = await onSave({ deviceName: deviceName.trim() });
+      if (result.success) {
+        setNameSaveStatus('saved');
+        setGlobalMessage({ type: 'success', text: 'Terminal device name updated successfully.' });
+        setTimeout(() => setNameSaveStatus('idle'), 2500);
+      } else {
+        setNameSaveStatus('error');
+        setNameError(result.error || 'Failed to update device name.');
+        setTimeout(() => setNameSaveStatus('idle'), 3500);
+      }
+    } catch (err) {
+      setNameSaveStatus('error');
+      setNameError(err instanceof Error ? err.message : 'Failed to update device name.');
+      setTimeout(() => setNameSaveStatus('idle'), 3500);
+    }
+  };
+
+  // Handle Preferences Save
+  const handleSavePreferences = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (prefSaveStatus === 'saving') return;
+
+    setPrefSaveStatus('saving');
+    setPrefError(null);
+    setGlobalMessage(null);
+
+    try {
+      const result = await onSave({
+        pollIntervalMs,
+        autoStartOnBoot,
+        allowColorFallback
+      });
+
+      if (result.success) {
+        setPrefSaveStatus('saved');
+        setGlobalMessage({ type: 'success', text: 'Agent preferences saved and applied.' });
+        setTimeout(() => setPrefSaveStatus('idle'), 2500);
+      } else {
+        setPrefSaveStatus('error');
+        setPrefError(result.error || 'Could not save agent preferences.');
+        setTimeout(() => setPrefSaveStatus('idle'), 3500);
+      }
+    } catch (err) {
+      setPrefSaveStatus('error');
+      setPrefError(err instanceof Error ? err.message : 'Could not save agent preferences.');
+      setTimeout(() => setPrefSaveStatus('idle'), 3500);
+    }
+  };
+
+  // Handle Connection Test
+  const handleTestConnection = async () => {
+    if (isTestingConnection) return;
+    setIsTestingConnection(true);
+    setGlobalMessage(null);
+    try {
+      const result = await onTestConnection();
+      setGlobalMessage({
+        type: result.success ? 'success' : 'error',
+        text: result.success
+          ? 'Authenticated cloud connection verified successfully.'
+          : result.error || 'Cloud connection test failed.'
+      });
+    } catch (err) {
+      setGlobalMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Cloud connection test failed.'
+      });
     } finally {
-      setIsBusy(false);
+      setIsTestingConnection(false);
     }
   };
 
-  const saveDeviceName = () =>
-    runAction(() => onSave({ deviceName: deviceName.trim() }), 'Terminal device name updated successfully.');
-
-  const copyDeviceId = async () => {
-    if (!config.agentId) return;
-    const copied = await onCopyDeviceId(config.agentId);
-    setError(!copied);
-    setMessage(copied ? 'Agent Device ID copied to clipboard.' : 'Could not copy the device ID.');
-    if (copied) {
-      setHasCopied(true);
-      setTimeout(() => setHasCopied(false), 2500);
+  // Handle Status Refresh
+  const handleRefreshStatus = async () => {
+    if (isRefreshingStatus) return;
+    setIsRefreshingStatus(true);
+    setGlobalMessage(null);
+    try {
+      const result = await onTestConnection();
+      setGlobalMessage({
+        type: result.success ? 'success' : 'error',
+        text: result.success ? 'Device telemetry refreshed from backend.' : result.error || 'Could not refresh status.'
+      });
+    } catch (err) {
+      setGlobalMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Could not refresh status.'
+      });
+    } finally {
+      setIsRefreshingStatus(false);
     }
   };
+
+  // Handle Reset Settings & Credentials
+  const handleResetSettings = async () => {
+    const confirmed = window.confirm(
+      'Are you sure you want to reset all agent preferences and remove the stored device token?\n\n' +
+      '• The agent will return to initial setup mode.\n' +
+      '• Encrypted credentials will be securely wiped.\n' +
+      '• Local print recovery logs and cache will remain preserved.\n\n' +
+      'Proceed with reset?'
+    );
+
+    if (!confirmed) return;
+
+    setGlobalMessage(null);
+    try {
+      const result = await onReset();
+      if (result.success) {
+        setGlobalMessage({
+          type: 'success',
+          text: 'Settings and credentials were reset successfully.'
+        });
+      } else {
+        setGlobalMessage({
+          type: 'error',
+          text: result.error || 'Could not reset settings.'
+        });
+      }
+    } catch (err) {
+      setGlobalMessage({
+        type: 'error',
+        text: err instanceof Error ? err.message : 'Could not reset settings.'
+      });
+    }
+  };
+
+  const onlinePrintersCount = printers.filter((p) => p.isOnline).length;
 
   return (
-    <section className="space-y-5 animate-fade-in">
-      <div>
-        <h2 className="text-base font-bold text-[var(--text-primary)]">Profile &amp; Terminal Device</h2>
-        <p className="text-xs text-[var(--text-muted)] mt-0.5">
-          Hardware pairing identity, security credentials, and authenticated backend connectivity.
-        </p>
-      </div>
-
-      {message && (
-        <p
-          role={error ? 'alert' : 'status'}
-          className={`rounded-xl border px-4 py-3 text-xs font-medium animate-fade-in ${
-            error
+    <div className="space-y-6 animate-fade-in pb-8">
+      {/* Global Feedback Banner */}
+      {globalMessage && (
+        <div
+          role={globalMessage.type === 'error' ? 'alert' : 'status'}
+          className={`p-3.5 rounded-xl border text-xs font-medium flex items-center justify-between gap-3 animate-fade-in ${
+            globalMessage.type === 'error'
               ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
               : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
           }`}
         >
-          {message}
-        </p>
+          <div className="flex items-center gap-2">
+            {globalMessage.type === 'error' ? (
+              <AlertTriangle className="w-4 h-4 text-red-500 shrink-0" />
+            ) : (
+              <Check className="w-4 h-4 text-emerald-500 shrink-0" />
+            )}
+            <span>{globalMessage.text}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setGlobalMessage(null)}
+            className="text-xs font-semibold hover:opacity-80 cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Device Identity Card */}
-        <div className="pf-card p-5 space-y-4">
-          <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider pb-1 border-b border-[var(--border-default)]">
-            <Fingerprint className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-            <span>Terminal Identity</span>
+      {/* Row 1: Terminal Identity & Connection / Security */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+        {/* Section A: Terminal Identity Card */}
+        <SettingsCard
+          title="Terminal Identity"
+          description="Hardware pairing identifiers and counter station identity."
+          icon={<Fingerprint className="w-4 h-4" />}
+          badge={
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[var(--bg-subtle)] text-[var(--text-muted)] border border-[var(--border-default)]">
+              M2M Verified
+            </span>
+          }
+        >
+          <div className="space-y-3.5">
+            <ReadOnlyField
+              label="Agent Device ID"
+              value={config.agentId || 'Not Paired'}
+              badge={
+                <span className="text-[10px] font-semibold text-[var(--text-faint)] uppercase tracking-wider">
+                  Read-Only Tag
+                </span>
+              }
+              description="Unique cryptographic device identifier bound to this computer."
+              icon={<Fingerprint className="w-4 h-4" />}
+              copyable={Boolean(config.agentId)}
+              onCopy={onCopyDeviceId}
+            />
+
+            <ReadOnlyField
+              label="Paired Shop ID"
+              value={config.shopId || 'Not Paired'}
+              badge={
+                <span className="text-[10px] font-semibold text-[var(--text-faint)] uppercase tracking-wider">
+                  Shop Tenant
+                </span>
+              }
+              description="PrintFlow shop instance authorized to stream print requests to this device."
+              icon={<Store className="w-4 h-4" />}
+            />
+
+            <ReadOnlyField
+              label="Cloud Host Endpoint"
+              value={config.serverUrl || 'Not Configured'}
+              badge={
+                <span className="text-[10px] font-semibold text-[var(--text-faint)] uppercase tracking-wider">
+                  TLS Host
+                </span>
+              }
+              description="Secure backend API URL for job polling and telemetry synchronization."
+              icon={<Globe className="w-4 h-4" />}
+            />
+
+            {/* Editable Terminal Device Name */}
+            <form onSubmit={handleSaveDeviceName} className="pt-2 border-t border-[var(--border-default)]">
+              <FormField
+                label="Terminal Device Name"
+                htmlFor="terminal-device-name"
+                description="Friendly counter name displayed on your PrintFlow Shop Dashboard."
+                error={nameError || undefined}
+                required
+              >
+                <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                  <TextInput
+                    id="terminal-device-name"
+                    value={deviceName}
+                    onChange={(e) => setDeviceName(e.target.value)}
+                    placeholder="e.g. Counter PC 1"
+                    maxLength={100}
+                    icon={<Laptop className="w-4 h-4" />}
+                    disabled={nameSaveStatus === 'saving'}
+                  />
+                  <SaveButton
+                    status={nameSaveStatus}
+                    idleText="Save Name"
+                    savingText="Saving..."
+                    savedText="Saved ✓"
+                    errorText="Error"
+                    disabled={!deviceName.trim() || deviceName === config.deviceName}
+                    className="sm:w-auto shrink-0"
+                  />
+                </div>
+              </FormField>
+            </form>
           </div>
+        </SettingsCard>
 
-          <InfoRow
-            label="Agent Device ID"
-            value={<span className="font-mono text-xs">{config.agentId || 'Not Paired'}</span>}
-            action={
-              config.agentId ? (
-                <button
-                  type="button"
-                  onClick={copyDeviceId}
-                  className="secondary-button !min-h-[28px] !px-2.5 !py-1 !text-xs"
-                  title="Copy Agent ID to clipboard"
-                >
-                  {hasCopied ? <Check className="h-3 w-3 text-emerald-500" /> : <Copy className="h-3 w-3" />}
-                  <span>{hasCopied ? 'Copied' : 'Copy'}</span>
-                </button>
-              ) : undefined
-            }
-          />
-          <InfoRow label="Paired Shop ID" value={<span className="font-mono">{config.shopId || 'Not Paired'}</span>} />
-          <InfoRow label="Cloud Host Endpoint" value={<span className="font-mono text-xs truncate block max-w-[240px]">{config.serverUrl || 'Not Configured'}</span>} />
+        {/* Section B: Connection & Security Card */}
+        <SettingsCard
+          title="Connection & Security"
+          description="Live cloud telemetry, heartbeat status, and hardware vault state."
+          icon={<ShieldCheck className="w-4 h-4" />}
+          badge={
+            <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[var(--bg-subtle)] text-[var(--text-muted)] border border-[var(--border-default)]">
+              DPAPI Active
+            </span>
+          }
+        >
+          <div className="space-y-3.5">
+            {/* Status Item: Agent Connection */}
+            <div className="flex items-center justify-between p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-default)]">
+              <div>
+                <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider block">
+                  Agent Connection Status
+                </span>
+                <span className="text-xs font-bold text-[var(--text-primary)] mt-0.5 block">
+                  {status === 'ONLINE'
+                    ? 'Connected (Synchronized)'
+                    : status === 'CONNECTING'
+                    ? 'Connecting to Cloud...'
+                    : status === 'ERROR'
+                    ? 'Sync Error Encountered'
+                    : 'Offline / Disconnected'}
+                </span>
+              </div>
+              <AgentStatusBadge status={status} />
+            </div>
 
-          <div className="pt-2 border-t border-[var(--border-subtle)]">
-            <label htmlFor="device-name" className="mb-1.5 block text-xs font-semibold text-[var(--text-secondary)]">
-              Terminal Device Name
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="device-name"
-                value={deviceName}
-                onChange={(event) => setDeviceName(event.target.value)}
-                maxLength={100}
-                className="settings-input min-w-0 flex-1 !text-xs"
-                placeholder="e.g. Counter PC 1"
-              />
+            {/* Status Item: Heartbeat */}
+            <div className="p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-default)] space-y-1">
+              <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider block">
+                Last Authenticated Heartbeat
+              </span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-[var(--text-primary)] font-mono">
+                  {lastHeartbeat
+                    ? new Date(lastHeartbeat).toLocaleString()
+                    : 'No authenticated heartbeat recorded'}
+                </span>
+                {lastHeartbeat && (
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-emerald-600 dark:text-emerald-400">
+                    <Check className="w-3.5 h-3.5" />
+                    <span>Active</span>
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-[var(--text-muted)]">
+                Periodic handshake verifies terminal presence and token validity.
+              </p>
+            </div>
+
+            {/* Status Item: Pairing & Vault */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-default)] space-y-1">
+                <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider block">
+                  Pairing State
+                </span>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
+                  {config.agentId && config.shopId ? (
+                    <>
+                      <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <span className="text-emerald-700 dark:text-emerald-300">Paired &amp; Verified</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="w-4 h-4 text-amber-500" />
+                      <span className="text-amber-700 dark:text-amber-300">Setup Required</span>
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <div className="p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-default)] space-y-1">
+                <span className="text-[11px] font-semibold text-[var(--text-muted)] uppercase tracking-wider block">
+                  Credential Vault
+                </span>
+                <div className="flex items-center gap-1.5 text-xs font-bold text-[var(--text-primary)]">
+                  {config.credentialStorageStatus === 'SECURE' ? (
+                    <>
+                      <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+                      <span className="text-teal-700 dark:text-teal-300">Windows DPAPI</span>
+                    </>
+                  ) : config.hasStoredCredentials ? (
+                    <>
+                      <KeyRound className="w-4 h-4 text-amber-500" />
+                      <span className="text-amber-700 dark:text-amber-300">Legacy Encrypted</span>
+                    </>
+                  ) : (
+                    <>
+                      <KeyRound className="w-4 h-4 text-slate-400" />
+                      <span className="text-slate-500">Unconfigured</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <p className="text-[11.5px] leading-relaxed text-[var(--text-muted)] pt-1">
+              Your device authentication token is encrypted locally with Windows DPAPI via Electron safeStorage and is strictly isolated from renderer scripts.
+            </p>
+
+            {/* Action Buttons Toolbar */}
+            <div className="pt-2 border-t border-[var(--border-default)] flex flex-wrap gap-2">
               <button
                 type="button"
-                disabled={isBusy || !deviceName.trim() || deviceName === config.deviceName}
-                onClick={saveDeviceName}
-                className="primary-button !min-h-[36px] !text-xs disabled:cursor-not-allowed disabled:opacity-50"
+                onClick={handleTestConnection}
+                disabled={isTestingConnection}
+                className="primary-button !min-h-[38px] !px-3 !text-xs font-semibold"
+                title="Verify live authentication against the PrintFlow server"
               >
-                Save
+                <Wifi className={`w-3.5 h-3.5 ${isTestingConnection ? 'animate-spin' : ''}`} />
+                <span>{isTestingConnection ? 'Testing...' : 'Test Cloud Connection'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={handleRefreshStatus}
+                disabled={isRefreshingStatus}
+                className="secondary-button !min-h-[38px] !px-3 !text-xs font-semibold"
+                title="Refresh connection status from the backend"
+              >
+                <RotateCw className={`w-3.5 h-3.5 ${isRefreshingStatus ? 'animate-spin' : ''}`} />
+                <span>{isRefreshingStatus ? 'Refreshing...' : 'Refresh Status'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenSettings}
+                className="secondary-button !min-h-[38px] !px-3 !text-xs font-semibold"
+                title="Open device pairing dialog to enter or replace credentials"
+              >
+                <Settings2 className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                <span>Reconnect / Change Token</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={onOpenLogs}
+                className="secondary-button !min-h-[38px] !px-3 !text-xs font-semibold"
+                title="Open Live Logs console to view telemetry and error traces"
+              >
+                <Activity className="w-3.5 h-3.5 text-[var(--text-muted)]" />
+                <span>View Diagnostics</span>
               </button>
             </div>
           </div>
-        </div>
+        </SettingsCard>
+      </div>
 
-        {/* Connection & Security Card */}
-        <div className="pf-card p-5 space-y-4">
-          <div className="flex items-center gap-2 text-xs font-bold text-[var(--text-primary)] uppercase tracking-wider pb-1 border-b border-[var(--border-default)]">
-            <Activity className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-            <span>Connection &amp; Security</span>
+      {/* Row 2: Section C: Agent Preferences (Full Width Card) */}
+      <SettingsCard
+        title="Agent Preferences"
+        description="Fine-tune cloud polling intervals, Windows autostart behavior, and monochrome fallback rules."
+        icon={<SlidersHorizontal className="w-4 h-4" />}
+        badge={
+          <span className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-[var(--bg-subtle)] text-[var(--text-muted)] border border-[var(--border-default)]">
+            Local Configuration
+          </span>
+        }
+      >
+        <form onSubmit={handleSavePreferences} className="space-y-5">
+          {prefError && (
+            <div role="alert" className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 shrink-0" />
+              <span>{prefError}</span>
+            </div>
+          )}
+
+          {/* Polling Frequency Select */}
+          <div className="max-w-md">
+            <FormField
+              label="Queue Polling Frequency"
+              htmlFor="queue-poll-frequency"
+              description="Interval between automated requests checking for new customer print jobs."
+            >
+              <SelectInput
+                id="queue-poll-frequency"
+                value={pollIntervalMs}
+                onChange={(e) => setPollIntervalMs(Number(e.target.value))}
+              >
+                <option value={3000}>3 Seconds (High Speed Counter - Recommended for busy shops)</option>
+                <option value={5000}>5 Seconds (Standard Frequency - Default)</option>
+                <option value={10000}>10 Seconds (Low Network Overhead - Recommended for metered connections)</option>
+              </SelectInput>
+            </FormField>
           </div>
 
-          <InfoRow label="Agent Connection" value={<AgentStatusBadge status={status} />} />
-          <InfoRow
-            label="Last Authenticated Heartbeat"
-            value={lastHeartbeat ? new Date(lastHeartbeat).toLocaleString() : 'No successful heartbeat'}
-          />
-          <InfoRow
-            label="Pairing State"
-            value={
-              config.agentId && config.shopId ? (
-                <span className="inline-flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400 font-semibold">
-                  <ShieldCheck className="w-3.5 h-3.5" />
-                  <span>Paired &amp; Verified</span>
-                </span>
-              ) : (
-                <span className="text-amber-600 dark:text-amber-400 font-semibold">Setup Required</span>
-              )
-            }
-          />
-          <InfoRow
-            label="Credential Vault"
-            value={
-              <span className="inline-flex items-center gap-1.5">
-                {config.credentialStorageStatus === 'SECURE' ? (
-                  <>
-                    <ShieldCheck className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                    <span className="text-emerald-600 dark:text-emerald-400 font-semibold">Windows DPAPI Encrypted</span>
-                  </>
-                ) : config.hasStoredCredentials ? (
-                  <>
-                    <KeyRound className="h-4 w-4 text-amber-500" />
-                    <span className="text-amber-600 dark:text-amber-400">Legacy Storage</span>
-                  </>
-                ) : (
-                  <>
-                    <KeyRound className="h-4 w-4 text-amber-500" />
-                    <span className="text-amber-600 dark:text-amber-400">No Saved Credentials</span>
-                  </>
-                )}
-              </span>
-            }
-          />
-          <p className="text-[11px] leading-relaxed text-[var(--text-muted)] pt-1 border-t border-[var(--border-subtle)]">
-            The secret device auth token is strictly isolated inside Electron safeStorage and never exposed in the renderer interface.
-          </p>
-        </div>
-      </div>
-
-      {/* Action Buttons Toolbar */}
-      <div className="flex flex-wrap gap-2 pt-2">
-        <button
-          type="button"
-          disabled={isBusy}
-          onClick={() => runAction(onTestConnection, 'Authenticated cloud connection verified successfully.')}
-          className="primary-button !text-xs font-semibold"
-        >
-          <Wifi className="h-3.5 w-3.5" />
-          <span>Test Cloud Connection</span>
-        </button>
-
-        <button
-          type="button"
-          disabled={isBusy}
-          onClick={() => runAction(onTestConnection, 'Device status refreshed from backend.')}
-          className="secondary-button !text-xs font-semibold"
-        >
-          <RotateCw className="h-3.5 w-3.5" />
-          <span>Refresh Status</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenSettings}
-          className="secondary-button !text-xs font-semibold"
-        >
-          <Settings2 className="h-3.5 w-3.5" />
-          <span>Reconnect / Change Token</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={onOpenLogs}
-          className="secondary-button !text-xs font-semibold"
-        >
-          <Activity className="h-3.5 w-3.5" />
-          <span>View Diagnostics</span>
-        </button>
-      </div>
-    </section>
-  );
-};
-
-interface SettingsPageProps {
-  config: AgentConfig;
-  onSave: (values: Partial<AgentConfig>) => Promise<{ success: boolean; error?: string }>;
-  onReset: () => Promise<{ success: boolean; error?: string }>;
-}
-
-export const SettingsPage: React.FC<SettingsPageProps> = ({ config, onSave, onReset }) => {
-  const [pollIntervalMs, setPollIntervalMs] = useState(config.pollIntervalMs);
-  const [autoStartOnBoot, setAutoStartOnBoot] = useState(config.autoStartOnBoot);
-  const [allowColorFallback, setAllowColorFallback] = useState(config.allowColorFallback);
-  const [isBusy, setIsBusy] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
-  const [error, setError] = useState(false);
-
-  const save = async () => {
-    setIsBusy(true);
-    setMessage(null);
-    try {
-      const result = await onSave({ pollIntervalMs, autoStartOnBoot, allowColorFallback });
-      setError(!result.success);
-      setMessage(result.success ? 'Agent settings saved successfully.' : result.error || 'Could not save settings.');
-    } catch (caught) {
-      setError(true);
-      setMessage(caught instanceof Error ? caught.message : 'Could not save settings.');
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  const reset = async () => {
-    if (
-      !window.confirm(
-        'Reset agent settings and clear stored credentials? The agent will enter setup mode. Local job recovery data will remain.'
-      )
-    ) {
-      return;
-    }
-    setIsBusy(true);
-    setMessage(null);
-    try {
-      const result = await onReset();
-      setError(!result.success);
-      setMessage(
-        result.success
-          ? 'Settings and credentials were reset. Recovery records were preserved.'
-          : result.error || 'Could not reset settings.'
-      );
-    } catch (caught) {
-      setError(true);
-      setMessage(caught instanceof Error ? caught.message : 'Could not reset settings.');
-    } finally {
-      setIsBusy(false);
-    }
-  };
-
-  return (
-    <section className="max-w-3xl space-y-5 animate-fade-in">
-      <div>
-        <h2 className="text-base font-bold text-[var(--text-primary)]">Agent Preferences</h2>
-        <p className="text-xs text-[var(--text-muted)] mt-0.5">
-          Local configuration is persisted in your user profile and restored automatically on restart.
-        </p>
-      </div>
-
-      {message && (
-        <p
-          role={error ? 'alert' : 'status'}
-          className={`rounded-xl border px-4 py-3 text-xs font-medium animate-fade-in ${
-            error
-              ? 'border-red-500/30 bg-red-500/10 text-red-700 dark:text-red-300'
-              : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300'
-          }`}
-        >
-          {message}
-        </p>
-      )}
-
-      <div className="pf-card p-5 space-y-5">
-        <div>
-          <label htmlFor="poll-interval" className="mb-1.5 block text-xs font-semibold text-[var(--text-secondary)]">
-            Queue Polling Frequency
-          </label>
-          <select
-            id="poll-interval"
-            value={pollIntervalMs}
-            onChange={(e) => setPollIntervalMs(Number(e.target.value))}
-            className="settings-input max-w-xs !text-xs"
-          >
-            <option value={3000}>3 Seconds (High Speed Counter)</option>
-            <option value={5000}>5 Seconds (Recommended Standard)</option>
-            <option value={10000}>10 Seconds (Low Network Overhead)</option>
-          </select>
-          <p className="mt-1.5 text-[11px] text-[var(--text-muted)]">
-            Interval between automated checks to the paired PrintFlow cloud server.
-          </p>
-        </div>
-
-        <div className="space-y-3 pt-3 border-t border-[var(--border-subtle)]">
-          <label className="flex items-start gap-3 text-xs text-[var(--text-primary)] cursor-pointer select-none">
-            <input
-              type="checkbox"
+          {/* Checkboxes / Switches */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[var(--border-default)]">
+            <ToggleSwitch
+              id="autostart-on-boot"
               checked={autoStartOnBoot}
-              onChange={(e) => setAutoStartOnBoot(e.target.checked)}
-              className="mt-0.5 accent-teal-600"
+              onChange={setAutoStartOnBoot}
+              label="Launch Agent on Windows Sign-in"
+              description="Automatically launch PrintFlow Agent in the background system tray whenever the Windows user signs in."
             />
-            <div>
-              <span className="font-semibold text-[var(--text-secondary)]">Launch Agent on Windows Sign-in</span>
-              <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">
-                Automatically run the PrintFlow Agent in background tray upon user desktop login.
-              </span>
-            </div>
-          </label>
 
-          <label className="flex items-start gap-3 text-xs text-[var(--text-primary)] cursor-pointer select-none">
-            <input
-              type="checkbox"
+            <ToggleSwitch
+              id="allow-color-fallback"
               checked={allowColorFallback}
-              onChange={(e) => setAllowColorFallback(e.target.checked)}
-              className="mt-0.5 accent-teal-600"
+              onChange={setAllowColorFallback}
+              label="Allow Monochrome Fallback"
+              description="Permit black & white printing if the assigned physical printer runs out of color ink or only supports monochrome."
             />
-            <div>
-              <span className="font-semibold text-[var(--text-secondary)]">Allow Monochrome Fallback</span>
-              <span className="mt-0.5 block text-[11px] text-[var(--text-muted)]">
-                Permit black &amp; white printing if the assigned physical printer lacks color ink or cartridges.
+          </div>
+
+          {/* Actions Bar */}
+          <div className="pt-4 border-t border-[var(--border-default)] flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <SaveButton
+                status={prefSaveStatus}
+                idleText="Save Preferences"
+                savingText="Saving Preferences..."
+                savedText="Preferences Saved ✓"
+                errorText="Save Failed"
+                disabled={prefSaveStatus === 'saving'}
+                className="!min-h-[44px]"
+              />
+            </div>
+
+            <button
+              type="button"
+              onClick={handleResetSettings}
+              className="danger-button !min-h-[44px] !px-4 !text-xs font-semibold"
+              title="Reset configuration and erase saved device credentials"
+            >
+              <WifiOff className="w-4 h-4" />
+              <span>Reset Settings &amp; Credentials</span>
+            </button>
+          </div>
+        </form>
+      </SettingsCard>
+
+      {/* Row 3: Section D: Printer Summary */}
+      <SettingsCard
+        title="Printer Summary"
+        description="Local and network Windows printers available on this terminal."
+        icon={<Printer className="w-4 h-4" />}
+        headerAction={
+          <button
+            type="button"
+            onClick={onNavigatePrinters}
+            className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline flex items-center gap-1.5 cursor-pointer"
+          >
+            <span>Manage Printers &amp; Trays ({printers.length})</span>
+            <ArrowRight className="w-3.5 h-3.5" />
+          </button>
+        }
+      >
+        {printers.length === 0 ? (
+          <div className="py-8 text-center space-y-2 border border-dashed border-[var(--border-default)] rounded-xl bg-[var(--bg-subtle)]">
+            <Printer className="w-8 h-8 text-[var(--text-faint)] mx-auto" />
+            <p className="text-xs font-semibold text-[var(--text-secondary)]">No installed Windows printers detected</p>
+            <p className="text-[11px] text-[var(--text-muted)] max-w-sm mx-auto">
+              Connect a physical or virtual printer in Windows, then rescan from the Printers view.
+            </p>
+            <button
+              type="button"
+              onClick={onNavigatePrinters}
+              className="secondary-button !min-h-[32px] !text-xs mt-1"
+            >
+              <span>Go to Printers</span>
+            </button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <div className="flex items-center justify-between text-xs text-[var(--text-muted)] pb-1 border-b border-[var(--border-subtle)]">
+              <span>
+                <strong>{printers.length}</strong> Windows printer{printers.length === 1 ? '' : 's'} discovered •{' '}
+                <strong className="text-emerald-600 dark:text-emerald-400">{onlinePrintersCount}</strong> online
+              </span>
+              <span>
+                Active Spooler Target:{' '}
+                <strong className="text-[var(--text-primary)]">
+                  {config.selectedPrinterName || 'System Default'}
+                </strong>
               </span>
             </div>
-          </label>
-        </div>
 
-        <div className="flex flex-wrap gap-2 pt-4 border-t border-[var(--border-default)]">
-          <button
-            type="button"
-            disabled={isBusy}
-            onClick={save}
-            className="primary-button !text-xs font-semibold disabled:opacity-50"
-          >
-            <Settings2 className="h-3.5 w-3.5" />
-            <span>{isBusy ? 'Saving...' : 'Save Preferences'}</span>
-          </button>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+              {printers.slice(0, 6).map((p) => {
+                const isSelected = config.selectedPrinterName
+                  ? config.selectedPrinterName === p.name
+                  : p.isDefault;
 
-          <button
-            type="button"
-            disabled={isBusy}
-            onClick={reset}
-            className="danger-button !text-xs font-semibold disabled:opacity-50"
-          >
-            <WifiOff className="h-3.5 w-3.5" />
-            <span>Reset Settings &amp; Credentials</span>
-          </button>
-        </div>
-      </div>
-    </section>
+                return (
+                  <div
+                    key={p.name}
+                    className={`p-3 rounded-xl border bg-[var(--bg-subtle)] flex items-start justify-between gap-2 text-xs transition-colors ${
+                      isSelected
+                        ? 'border-teal-500/50 bg-teal-500/5 ring-1 ring-teal-500/20'
+                        : 'border-[var(--border-default)]'
+                    }`}
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-semibold text-[var(--text-primary)] truncate">{p.displayName}</span>
+                        {p.isDefault && (
+                          <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-[var(--bg-surface)] text-[var(--text-muted)] border border-[var(--border-default)] shrink-0">
+                            DEFAULT
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10.5px] text-[var(--text-muted)] truncate mt-0.5 flex items-center gap-1">
+                        <HardDrive className="w-3 h-3 text-[var(--text-faint)] shrink-0" />
+                        <span>{p.driverName || 'Windows Driver'}</span>
+                      </p>
+                      <div className="flex items-center gap-1 text-[10px] text-[var(--text-faint)] mt-1">
+                        <span>{p.capabilities.supportsColor ? 'Color' : 'Monochrome'}</span>
+                        <span>•</span>
+                        <span>{p.capabilities.supportsDuplex ? 'Duplex' : 'Simplex'}</span>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`shrink-0 rounded-full border px-2 py-0.5 text-[9.5px] font-bold ${
+                        p.isOnline
+                          ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                          : 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400'
+                      }`}
+                    >
+                      {p.status}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {printers.length > 6 && (
+              <p className="text-[11px] text-[var(--text-muted)] text-right">
+                Showing 6 of {printers.length} printers. Click &quot;Manage Printers &amp; Trays&quot; to inspect all.
+              </p>
+            )}
+          </div>
+        )}
+      </SettingsCard>
+    </div>
   );
 };
 
 export const AboutView: React.FC<{ onOpenExternal: (url: string) => Promise<void> }> = ({ onOpenExternal }) => (
   <section className="max-w-2xl space-y-5 animate-fade-in">
-    <div>
-      <h2 className="text-base font-bold text-[var(--text-primary)]">About PrintFlow Desktop Agent</h2>
-      <p className="text-xs text-[var(--text-muted)] mt-0.5">
-        Automated desktop spooler and cloud bridge designed for high-volume shop counters.
-      </p>
-    </div>
-
     <div className="pf-card p-6 space-y-4">
       <div className="flex items-center gap-3.5">
         <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/25">
@@ -419,7 +693,9 @@ export const AboutView: React.FC<{ onOpenExternal: (url: string) => Promise<void
         </div>
         <div>
           <h3 className="font-bold text-sm text-[var(--text-primary)]">PrintFlow Desktop Agent</h3>
-          <p className="text-xs text-[var(--text-muted)] font-mono">v{packageMetadata.version} • Windows x64 Spooler Service</p>
+          <p className="text-xs text-[var(--text-muted)] font-mono">
+            v{packageMetadata.version} • Windows x64 Spooler Service
+          </p>
         </div>
       </div>
 
@@ -461,16 +737,6 @@ export const AboutView: React.FC<{ onOpenExternal: (url: string) => Promise<void
   </section>
 );
 
-const InfoRow: React.FC<{ label: string; value: React.ReactNode; action?: React.ReactNode }> = ({
-  label,
-  value,
-  action
-}) => (
-  <div className="flex items-center justify-between gap-3 py-2 border-b border-[var(--border-subtle)] text-xs last:border-0 last:pb-0">
-    <div className="min-w-0">
-      <div className="text-[11px] font-medium text-[var(--text-muted)]">{label}</div>
-      <div className="mt-0.5 text-xs font-semibold text-[var(--text-primary)]">{value}</div>
-    </div>
-    {action}
-  </div>
-);
+// Backward-compatibility aliases if required by external consumers
+export const ProfileDeviceView = DevicePreferencesView;
+export const SettingsPage = DevicePreferencesView;

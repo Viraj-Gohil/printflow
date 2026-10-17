@@ -15,7 +15,7 @@ import crypto from 'node:crypto';
 import dotenv from 'dotenv';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
-dotenv.config({ override: true });
+dotenv.config();
 
 export interface StorageUploadInput {
   shopId: string;

@@ -15,21 +15,25 @@ import { DurableCheckoutRepository } from './durableCheckoutRepository';
 import { DurableGuestCheckoutRepository } from './guestCheckoutRepository';
 import { DurablePaymentRepository } from './durablePaymentRepository';
 
-dotenv.config({ override: true });
+dotenv.config();
 
-const DATABASE_URL = process.env.DATABASE_URL;
+const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
+const DATABASE_URL = rawDatabaseUrl ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : undefined;
 
 let _sharedPool: Pool | null = null;
 let _overridePoolConfigured: boolean | null = null;
 
-if (DATABASE_URL && DATABASE_URL.trim()) {
+if (DATABASE_URL && DATABASE_URL.length > 0) {
   try {
     _sharedPool = new Pool({
       connectionString: DATABASE_URL,
       max: 10,
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 5_000,
+      connectionTimeoutMillis: 10_000,
       ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
+    });
+    _sharedPool.on('error', (err) => {
+      console.warn('[repositoryFactory] Idle PostgreSQL client warning (handled):', err?.message || err);
     });
   } catch (err) {
     console.warn('[repositoryFactory] Failed to create shared PostgreSQL pool:', err);

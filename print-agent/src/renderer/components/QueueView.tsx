@@ -131,7 +131,7 @@ export const QueueView: React.FC<QueueViewProps> = ({
               aria-label="Filter jobs by printer"
               value={printerFilter}
               onChange={(e) => setPrinterFilter(e.target.value)}
-              className="settings-input !w-auto min-w-36 !text-xs"
+              className="settings-input pf-form-select !w-auto min-w-36 !text-xs"
             >
               <option value="">All Printers</option>
               {printers.map((printer) => (
@@ -146,7 +146,7 @@ export const QueueView: React.FC<QueueViewProps> = ({
               aria-label="Sort jobs by creation time"
               value={sortOrder}
               onChange={(e) => setSortOrder(e.target.value as 'NEWEST' | 'OLDEST')}
-              className="settings-input !w-auto !text-xs"
+              className="settings-input pf-form-select !w-auto !text-xs"
             >
               <option value="NEWEST">Newest First</option>
               <option value="OLDEST">Oldest First</option>

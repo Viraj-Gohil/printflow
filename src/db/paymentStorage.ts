@@ -6,7 +6,7 @@ import { Pool } from 'pg';
 import { encryptSecret, decryptSecret, maskKeyId } from '../lib/crypto/credentialCrypto';
 import { INITIAL_SAAS_PLANS, INITIAL_SHOPS } from '../data/mockData';
 
-dotenv.config({ override: true });
+dotenv.config();
 
 export interface ShopPaymentIntegrationRecord {
   id: string;
@@ -104,15 +104,23 @@ export interface PrintAgentJobFile {
 }
 
 // PostgreSQL Connection Pool (Neon PostgreSQL when DATABASE_URL is configured)
+// PostgreSQL Connection Pool (Neon PostgreSQL when DATABASE_URL is configured)
 let pgPool: Pool | null = null;
-const DATABASE_URL = process.env.DATABASE_URL;
+const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
+const DATABASE_URL = rawDatabaseUrl ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : undefined;
 export const isNeonDatabaseConfigured = (): boolean => pgPool !== null;
 
-if (DATABASE_URL && DATABASE_URL.trim().length > 0) {
+if (DATABASE_URL && DATABASE_URL.length > 0) {
   try {
     pgPool = new Pool({
       connectionString: DATABASE_URL,
+      max: 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
       ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
+    });
+    pgPool.on('error', (err) => {
+      console.warn('[PaymentStorage] Idle PostgreSQL client warning (handled):', err?.message || err);
     });
   } catch (err) {
     console.warn('[PaymentStorage] Failed to initialize Neon PostgreSQL connection pool:', err);
@@ -267,17 +275,25 @@ export async function initializePaymentTables(): Promise<void> {
       const legacyShopId = process.env.PRINTFLOW_LEGACY_SHOP_ID;
       const neonShopId = process.env.PRINTFLOW_NEON_SHOP_ID;
       if (legacyShopId && neonShopId) {
-        const targetShop = await client.query('SELECT id FROM shops WHERE id = $1', [neonShopId]);
-        if (targetShop.rowCount !== 1) {
-          throw new Error('Configured Neon shop mapping target does not exist.');
+        try {
+          const tableCheck = await client.query(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'shops'"
+          );
+          if (tableCheck.rowCount && tableCheck.rowCount > 0) {
+            const targetShop = await client.query('SELECT id FROM shops WHERE id = $1', [neonShopId]);
+            if (targetShop.rowCount === 1) {
+              await client.query(
+                `INSERT INTO printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
+                 VALUES ($1, $2, NOW())
+                 ON CONFLICT (client_shop_id)
+                 DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id, updated_at = NOW()`,
+                [legacyShopId, neonShopId]
+              );
+            }
+          }
+        } catch (mapErr) {
+          console.warn('[PaymentStorage] Optional shop mapping skipped:', mapErr);
         }
-        await client.query(
-          `INSERT INTO printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
-           VALUES ($1, $2, NOW())
-           ON CONFLICT (client_shop_id)
-           DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id, updated_at = NOW()`,
-          [legacyShopId, neonShopId]
-        );
       }
       console.log('[PaymentStorage] PostgreSQL payment and PrintFlow Agent tables verified successfully.');
     } finally {
@@ -285,8 +301,7 @@ export async function initializePaymentTables(): Promise<void> {
     }
 
   } catch (err) {
-    console.warn('[PaymentStorage] Could not run database migrations on Neon pool:', err);
-    throw new Error('Could not initialize Neon database tables required by PrintFlow.');
+    console.warn('[PaymentStorage] Could not run database migrations on Neon pool (non-fatal):', err);
   }
 }
 

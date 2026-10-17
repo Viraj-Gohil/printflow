@@ -14,23 +14,23 @@ import { QueueView } from './components/QueueView';
 import { PrintersView } from './components/PrintersView';
 import { LogsView } from './components/LogsView';
 import { SettingsModal } from './components/SettingsModal';
-import { AboutView, ProfileDeviceView, SettingsPage } from './components/DevicePages';
+import { AboutView, DevicePreferencesView } from './components/DevicePages';
 import {
   Activity,
   CircleHelp,
   LayoutDashboard,
   ListOrdered,
   Printer,
-  Settings2,
-  ShieldCheck,
+  SlidersHorizontal,
   Terminal,
   ChevronLeft,
   ChevronRight,
   AlertTriangle,
-  X
+  X,
+  ShieldCheck
 } from 'lucide-react';
 
-type AgentPage = 'DASHBOARD' | 'QUEUE' | 'PRINTERS' | 'LOGS' | 'PROFILE' | 'SETTINGS' | 'ABOUT';
+type AgentPage = 'DASHBOARD' | 'QUEUE' | 'PRINTERS' | 'LOGS' | 'DEVICE_PREFERENCES' | 'ABOUT';
 
 const DEFAULT_CONFIG: AgentConfig = {
   serverUrl: '',
@@ -66,15 +66,10 @@ const PAGE_DETAILS: Record<AgentPage, { title: string; description: string; icon
     description: 'Real-time agent service activity, spooler events, network handshakes, and errors.',
     icon: <Terminal className="w-4 h-4" />
   },
-  PROFILE: {
-    title: 'Terminal Profile & Pairing',
-    description: 'Device identity, hardware pairing state, and DPAPI encrypted credentials.',
-    icon: <ShieldCheck className="w-4 h-4" />
-  },
-  SETTINGS: {
-    title: 'Agent Preferences',
-    description: 'Local polling frequency, boot startup behavior, and spooler fallback rules.',
-    icon: <Settings2 className="w-4 h-4" />
+  DEVICE_PREFERENCES: {
+    title: 'Device & Preferences',
+    description: 'Manage terminal identity, cloud connectivity, printer behavior, and Agent preferences.',
+    icon: <SlidersHorizontal className="w-4 h-4" />
   },
   ABOUT: {
     title: 'About PrintFlow Desktop',
@@ -88,8 +83,7 @@ const NAVIGATION: Array<{ id: AgentPage; label: string; icon: React.ReactNode }>
   { id: 'QUEUE', label: 'Print Queue', icon: <ListOrdered className="w-4 h-4 shrink-0" /> },
   { id: 'PRINTERS', label: 'Printers', icon: <Printer className="w-4 h-4 shrink-0" /> },
   { id: 'LOGS', label: 'Live Logs', icon: <Terminal className="w-4 h-4 shrink-0" /> },
-  { id: 'PROFILE', label: 'Profile & Device', icon: <ShieldCheck className="w-4 h-4 shrink-0" /> },
-  { id: 'SETTINGS', label: 'Settings', icon: <Settings2 className="w-4 h-4 shrink-0" /> },
+  { id: 'DEVICE_PREFERENCES', label: 'Device & Preferences', icon: <SlidersHorizontal className="w-4 h-4 shrink-0" /> },
   { id: 'ABOUT', label: 'About', icon: <CircleHelp className="w-4 h-4 shrink-0" /> }
 ];
 
@@ -515,9 +509,9 @@ export const App: React.FC = () => {
               </div>
             </div>
 
-            {activePage === 'PROFILE' && (
+            {activePage === 'DEVICE_PREFERENCES' && (
               <span className="text-xs font-mono font-semibold px-2.5 py-1 rounded-lg bg-[var(--bg-subtle)] text-[var(--text-secondary)] border border-[var(--border-default)] self-start sm:self-auto">
-                {config.deviceName || config.agentId}
+                {config.deviceName || config.agentId || 'Terminal'}
               </span>
             )}
           </div>
@@ -608,20 +602,20 @@ export const App: React.FC = () => {
                 }}
               />
             )}
-            {activePage === 'PROFILE' && (
-              <ProfileDeviceView
+            {activePage === 'DEVICE_PREFERENCES' && (
+              <DevicePreferencesView
                 config={config}
                 status={status}
                 lastHeartbeat={lastHeartbeat}
+                printers={printers}
                 onSave={handleSaveConfig}
                 onTestConnection={handleTestConnection}
+                onReset={handleResetConfig}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenLogs={() => setActivePage('LOGS')}
+                onNavigatePrinters={() => setActivePage('PRINTERS')}
                 onCopyDeviceId={(deviceId) => window.electronAgentAPI?.copyText(deviceId) || Promise.resolve(false)}
               />
-            )}
-            {activePage === 'SETTINGS' && (
-              <SettingsPage config={config} onSave={handleSaveConfig} onReset={handleResetConfig} />
             )}
             {activePage === 'ABOUT' && (
               <AboutView

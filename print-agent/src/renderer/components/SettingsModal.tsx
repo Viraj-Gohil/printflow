@@ -285,7 +285,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <select
                 value={selectedPrinter}
                 onChange={(e) => setSelectedPrinter(e.target.value)}
-                className="settings-input !text-xs"
+                className="settings-input pf-form-select !text-xs"
               >
                 <option value="">Default Windows Printer</option>
                 {printers.map((p) => (
@@ -304,7 +304,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               <select
                 value={pollIntervalSec}
                 onChange={(e) => setPollIntervalSec(Number(e.target.value))}
-                className="settings-input !text-xs"
+                className="settings-input pf-form-select !text-xs"
               >
                 <option value={3}>3 Seconds (High Speed)</option>
                 <option value={5}>5 Seconds (Recommended)</option>

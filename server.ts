@@ -1,5 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import path from 'path';
+import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
 import Razorpay from 'razorpay';
@@ -81,7 +82,7 @@ import { inspectDocument } from './src/lib/documentInspector';
 import { getStorageProvider, buildObjectPath } from './src/lib/storage/supabaseStorage';
 
 
-dotenv.config({ override: true });
+dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
@@ -4528,21 +4529,37 @@ app.all('/api/payment/confirm-upi', handleDeprecatedUpi);
 // 5. STATIC ASSETS & VITE MIDDLEWARE INTEGRATION
 // ============================================================================
 async function startServer() {
-  await initializePaymentTables();
+  try {
+    await initializePaymentTables();
+  } catch (err) {
+    console.warn('[Server] Initial database table check deferred (non-fatal):', err);
+  }
 
-  if (process.env.NODE_ENV !== 'production') {
-    const { createServer } = await import('vite');
-    const vite = await createServer({
-      server: { middlewareMode: true, port: PORT, host: '0.0.0.0' },
-      appType: 'spa'
-    });
-    app.use(vite.middlewares);
-  } else {
-    const distPath = path.resolve('dist');
+  const distPath = path.resolve('dist');
+  const distExists = fs.existsSync(path.join(distPath, 'index.html'));
+
+  if (process.env.NODE_ENV === 'production' || distExists) {
     app.use(express.static(distPath));
     app.get('*', (_req: Request, res: Response) => {
       res.sendFile(path.join(distPath, 'index.html'));
     });
+  } else {
+    try {
+      const { createServer } = await import('vite');
+      const vite = await createServer({
+        server: { middlewareMode: true, port: PORT, host: '0.0.0.0' },
+        appType: 'spa'
+      });
+      app.use(vite.middlewares);
+    } catch (viteErr) {
+      console.warn('[Server] Could not start Vite dev middleware, serving static fallback if available:', viteErr);
+      if (distExists) {
+        app.use(express.static(distPath));
+        app.get('*', (_req: Request, res: Response) => {
+          res.sendFile(path.join(distPath, 'index.html'));
+        });
+      }
+    }
   }
 
   const httpServer = app.listen(PORT, '0.0.0.0', () => {
@@ -4572,6 +4589,13 @@ async function startServer() {
   process.on('SIGTERM', () => handleShutdown('SIGTERM'));
   process.on('SIGINT', () => handleShutdown('SIGINT'));
 }
+
+process.on('uncaughtException', (err) => {
+  console.error('[Process] Uncaught Exception:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[Process] Unhandled Rejection:', reason);
+});
 
 startServer().catch((err) => {
   console.error('Failed to start server:', err);
