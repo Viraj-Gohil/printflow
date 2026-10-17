@@ -10,4 +10,5 @@ print-agent/release/
 print-agent/dist/
 print-agent/node_modules/
 server.js
+bun.lock*
 
