@@ -52,6 +52,7 @@ import {
   PlanChangePolicy,
   PlanFeatureEntitlements
 } from '../../types';
+import { apiUrl } from '../../lib/apiConfig';
 
 export const AdminSubscriptions: React.FC = () => {
   const {
@@ -574,7 +575,7 @@ export const AdminSubscriptions: React.FC = () => {
 
     try {
       const mode = adminRazorpay.isTestMode ? 'test' : 'live';
-      const res = await fetch('/api/payment/platform-config', {
+      const res = await fetch(apiUrl('/api/payment/platform-config'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

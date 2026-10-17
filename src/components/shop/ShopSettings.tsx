@@ -21,6 +21,7 @@ import {
   Lock
 } from 'lucide-react';
 import { ShopRazorpaySettings } from '../../types';
+import { apiUrl } from '../../lib/apiConfig';
 import {
   validateShopName,
   validateEmail,
@@ -130,7 +131,7 @@ export const ShopSettings: React.FC = () => {
     }
 
     try {
-      const res = await fetch('/api/payment/platform-config/test', {
+      const res = await fetch(apiUrl('/api/payment/platform-config/test'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

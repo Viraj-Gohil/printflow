@@ -11,6 +11,7 @@ import {
   Info
 } from 'lucide-react';
 import { loadRazorpayScript, getEffectiveRazorpayKey } from '../../lib/razorpay';
+import { apiUrl } from '../../lib/apiConfig';
 
 export interface RazorpayCheckoutModalProps {
   isOpen: boolean;
@@ -73,7 +74,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
 
       let orderData: any;
       try {
-        const orderResponse = await fetch('/api/create-order', {
+        const orderResponse = await fetch(apiUrl('/api/create-order'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
@@ -176,7 +177,7 @@ export const RazorpayCheckoutModal: React.FC<RazorpayCheckoutModalProps> = ({
           setLogs([...newLogs]);
 
           try {
-            const verifyRes = await fetch('/api/verify-payment', {
+            const verifyRes = await fetch(apiUrl('/api/verify-payment'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

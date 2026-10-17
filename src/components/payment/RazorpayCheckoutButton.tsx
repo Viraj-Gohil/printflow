@@ -8,6 +8,7 @@ import {
   reconcileRazorpayPayment,
   RazorpaySuccessResponse
 } from '../../lib/razorpay';
+import { apiUrl } from '../../lib/apiConfig';
 import { CreditCard, CheckCircle2, AlertCircle, Loader2, ShieldCheck } from 'lucide-react';
 
 export interface RazorpayCheckoutButtonProps {
@@ -94,7 +95,7 @@ export const RazorpayCheckoutButton: React.FC<RazorpayCheckoutButtonProps> = ({
 
       let orderData: any;
       try {
-        const orderRes = await fetch('/api/create-order', {
+        const orderRes = await fetch(apiUrl('/api/create-order'), {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           signal: controller.signal,
@@ -204,7 +205,7 @@ export const RazorpayCheckoutButton: React.FC<RazorpayCheckoutButtonProps> = ({
           setStatusMessage('Verifying payment signature with server...');
 
           try {
-            const verifyRes = await fetch('/api/verify-payment', {
+            const verifyRes = await fetch(apiUrl('/api/verify-payment'), {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({

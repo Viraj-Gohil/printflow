@@ -482,7 +482,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Establish HttpOnly server cookie session asynchronously
     try {
-      fetch('/api/auth/login', {
+      fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: trimmedEmail, password })
@@ -518,7 +518,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Establish HttpOnly server cookie session asynchronously
     try {
-      fetch('/api/auth/login', {
+      fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: trimmedEmail, password })
@@ -626,7 +626,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     // Revoke server-side session and clear HttpOnly cookie
     try {
-      fetch('/api/auth/logout', { method: 'POST' }).catch(() => {});
+      fetch(apiUrl('/api/auth/logout'), { method: 'POST' }).catch(() => {});
     } catch (e) {}
 
     showToast('Signed Out', 'You have been logged out securely.', 'info', 3000);
@@ -692,7 +692,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Synchronize payment configuration with authoritative server state on load
   useEffect(() => {
-    fetch('/api/payment/public-config')
+    fetch(apiUrl('/api/payment/public-config'))
       .then((r) => r.json())
       .then((data) => {
         if (data?.success && data.isConfigured) {
@@ -723,7 +723,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setStoredItem('admin_razorpay', safeSettings);
 
     try {
-      const res = await fetch('/api/payment/platform-config', {
+      const res = await fetch(apiUrl('/api/payment/platform-config'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -767,7 +767,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
 
     try {
-      const res = await fetch(`/api/shop/${shopId}/payment-settings`, {
+      const res = await fetch(apiUrl(`/api/shop/${shopId}/payment-settings`), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1090,7 +1090,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const testGatewayConnection = async (): Promise<{ success: boolean; message: string; latencyMs: number }> => {
     try {
-      const res = await fetch('/api/payment/platform-config/test', {
+      const res = await fetch(apiUrl('/api/payment/platform-config/test'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1357,7 +1357,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let cancelled = false;
     const syncShopLiveData = async () => {
       try {
-        const response = await fetch(`/api/shop/${encodeURIComponent(activeShop.id)}/live`, {
+        const response = await fetch(apiUrl(`/api/shop/${encodeURIComponent(activeShop.id)}/live`), {
           credentials: 'same-origin',
           headers: {
             'x-user-role': currentUser.role,
@@ -2218,7 +2218,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!cloudReady || !CLOUD_STATE_KEYS.has(key)) return;
       const previous = pendingWrites.get(key) || Promise.resolve();
       const next = previous.catch(() => undefined).then(async () => {
-        const response = await fetch(`/api/app-data/${encodeURIComponent(key)}`, {
+        const response = await fetch(apiUrl(`/api/app-data/${encodeURIComponent(key)}`), {
           method: 'PUT',
           credentials: 'same-origin',
           headers: requestHeaders,
@@ -2246,7 +2246,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         records?: Record<string, unknown>;
       } = {};
       for (let attempt = 0; attempt < 4; attempt++) {
-        response = await fetch(`/api/app-data?shopId=${encodeURIComponent(activeShop.id)}`, {
+        response = await fetch(apiUrl(`/api/app-data?shopId=${encodeURIComponent(activeShop.id)}`), {
           credentials: 'same-origin',
           headers: requestHeaders
         });

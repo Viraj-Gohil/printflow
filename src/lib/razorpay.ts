@@ -3,6 +3,8 @@
  * Provides reliable, real-working payment collection for print shops.
  */
 
+import { apiUrl } from './apiConfig';
+
 export interface RazorpaySuccessResponse {
   razorpay_payment_id: string;
   razorpay_order_id?: string;
@@ -170,7 +172,7 @@ export const createRazorpayOrder = async (params: {
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     try {
-      const res = await fetch('/api/create-order', {
+      const res = await fetch(apiUrl('/api/create-order'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -235,7 +237,7 @@ export const verifyRazorpayPayment = async (params: {
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     try {
-      const res = await fetch('/api/verify-payment', {
+      const res = await fetch(apiUrl('/api/verify-payment'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -293,7 +295,7 @@ export const checkRazorpayOrderStatus = async (
     const timeoutId = setTimeout(() => controller.abort(), 8000);
 
     try {
-      const res = await fetch('/api/payment/check-status', {
+      const res = await fetch(apiUrl('/api/payment/check-status'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,
@@ -348,7 +350,7 @@ export const reconcileRazorpayPayment = async (params: {
     const timeoutId = setTimeout(() => controller.abort(), 10000);
 
     try {
-      const res = await fetch('/api/payment/reconcile', {
+      const res = await fetch(apiUrl('/api/payment/reconcile'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         signal: controller.signal,

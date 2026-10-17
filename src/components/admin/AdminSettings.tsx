@@ -19,6 +19,7 @@ import {
 } from 'lucide-react';
 import { AdminRazorpaySettings } from '../../types';
 import { RazorpayCheckoutModal } from '../payment/RazorpayCheckoutModal';
+import { apiUrl } from '../../lib/apiConfig';
 
 export const AdminSettings: React.FC = () => {
   const { adminRazorpay, updateAdminRazorpay, showToast } = useApp();
@@ -54,7 +55,7 @@ export const AdminSettings: React.FC = () => {
 
   // Load authoritative platform config from backend on mount
   useEffect(() => {
-    fetch('/api/payment/platform-config', {
+    fetch(apiUrl('/api/payment/platform-config'), {
       headers: {
         'Authorization': 'Bearer admin_token_active',
         'X-User-Role': 'ADMIN'
@@ -101,7 +102,7 @@ export const AdminSettings: React.FC = () => {
     setTestResult(null);
 
     try {
-      const res = await fetch('/api/payment/platform-config/test', {
+      const res = await fetch(apiUrl('/api/payment/platform-config/test'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -145,7 +146,7 @@ export const AdminSettings: React.FC = () => {
     setSaveSuccess(false);
 
     try {
-      const res = await fetch('/api/payment/platform-config', {
+      const res = await fetch(apiUrl('/api/payment/platform-config'), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -2,7 +2,7 @@ import React from 'react';
 import { AgentConfig, AgentConnectionStatus, DiscoveredPrinter, PrintJobItem, QueueMetrics } from '../types/agent';
 import { formatPrintError } from '../utils/printError';
 import { JobStatusBadge } from './StatusBadge';
-import { Printer, Clock, CheckCircle2, Cpu, ShieldCheck, ArrowRight, AlertTriangle } from 'lucide-react';
+import { Printer, Clock, CheckCircle2, Cpu, ShieldCheck, ArrowRight, AlertTriangle, FileText, Sparkles, RefreshCw } from 'lucide-react';
 
 interface DashboardProps {
   status: AgentConnectionStatus;
@@ -27,101 +27,140 @@ export const Dashboard: React.FC<DashboardProps> = ({
 }) => {
   const activeJob = jobs.find((j) => j.printStatus === 'PRINTING' || j.printStatus === 'DOWNLOADING');
   const activeProgress = activeJob
-    ? activeJob.printStatus === 'DOWNLOADING' ? activeJob.downloadProgress : activeJob.printProgress
+    ? activeJob.printStatus === 'DOWNLOADING'
+      ? activeJob.downloadProgress
+      : activeJob.printProgress
     : undefined;
   const recentJobs = jobs.slice(0, 5);
 
+  const onlinePrintersCount = printers.filter((p) => p.isOnline).length;
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 animate-fade-in">
       {/* 1. TOP METRICS CARDS */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Queue Backlog */}
-        <div className="bg-slate-800/60 border border-slate-700/60 p-4 rounded-2xl relative overflow-hidden">
+        <div className="pf-card p-4 relative overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Queue Backlog</span>
-            <div className="w-7 h-7 rounded-lg bg-amber-500/10 text-amber-400 flex items-center justify-center">
+            <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Queue Backlog</span>
+            <div className="w-8 h-8 rounded-lg bg-amber-500/10 text-amber-500 flex items-center justify-center">
               <Clock className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-black text-white mt-2 font-mono">{metrics.queuedJobs}</p>
-          <span className="text-[11px] text-slate-400 mt-1 block">Awaiting print spooler</span>
+          <p className="text-3xl font-extrabold text-[var(--text-primary)] mt-3 font-mono tracking-tight">
+            {metrics.queuedJobs}
+          </p>
+          <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-[var(--text-muted)]">
+            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+            <span>Awaiting spooler</span>
+          </div>
         </div>
 
         {/* Card 2: Active Spooling */}
-        <div className="bg-slate-800/60 border border-slate-700/60 p-4 rounded-2xl relative overflow-hidden">
+        <div className="pf-card p-4 relative overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Active Spooling</span>
-            <div className="w-7 h-7 rounded-lg bg-blue-500/10 text-blue-400 flex items-center justify-center">
+            <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Active Spooling</span>
+            <div className="w-8 h-8 rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center">
               <Printer className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-black text-white mt-2 font-mono">{metrics.printingJobs}</p>
-          <span className="text-[11px] text-slate-400 mt-1 block">Printing right now</span>
+          <p className="text-3xl font-extrabold text-[var(--text-primary)] mt-3 font-mono tracking-tight">
+            {metrics.printingJobs}
+          </p>
+          <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-[var(--text-muted)]">
+            <span className={`w-1.5 h-1.5 rounded-full ${metrics.printingJobs > 0 ? 'bg-teal-500 animate-ping' : 'bg-slate-400'}`} />
+            <span>{metrics.printingJobs > 0 ? 'Printing right now' : 'Spooler idle'}</span>
+          </div>
         </div>
 
         {/* Card 3: Completed Jobs */}
-        <div className="bg-slate-800/60 border border-slate-700/60 p-4 rounded-2xl relative overflow-hidden">
+        <div className="pf-card p-4 relative overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Completed Orders</span>
-            <div className="w-7 h-7 rounded-lg bg-emerald-500/10 text-emerald-400 flex items-center justify-center">
+            <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Completed Orders</span>
+            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
               <CheckCircle2 className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-black text-white mt-2 font-mono">{metrics.completedJobs}</p>
-          <span className="text-[11px] text-slate-400 mt-1 block">Successfully printed</span>
+          <p className="text-3xl font-extrabold text-[var(--text-primary)] mt-3 font-mono tracking-tight">
+            {metrics.completedJobs}
+          </p>
+          <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-[var(--text-muted)]">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span>Printed successfully</span>
+          </div>
         </div>
 
         {/* Card 4: Discovered Printers */}
-        <div className="bg-slate-800/60 border border-slate-700/60 p-4 rounded-2xl relative overflow-hidden">
+        <div className="pf-card p-4 relative overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
           <div className="flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Windows Printers</span>
-            <div className="w-7 h-7 rounded-lg bg-indigo-500/10 text-indigo-400 flex items-center justify-center">
+            <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Windows Printers</span>
+            <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center">
               <Cpu className="w-4 h-4" />
             </div>
           </div>
-          <p className="text-2xl font-black text-white mt-2 font-mono">{printers.length}</p>
-          <span className="text-[11px] text-slate-400 mt-1 block">
-            {config.selectedPrinterName ? 'Selected: ' + config.selectedPrinterName.slice(0, 14) + '...' : 'System default'}
-          </span>
+          <div className="flex items-baseline gap-2 mt-3">
+            <p className="text-3xl font-extrabold text-[var(--text-primary)] font-mono tracking-tight">{printers.length}</p>
+            <span className="text-xs text-[var(--text-muted)]">({onlinePrintersCount} online)</span>
+          </div>
+          <p className="text-[11px] text-[var(--text-muted)] mt-1.5 truncate" title={config.selectedPrinterName || 'System Default'}>
+            Target: <span className="font-semibold text-[var(--text-secondary)]">{config.selectedPrinterName ? config.selectedPrinterName : 'OS Default'}</span>
+          </p>
         </div>
       </div>
 
-      {/* 2. ACTIVE JOB SPOTLIGHT (IF PRINTING) */}
+      {/* 2. ACTIVE JOB SPOTLIGHT (WHEN PRINTING/DOWNLOADING) */}
       {activeJob && (
-        <div className="bg-gradient-to-r from-blue-950/70 to-indigo-950/70 border border-blue-500/40 p-5 rounded-2xl space-y-3 relative overflow-hidden shadow-lg shadow-blue-500/10">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-blue-400 animate-ping" />
-              <h2 className="text-sm font-bold text-white uppercase tracking-wider">Currently Processing Print Job</h2>
+        <div className="pf-card border-l-4 border-l-teal-600 p-5 space-y-4 bg-gradient-to-r from-teal-500/5 via-[var(--bg-surface)] to-[var(--bg-surface)] shadow-md">
+          <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <span className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-teal-500" />
+              </span>
+              <div>
+                <h2 className="text-sm font-bold text-[var(--text-primary)] uppercase tracking-wider flex items-center gap-2">
+                  <span>Currently Processing Print Job</span>
+                  <Sparkles className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                </h2>
+                <span className="text-xs text-[var(--text-muted)]">Live Windows Spooler Execution</span>
+              </div>
             </div>
             <JobStatusBadge status={activeJob.printStatus} />
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-slate-900/60 p-3 rounded-xl border border-blue-500/20">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs bg-[var(--bg-subtle)] p-3.5 rounded-xl border border-[var(--border-default)]">
             <div>
-              <span className="text-slate-400 text-[11px]">Order Code:</span>
-              <p className="font-bold font-mono text-white mt-0.5">{activeJob.id}</p>
+              <span className="text-[var(--text-muted)] text-[11px] font-medium">Order Reference:</span>
+              <p className="font-bold font-mono text-[var(--text-primary)] mt-0.5 truncate">{activeJob.id}</p>
             </div>
             <div>
-            <span className="text-slate-400 text-[11px]">Printer:</span>
-            <p className="font-bold text-slate-200 mt-0.5">{activeJob.printerName || 'Target pending'}</p>
+              <span className="text-[var(--text-muted)] text-[11px] font-medium">Assigned Printer:</span>
+              <p className="font-bold text-[var(--text-secondary)] mt-0.5 truncate">{activeJob.printerName || 'Auto-assigning...'}</p>
             </div>
             <div>
-              <span className="text-slate-400 text-[11px]">Target File:</span>
-              <p className="font-bold text-blue-400 truncate mt-0.5">{activeJob.files[0]?.fileName || 'Document.pdf'}</p>
+              <span className="text-[var(--text-muted)] text-[11px] font-medium">Document File:</span>
+              <p className="font-bold text-teal-600 dark:text-teal-400 truncate mt-0.5 flex items-center gap-1.5">
+                <FileText className="w-3.5 h-3.5 shrink-0" />
+                <span className="truncate">{activeJob.files[0]?.fileName || 'Document.pdf'}</span>
+              </p>
             </div>
           </div>
 
           {activeProgress !== undefined && (
             <div className="space-y-1.5 pt-1">
-              <div className="flex justify-between text-xs text-slate-300">
-                <span>{activeJob.printStatus === 'DOWNLOADING' ? 'Downloading document' : 'Sending job to the Windows Print Spooler'}</span>
-                <span className="font-mono font-bold text-blue-400">
-                  {activeProgress}%
+              <div className="flex justify-between text-xs text-[var(--text-secondary)] font-medium">
+                <span>
+                  {activeJob.printStatus === 'DOWNLOADING'
+                    ? 'Retrieving encrypted document payload...'
+                    : 'Transmitting raster data to Windows Print Spooler...'}
                 </span>
+                <span className="font-mono font-bold text-teal-600 dark:text-teal-400">{activeProgress}%</span>
               </div>
-              <div className="h-2.5 w-full overflow-hidden rounded-full border border-slate-700/80 bg-slate-800">
-                <div className="h-full rounded-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all" style={{ width: `${Math.max(0, Math.min(100, activeProgress))}%` }} />
+              <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-subtle)] border border-[var(--border-default)]">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-teal-500 to-teal-600 transition-all duration-300"
+                  style={{ width: `${Math.max(0, Math.min(100, activeProgress))}%` }}
+                />
               </div>
             </div>
           )}
@@ -131,15 +170,16 @@ export const Dashboard: React.FC<DashboardProps> = ({
       {/* 3. RECENT ACTIVITY & HARDWARE INTEGRATION STATUS */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         {/* Left Column: Recent Jobs Table */}
-        <div className="lg:col-span-2 bg-slate-800/40 border border-slate-700/60 rounded-2xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
+        <div className="lg:col-span-2 pf-card p-5 space-y-4">
+          <div className="flex items-center justify-between pb-1 border-b border-[var(--border-default)]">
             <div>
-              <h3 className="text-sm font-bold text-white">Recent Print Jobs</h3>
-              <p className="text-xs text-slate-400 mt-0.5">Automated queue handled by this terminal</p>
+              <h3 className="text-sm font-bold text-[var(--text-primary)]">Recent Print Queue</h3>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5">Automated spool jobs handled by this station</p>
             </div>
             <button
+              type="button"
               onClick={() => onNavigateTab('QUEUE')}
-              className="text-xs font-semibold text-blue-400 hover:text-blue-300 flex items-center gap-1 cursor-pointer"
+              className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline flex items-center gap-1 cursor-pointer"
             >
               <span>View Full Queue ({jobs.length})</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -147,14 +187,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           {recentJobs.length === 0 ? (
-            <div className="py-10 text-center space-y-2 border border-dashed border-slate-700/60 rounded-xl">
-              <Printer className="w-8 h-8 text-slate-600 mx-auto" />
-              <p className="text-xs text-slate-400">No print jobs in local queue.</p>
+            <div className="py-12 text-center space-y-3 border border-dashed border-[var(--border-default)] rounded-xl bg-[var(--bg-subtle)]">
+              <Printer className="w-9 h-9 text-[var(--text-faint)] mx-auto" />
+              <div>
+                <p className="text-sm font-semibold text-[var(--text-secondary)]">Queue is currently clear</p>
+                <p className="text-xs text-[var(--text-muted)] mt-0.5">No pending or recent print jobs stored locally.</p>
+              </div>
               <button
+                type="button"
                 onClick={onPollNow}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-bold rounded-lg cursor-pointer transition-colors"
+                className="primary-button text-xs font-semibold"
               >
-                Poll Cloud for Paid Orders
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Check Cloud for Orders</span>
               </button>
             </div>
           ) : (
@@ -162,17 +207,32 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {recentJobs.map((job) => (
                 <div
                   key={job.id}
-                  className="bg-slate-800/80 hover:bg-slate-800 border border-slate-700/50 p-3 rounded-xl flex items-center justify-between gap-3 text-xs transition-colors"
+                  className="p-3 rounded-xl border border-[var(--border-default)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)] flex items-center justify-between gap-3 text-xs transition-colors"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="font-mono font-bold text-white">{job.id}</span>
+                      <span className="font-mono font-bold text-[var(--text-primary)]">{job.id}</span>
+                      {job.printerName && (
+                        <span className="text-[10px] text-[var(--text-muted)] px-1.5 py-0.2 rounded bg-[var(--bg-subtle)] border border-[var(--border-default)] truncate">
+                          {job.printerName}
+                        </span>
+                      )}
                     </div>
-                    <p className="text-[11px] text-slate-400 truncate mt-0.5">
-                      {job.files[0]?.fileName} ({job.files[0]?.paperSize || 'A4'}, {job.files[0]?.colorMode || 'BW'}, {job.files[0]?.copies || 1} copy)
+                    <p className="text-[11.5px] text-[var(--text-secondary)] truncate mt-1 flex items-center gap-1.5">
+                      <FileText className="w-3.5 h-3.5 text-[var(--text-faint)] shrink-0" />
+                      <span className="font-medium truncate">{job.files[0]?.fileName || 'Document'}</span>
+                      <span className="text-[var(--text-faint)]">
+                        ({job.files[0]?.paperSize || 'A4'}, {job.files[0]?.colorMode || 'BW'}, {job.files[0]?.copies || 1} {job.files[0]?.copies === 1 ? 'copy' : 'copies'})
+                      </span>
                     </p>
-                    <p className="mt-1 text-[10px] text-slate-500">{new Date(job.createdAt).toLocaleString()} {job.printerName ? `· ${job.printerName}` : ''}</p>
-                    {job.errorMessage && <p className="mt-1 truncate text-[10px] text-red-300" title={formatPrintError(job.errorMessage)}>{formatPrintError(job.errorMessage)}</p>}
+                    <div className="flex items-center gap-2 mt-1 text-[10px] text-[var(--text-muted)]">
+                      <span>{new Date(job.createdAt).toLocaleString()}</span>
+                    </div>
+                    {job.errorMessage && (
+                      <p className="mt-1 truncate text-[10.5px] text-red-600 dark:text-red-400 font-medium" title={formatPrintError(job.errorMessage)}>
+                        {formatPrintError(job.errorMessage)}
+                      </p>
+                    )}
                   </div>
                   <JobStatusBadge status={job.printStatus} />
                 </div>
@@ -181,15 +241,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
           )}
         </div>
 
-        {/* Right Column: Windows Printer Health & M2M Security */}
+        {/* Right Column: Hardware Health & Security */}
         <div className="space-y-4">
-          {/* Hardware Summary Card */}
-          <div className="bg-slate-800/40 border border-slate-700/60 rounded-2xl p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-bold text-white">Installed Printers</h3>
+          {/* Installed Printers Summary Card */}
+          <div className="pf-card p-5 space-y-3.5">
+            <div className="flex items-center justify-between pb-1 border-b border-[var(--border-default)]">
+              <div>
+                <h3 className="text-sm font-bold text-[var(--text-primary)]">Discovered Printers</h3>
+                <span className="text-[11px] text-[var(--text-muted)]">{printers.length} installed Windows devices</span>
+              </div>
               <button
+                type="button"
                 onClick={() => onNavigateTab('PRINTERS')}
-                className="text-xs text-blue-400 hover:text-blue-300 font-semibold cursor-pointer"
+                className="text-xs text-teal-600 dark:text-teal-400 hover:underline font-semibold cursor-pointer"
               >
                 Manage →
               </button>
@@ -199,38 +263,57 @@ export const Dashboard: React.FC<DashboardProps> = ({
               {printers.slice(0, 3).map((p) => (
                 <div
                   key={p.name}
-                  className="p-2.5 bg-slate-800/80 rounded-xl border border-slate-700/40 flex items-center justify-between text-xs"
+                  className="p-2.5 rounded-xl border border-[var(--border-default)] bg-[var(--bg-subtle)] flex items-center justify-between text-xs"
                 >
                   <div className="min-w-0 pr-2">
-                    <p className="font-bold text-slate-200 truncate">{p.displayName}</p>
-                    <span className="text-[10px] text-slate-400 font-mono">
-                      {p.capabilities.supportsColor === null ? 'Color unknown' : p.capabilities.supportsColor ? 'Color capable' : 'Monochrome'} • {p.capabilities.supportsDuplex === null ? 'Duplex unknown' : p.capabilities.supportsDuplex ? 'Duplex capable' : 'Simplex'}
+                    <p className="font-semibold text-[var(--text-primary)] truncate">{p.displayName}</p>
+                    <span className="text-[10px] text-[var(--text-muted)]">
+                      {p.capabilities.supportsColor ? 'Color' : 'Monochrome'} • {p.capabilities.supportsDuplex ? 'Duplex' : 'Simplex'}
                     </span>
                   </div>
-                  <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${p.isOnline ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-400' : 'border-red-500/20 bg-red-500/10 text-red-300'}`}>
+                  <span
+                    className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${
+                      p.isOnline
+                        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                        : 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400'
+                    }`}
+                  >
                     {p.status}
                   </span>
                 </div>
               ))}
-              {printers.length === 0 && <p className="rounded-xl border border-dashed border-slate-700 p-4 text-center text-xs text-slate-500">No Windows printers found. Rescan from Printers.</p>}
+              {printers.length === 0 && (
+                <p className="rounded-xl border border-dashed border-[var(--border-default)] p-4 text-center text-xs text-[var(--text-muted)]">
+                  No Windows printers detected. Rescan in Printers tab.
+                </p>
+              )}
             </div>
           </div>
 
           {/* M2M Hardware Security Shield */}
-          <div className="bg-slate-800/40 border border-slate-700/60 rounded-2xl p-4 text-xs space-y-2">
-            <div className={`flex items-center gap-2 font-bold ${config.hasStoredCredentials ? 'text-emerald-400' : 'text-amber-300'}`}>
+          <div className="pf-card p-4 text-xs space-y-2.5 border-l-4 border-l-emerald-600">
+            <div className={`flex items-center gap-2 font-bold ${config.hasStoredCredentials ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
               <ShieldCheck className="w-4 h-4" />
-              <span>{config.hasStoredCredentials ? 'Device credential saved' : 'Device credential not saved'}</span>
+              <span>{config.hasStoredCredentials ? 'Windows Protected Credential' : 'Credentials Unsecured'}</span>
             </div>
-            <p className="text-[11px] text-slate-400 leading-relaxed">
-              {lastHeartbeat ? `Last authenticated heartbeat: ${new Date(lastHeartbeat).toLocaleString()}. ` : 'No successful authenticated heartbeat recorded. '}
-              The credential is kept out of renderer state and encrypted through Electron safeStorage. Agent connection state: {status.toLowerCase()}.
+            <p className="text-[11px] text-[var(--text-muted)] leading-relaxed">
+              {lastHeartbeat
+                ? `Last authenticated heartbeat: ${new Date(lastHeartbeat).toLocaleTimeString()}. `
+                : 'No recent authenticated heartbeat. '}
+              Device tokens are securely isolated in Windows safeStorage DPAPI vault.
             </p>
           </div>
+
+          {/* Attention Required Banner */}
           {(metrics.manualAttentionJobs || 0) > 0 && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-              <span>{metrics.manualAttentionJobs} job{metrics.manualAttentionJobs === 1 ? '' : 's'} need manual review before any reprint.</span>
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/10 p-3.5 text-xs text-amber-800 dark:text-amber-300">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <div>
+                <p className="font-bold">Attention Required</p>
+                <p className="text-[11px] mt-0.5">
+                  {metrics.manualAttentionJobs} {metrics.manualAttentionJobs === 1 ? 'job needs' : 'jobs need'} manual confirmation before re-printing.
+                </p>
+              </div>
             </div>
           )}
         </div>

@@ -45,6 +45,7 @@ import {
   checkRazorpayOrderStatus,
   reconcileRazorpayPayment
 } from '../../lib/razorpay';
+import { apiUrl } from '../../lib/apiConfig';
 
 interface CustomerPrintFlowProps {
   shopSlug: string;
@@ -582,7 +583,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
         };
       }));
 
-      const response = await fetch('/api/customer/print-jobs', {
+      const response = await fetch(apiUrl('/api/customer/print-jobs'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

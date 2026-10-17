@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { SaasPlan } from '../../types';
 import { RazorpayCheckoutButton } from '../payment/RazorpayCheckoutButton';
+import { apiUrl } from '../../lib/apiConfig';
 
 export const ShopSubscription: React.FC = () => {
   const { activeShop, plans, upgradeShopPlan, adminRazorpay, printers, printJobs, navigate, showToast } = useApp();
@@ -33,7 +34,7 @@ export const ShopSubscription: React.FC = () => {
   });
 
   useEffect(() => {
-    fetch('/api/payment/public-config')
+    fetch(apiUrl('/api/payment/public-config'))
       .then((r) => r.json())
       .then((data) => {
         if (data?.success) {
