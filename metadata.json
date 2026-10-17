@@ -1,0 +1,6 @@
+{
+  "name": "PrintFlow - QR Print SaaS Platform",
+  "description": "Multi-tenant SaaS platform for Xerox and print shops featuring QR code ordering, print queues, instant UPI & online payment configuration, and shop management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,13 @@
+node_modules/
+build/
+dist/
+coverage/
+.DS_Store
+*.log
+.env*
+!.env.example
+print-agent/release/
+print-agent/dist/
+print-agent/node_modules/
+server.js
+

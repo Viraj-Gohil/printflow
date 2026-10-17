@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "framework": "vite",
+  "buildCommand": "npm run build:client",
+  "outputDirectory": "dist",
+  "cleanUrls": true,
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}
+

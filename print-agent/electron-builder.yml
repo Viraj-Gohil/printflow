@@ -1,0 +1,25 @@
+appId: com.printflow.agent
+productName: PrintFlow Agent
+directories:
+  output: release
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+win:
+  signAndEditExecutable: false
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: PrintFlow Agent
+  runAfterFinish: true
+publish:
+  provider: generic
+  url: https://printflow.cloud/downloads/agent/
