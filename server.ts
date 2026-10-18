@@ -62,7 +62,9 @@ import {
   savePlatformPaymentConfig,
   getShopPaymentIntegration,
   saveShopPaymentIntegration,
-  deleteShopPaymentIntegration
+  deleteShopPaymentIntegration,
+  getPersistedUsers,
+  persistNewShopAndUser
 } from './src/db/paymentStorage';
 import {
   maskKeyId,
@@ -600,6 +602,111 @@ app.put('/api/app-data/:key', requireShopOwnerRole, async (req: Request, res: Re
 // ============================================================================
 // 4.1. BROWSER AUTHENTICATION & SECURE HTTPONLY COOKIE SESSION APIS
 // ============================================================================
+
+// POST /api/auth/register: Registers new shop & user, saves to Neon DB, issues secure HttpOnly cookie
+app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: Response) => {
+  const { shopName, ownerName, email, phone, city, password, planId } = req.body || {};
+  if (!shopName || !ownerName || !email || !password) {
+    return res.status(400).json({ success: false, error: 'Shop name, owner name, email, and password are required' });
+  }
+
+  const cleanEmail = String(email).trim().toLowerCase();
+  if (serverUsers.has(cleanEmail)) {
+    return res.status(400).json({ success: false, error: 'An account with this email is already registered. Please sign in.' });
+  }
+
+  try {
+    let baseSlug = String(shopName)
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/(^-|-$)/g, '');
+    if (!baseSlug) baseSlug = `shop-${Date.now().toString().slice(-4)}`;
+
+    const newShopId = `shop_${Date.now()}`;
+    const newUserId = `usr_${Date.now()}`;
+    const passwordHash = hashPassword(String(password));
+
+    const newShop = {
+      id: newShopId,
+      name: String(shopName).trim(),
+      slug: baseSlug,
+      ownerId: newUserId,
+      ownerName: String(ownerName).trim(),
+      ownerEmail: cleanEmail,
+      ownerPhone: String(phone || '').trim(),
+      status: 'ACTIVE',
+      planId: String(planId || 'plan_starter'),
+      planName: 'Growth Counter',
+      address: `${String(city || 'Counter').trim()} Center`,
+      city: String(city || '').trim(),
+      businessHours: '9:00 AM - 9:00 PM',
+      minimumOrder: 5,
+      primaryColor: '#2563EB',
+      createdAt: new Date().toISOString(),
+      razorpaySettings: {
+        enabled: true,
+        isTestMode: false,
+        keyId: '',
+        keySecret: '',
+        upiId: `${baseSlug}@upi`,
+        autoCapture: true,
+        receiptPrefix: baseSlug.slice(0, 3).toUpperCase() + '-'
+      }
+    };
+
+    const newUser = {
+      id: newUserId,
+      email: cleanEmail,
+      password: passwordHash,
+      fullName: String(ownerName).trim(),
+      phone: String(phone || '').trim(),
+      role: 'SHOP_OWNER' as const,
+      shopId: newShopId,
+      createdAt: new Date().toISOString()
+    };
+
+    await persistNewShopAndUser({
+      user: {
+        id: newUser.id,
+        email: newUser.email,
+        passwordHash,
+        fullName: newUser.fullName,
+        phone: newUser.phone,
+        role: newUser.role,
+        shopId: newShopId
+      },
+      shop: newShop
+    });
+
+    serverUsers.set(cleanEmail, newUser);
+
+    const { signedCookie, session, cookieOptions } = createSecureSession({
+      id: newUser.id,
+      email: newUser.email,
+      role: newUser.role,
+      shopId: newShopId,
+      fullName: newUser.fullName
+    });
+
+    res.cookie('printflow_session', signedCookie, cookieOptions);
+
+    return res.status(201).json({
+      success: true,
+      user: {
+        id: session.userId,
+        email: session.email,
+        role: session.role,
+        shopId: session.shopId,
+        fullName: session.fullName
+      },
+      shop: newShop
+    });
+  } catch (error) {
+    logger.error('Registration failed:', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Registration failed. Please try again.' });
+  }
+});
 
 // POST /api/auth/login: Issues HttpOnly cookie and returns profile without credentials
 app.post('/api/auth/login', createRateLimiter(10), (req: Request, res: Response) => {
@@ -4531,6 +4638,13 @@ app.all('/api/payment/confirm-upi', handleDeprecatedUpi);
 async function startServer() {
   try {
     await initializePaymentTables();
+    const persisted = await getPersistedUsers();
+    persisted.forEach((u) => {
+      serverUsers.set(u.email.toLowerCase(), u);
+    });
+    if (persisted.length > 0) {
+      logger.info(`[Server] Loaded ${persisted.length} registered users from Neon database.`);
+    }
   } catch (err) {
     console.warn('[Server] Initial database table check deferred (non-fatal):', err);
   }

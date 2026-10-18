@@ -21,8 +21,10 @@ import {
   INITIAL_PLATFORM_POLICIES,
   INITIAL_ADMIN_RAZORPAY_SETTINGS,
   INITIAL_SUPPORT_SETTINGS,
-  INITIAL_SUPPORT_TICKETS
+  INITIAL_SUPPORT_TICKETS,
+  INITIAL_USERS
 } from '../src/data/mockData';
+import { hashPassword } from '../src/lib/security';
 
 dotenv.config();
 
@@ -106,12 +108,39 @@ export async function seedDatabase(targetPool: Pool = pool) {
         updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS public.printflow_users (
+        id VARCHAR(128) PRIMARY KEY,
+        email VARCHAR(255) NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        full_name VARCHAR(255) NOT NULL,
+        phone VARCHAR(64),
+        role VARCHAR(32) NOT NULL DEFAULT 'SHOP_OWNER',
+        shop_id VARCHAR(128) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+
       CREATE TABLE IF NOT EXISTS public.printflow_shop_mappings (
         client_shop_id VARCHAR(128) PRIMARY KEY,
         neon_shop_id VARCHAR(128) NOT NULL,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
     `);
+
+    // 2. Seed Master Users into printflow_users
+    for (const u of INITIAL_USERS) {
+      const pHash = u.password.startsWith('$pbkdf2-') ? u.password : hashPassword(u.password);
+      await client.query(`
+        INSERT INTO public.printflow_users (id, email, password_hash, full_name, phone, role, shop_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          full_name = EXCLUDED.full_name,
+          phone = EXCLUDED.phone,
+          shop_id = EXCLUDED.shop_id,
+          updated_at = NOW()
+      `, [u.id, u.email.toLowerCase(), pHash, u.fullName, (u as any).phone || '', u.role, (u as any).shopId || 'shop_royal_cyber']);
+    }
 
     // 2. Seed Print Agent Devices with deterministic tokens
     const agentSeeds = [

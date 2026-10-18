@@ -217,21 +217,26 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) =
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      const res = registerShop({
-        shopName: registerShopName.trim(),
-        ownerName: registerOwnerName.trim(),
-        email: registerEmail.trim(),
-        phone: registerPhone.trim(),
-        city: registerCity.trim(),
-        password: registerPassword,
-        planId: selectedPlanId
-      });
-      setIsSubmitting(false);
-      if (!res.success) {
-        setErrorMessage(res.message || 'Registration failed.');
+    setTimeout(async () => {
+      try {
+        const res = await registerShop({
+          shopName: registerShopName.trim(),
+          ownerName: registerOwnerName.trim(),
+          email: registerEmail.trim(),
+          phone: registerPhone.trim(),
+          city: registerCity.trim(),
+          password: registerPassword,
+          planId: selectedPlanId
+        });
+        setIsSubmitting(false);
+        if (!res.success) {
+          setErrorMessage(res.message || 'Registration failed.');
+        }
+      } catch (err: any) {
+        setIsSubmitting(false);
+        setErrorMessage(err?.message || 'Registration request failed.');
       }
-    }, 400);
+    }, 100);
   };
 
   // Handle Forgot Password Submission

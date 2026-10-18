@@ -329,6 +329,18 @@ export async function initializePaymentTables(): Promise<void> {
             UPDATE public.printflow_app_state SET payload = state_data WHERE payload IS NULL;
           END IF;
         END $$;
+
+        CREATE TABLE IF NOT EXISTS public.printflow_users (
+          id VARCHAR(128) PRIMARY KEY,
+          email VARCHAR(255) NOT NULL UNIQUE,
+          password_hash TEXT NOT NULL,
+          full_name VARCHAR(255) NOT NULL,
+          phone VARCHAR(64),
+          role VARCHAR(32) NOT NULL DEFAULT 'SHOP_OWNER',
+          shop_id VARCHAR(128) NOT NULL,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
       `);
 
       const defaultTok = 'agt_tok_royal_cyber_counter_master_2026';
@@ -374,7 +386,7 @@ export async function initializePaymentTables(): Promise<void> {
             "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'shops'"
           );
           if (tableCheck.rowCount && tableCheck.rowCount > 0) {
-            const targetShop = await client.query('SELECT id FROM shops WHERE id = $1', [neonShopId]);
+            const targetShop = await client.query('SELECT id FROM shops WHERE id::text = $1 OR slug = $2', [neonShopId, neonShopId.replace(/^shp_/, '').replace(/^shop_/, '').replace(/_/g, '-')]);
             if (targetShop.rowCount === 1) {
               await client.query(
                 `INSERT INTO printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
@@ -1345,3 +1357,189 @@ export async function deleteShopPaymentIntegration(shopId: string): Promise<bool
 
   return true;
 }
+
+export interface PersistedUserRecord {
+  id: string;
+  email: string;
+  password: string; // hashed password
+  fullName: string;
+  phone?: string;
+  role: 'ADMIN' | 'SHOP_OWNER';
+  shopId: string;
+  createdAt: string;
+}
+
+export interface PersistShopUserInput {
+  user: {
+    id: string;
+    email: string;
+    passwordHash: string;
+    fullName: string;
+    phone?: string;
+    role: 'ADMIN' | 'SHOP_OWNER';
+    shopId: string;
+  };
+  shop: {
+    id: string;
+    name: string;
+    slug: string;
+    ownerId: string;
+    ownerName: string;
+    ownerEmail: string;
+    ownerPhone?: string;
+    status: string;
+    planId: string;
+    planName: string;
+    address?: string;
+    city?: string;
+    businessHours?: string;
+    minimumOrder?: number;
+    primaryColor?: string;
+    createdAt?: string;
+    razorpaySettings?: Record<string, unknown>;
+  };
+  pricingRules?: unknown[];
+  printers?: unknown[];
+}
+
+export async function getPersistedUsers(): Promise<PersistedUserRecord[]> {
+  if (!pgPool) return [];
+  try {
+    const result = await pgPool.query<PersistedUserRecord>(`
+      SELECT id, email, password_hash AS password, full_name AS "fullName",
+             phone, role, shop_id AS "shopId", created_at::text AS "createdAt"
+      FROM public.printflow_users
+    `);
+    return result.rows;
+  } catch (err) {
+    console.warn('[PaymentStorage] Failed to fetch users from Neon:', err);
+    return [];
+  }
+}
+
+export async function persistNewShopAndUser(input: PersistShopUserInput): Promise<void> {
+  const { user, shop } = input;
+  const token = getDeterministicAgentToken(shop.id);
+  const now = new Date().toISOString();
+
+  const defaultRules = input.pricingRules && input.pricingRules.length > 0 ? input.pricingRules : [
+    { id: `pr_${Date.now()}_1`, shopId: shop.id, paperSize: 'A4', color: 'BW', sides: 'SINGLE', pricePerPage: 2.0 },
+    { id: `pr_${Date.now()}_2`, shopId: shop.id, paperSize: 'A4', color: 'BW', sides: 'DOUBLE', pricePerPage: 1.5 },
+    { id: `pr_${Date.now()}_3`, shopId: shop.id, paperSize: 'A4', color: 'COLOR', sides: 'SINGLE', pricePerPage: 10.0 },
+    { id: `pr_${Date.now()}_4`, shopId: shop.id, paperSize: 'A4', color: 'COLOR', sides: 'DOUBLE', pricePerPage: 8.0 },
+    { id: `pr_${Date.now()}_5`, shopId: shop.id, paperSize: 'A3', color: 'BW', sides: 'SINGLE', pricePerPage: 5.0 },
+    { id: `pr_${Date.now()}_6`, shopId: shop.id, paperSize: 'Legal', color: 'BW', sides: 'SINGLE', pricePerPage: 3.0 }
+  ];
+
+  const agentObj = {
+    id: `agent_${shop.id}`,
+    shopId: shop.id,
+    shopName: shop.name,
+    deviceName: `${shop.slug.toUpperCase().slice(0, 10)}-PC01`,
+    version: 'v1.4.2',
+    agentVersion: 'v1.4.2',
+    status: 'OFFLINE' as const,
+    lastSeen: 'Not connected',
+    connectedPrintersCount: 0,
+    printerCount: 0,
+    authToken: token,
+    apiToken: token,
+    createdAt: now
+  };
+
+  if (pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Save to printflow_users
+      await client.query(`
+        INSERT INTO public.printflow_users (id, email, password_hash, full_name, phone, role, shop_id, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+        ON CONFLICT (email) DO UPDATE SET
+          password_hash = EXCLUDED.password_hash,
+          full_name = EXCLUDED.full_name,
+          phone = EXCLUDED.phone,
+          shop_id = EXCLUDED.shop_id,
+          updated_at = NOW()
+      `, [user.id, user.email.toLowerCase(), user.passwordHash, user.fullName, user.phone || '', user.role, user.shopId]);
+
+      // 2. Save Print Agent Device
+      await client.query(`
+        INSERT INTO public.print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
+        VALUES ($1, $2, $3, $4, false, 'OFFLINE', NULL, NOW())
+        ON CONFLICT (agent_id) DO UPDATE SET
+          device_name = EXCLUDED.device_name,
+          token_hash = EXCLUDED.token_hash,
+          is_revoked = false,
+          updated_at = NOW()
+      `, [agentObj.id, shop.id, agentObj.deviceName, hashAgentToken(token)]);
+
+      // 3. Save to printflow_app_state
+      const statePairs: Array<[string, unknown]> = [
+        ['shops', [shop]],
+        ['active_shop_id', shop.id],
+        ['pricing_rules', defaultRules],
+        ['printers', input.printers || []],
+        ['agents', [agentObj]],
+        ['print_jobs', []],
+        ['transactions', []],
+        ['audit_logs', []],
+        ['support_tickets', []]
+      ];
+
+      for (const [key, val] of statePairs) {
+        const json = JSON.stringify(val);
+        await client.query(`
+          INSERT INTO public.printflow_app_state (scope_id, data_key, state_data, payload, updated_at)
+          VALUES ($1, $2, $3::jsonb, $3::jsonb, NOW())
+          ON CONFLICT (scope_id, data_key) DO UPDATE SET
+            state_data = EXCLUDED.state_data,
+            payload = EXCLUDED.payload,
+            updated_at = NOW()
+        `, [shop.id, key, json]);
+      }
+
+      // 4. Also register in public.shops and public.profiles if tables exist
+      try {
+        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+        const shopUuid = isUuid.test(shop.id) ? shop.id : crypto.randomUUID();
+        const userUuid = isUuid.test(user.id) ? user.id : crypto.randomUUID();
+
+        await client.query(`
+          INSERT INTO public.shops (
+            id, name, slug, address, phone, email, status, is_open, business_hours,
+            min_order_amount, auto_accept, file_retention_days, razorpay_enabled,
+            razorpay_test_mode, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, 'ACTIVE', true, '9:00 AM - 9:00 PM',
+            5.00, true, 7, true, false, NOW(), NOW()
+          ) ON CONFLICT (id) DO NOTHING
+        `, [shopUuid, shop.name, shop.slug, shop.address || 'Counter Shop', user.phone || '9876543210', user.email]);
+
+        await client.query(`
+          INSERT INTO public.profiles (id, email, full_name, phone, role, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, 'SHOP_OWNER', NOW(), NOW())
+          ON CONFLICT (id) DO NOTHING
+        `, [userUuid, user.email.toLowerCase(), user.fullName, user.phone || '']);
+
+        await client.query(`
+          INSERT INTO public.printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
+          VALUES ($1, $2, NOW())
+          ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id
+        `, [shop.id, shopUuid]);
+      } catch (tableErr) {
+        // Optional tables skipped safely
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[PaymentStorage] Failed to persist new shop in Neon:', err);
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+}
+

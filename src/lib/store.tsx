@@ -84,7 +84,7 @@ interface AppContextType {
     city: string;
     password: string;
     planId?: string;
-  }) => { success: boolean; message?: string };
+  }) => Promise<{ success: boolean; message?: string }> | { success: boolean; message?: string };
   login: (email: string, password: string) => { success: boolean; message?: string };
   adminLogin: (email: string, password: string) => { success: boolean; message?: string };
   forgotPassword: (email: string, newPassword?: string) => { success: boolean; message?: string };
@@ -364,7 +364,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   );
 
   // Authentication: Register Shop
-  const registerShop = (data: {
+  const registerShop = async (data: {
     shopName: string;
     ownerName: string;
     email: string;
@@ -372,10 +372,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     city: string;
     password: string;
     planId?: string;
-  }) => {
+  }): Promise<{ success: boolean; message?: string }> => {
     const trimmedEmail = data.email.trim().toLowerCase();
 
-    // Check if email already registered
+    // Check if email already registered locally
     const existing = users.find((u) => u.email.toLowerCase() === trimmedEmail);
     if (existing) {
       return { success: false, message: 'This email is already registered. Please sign in.' };
@@ -384,7 +384,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Determine chosen SaaS Plan (defaults to Free Starter or selected plan)
     const selectedPlan = plans.find((p) => p.id === data.planId) || plans[0] || INITIAL_SAAS_PLANS[0];
 
-    // Generate unique slug
+    // Try server registration to persist to Neon PostgreSQL
+    let serverShop: Shop | null = null;
+    let serverUser: UserProfile | null = null;
+
+    try {
+      const response = await fetch(apiUrl('/api/auth/register'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          shopName: data.shopName.trim(),
+          ownerName: data.ownerName.trim(),
+          email: trimmedEmail,
+          phone: data.phone.trim(),
+          city: data.city.trim(),
+          password: data.password,
+          planId: selectedPlan.id
+        })
+      });
+
+      const resData = await response.json();
+      if (!response.ok || !resData.success) {
+        return { success: false, message: resData.error || 'Server registration failed. Please try again.' };
+      }
+      serverShop = resData.shop;
+      serverUser = {
+        id: resData.user.id,
+        email: resData.user.email,
+        fullName: resData.user.fullName,
+        phone: data.phone.trim(),
+        role: resData.user.role,
+        shopId: resData.user.shopId,
+        password: data.password,
+        createdAt: new Date().toISOString()
+      };
+    } catch (err) {
+      console.warn('Backend registration failed, continuing in offline mode:', err);
+    }
+
+    // Generate fallback unique slug and IDs if offline
     let baseSlug = data.shopName
       .toLowerCase()
       .trim()
@@ -394,11 +433,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     const slugExists = shops.some((s) => s.slug === baseSlug);
     const finalSlug = slugExists ? `${baseSlug}-${Math.floor(100 + Math.random() * 900)}` : baseSlug;
-    const newShopId = `shop_${Date.now()}`;
-    const newUserId = `usr_${Date.now()}`;
+    const newShopId = serverShop?.id || `shop_${Date.now()}`;
+    const newUserId = serverUser?.id || `usr_${Date.now()}`;
 
     // Create new Shop with chosen plan and production settings
-    const newShop: Shop = {
+    const newShop: Shop = serverShop || {
       id: newShopId,
       name: data.shopName.trim(),
       slug: finalSlug,
@@ -427,7 +466,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     // Create new User
-    const newUser: UserProfile = {
+    const newUser: UserProfile = serverUser || {
       id: newUserId,
       email: trimmedEmail,
       fullName: data.ownerName.trim(),
