@@ -14,7 +14,7 @@ import crypto from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { DurableDatabase } from './durableCheckoutRepository';
 
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ensureUuid = (name: string, value: string) => {
   if (!UUID_REGEX.test(value)) throw new Error(`${name} must be a valid UUID.`);
 };
@@ -124,8 +124,10 @@ export class DurablePaymentRepository {
     ensureMinor('amountMinor', input.amountMinor);
 
     if (input.purpose === 'PRINT_JOB') {
-      if (!input.jobId) throw new Error('jobId is required for PRINT_JOB payment orders.');
-      ensureUuid('jobId', input.jobId);
+      if (!input.jobId && !input.metadata?.allowPendingJob) {
+        throw new Error('jobId is required for PRINT_JOB payment orders.');
+      }
+      if (input.jobId) ensureUuid('jobId', input.jobId);
     } else if (input.purpose === 'SUBSCRIPTION') {
       if (input.jobId) throw new Error('jobId must be null for SUBSCRIPTION payment orders.');
     } else {

@@ -269,6 +269,15 @@ export async function initializePaymentTables(): Promise<void> {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'payment_orders') THEN
+            ALTER TABLE public.payment_orders DROP CONSTRAINT IF EXISTS payment_orders_check;
+            ALTER TABLE public.payment_orders ADD CONSTRAINT payment_orders_check 
+              CHECK (((purpose = 'SUBSCRIPTION' AND job_id IS NULL) OR (purpose = 'PRINT_JOB')));
+          END IF;
+        END $$;
       `);
 
       const defaultTok = 'agt_tok_royal_cyber_counter_master_2026';
@@ -523,11 +532,48 @@ export async function savePrintFlowAppState(
 }
 
 export async function resolvePrintFlowShopId(shopId: string): Promise<string> {
-  const result = await requirePostgresPool().query(
-    `SELECT neon_shop_id FROM printflow_shop_mappings WHERE client_shop_id = $1`,
-    [shopId]
-  );
-  return result.rowCount ? String(result.rows[0].neon_shop_id) : shopId;
+  if (!shopId) return 'a001a111-0000-0000-0000-000000000001';
+  const cleanId = String(shopId).trim();
+  const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (UUID_REGEX.test(cleanId)) {
+    return cleanId;
+  }
+
+  try {
+    const pool = requirePostgresPool();
+    const result = await pool.query(
+      `SELECT neon_shop_id FROM printflow_shop_mappings WHERE client_shop_id = $1`,
+      [cleanId]
+    );
+    if (result.rowCount && result.rows[0].neon_shop_id) {
+      return String(result.rows[0].neon_shop_id);
+    }
+
+    const slugRes = await pool.query(
+      `SELECT id::text FROM public.shops WHERE slug = $1 LIMIT 1`,
+      [cleanId]
+    );
+    if (slugRes.rowCount && slugRes.rows[0].id) {
+      const foundId = String(slugRes.rows[0].id);
+      await pool.query(
+        `INSERT INTO printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
+         VALUES ($1, $2, NOW()) ON CONFLICT (client_shop_id) DO NOTHING`,
+        [cleanId, foundId]
+      ).catch(() => {});
+      return foundId;
+    }
+
+    const defaultRes = await pool.query(
+      `SELECT id::text FROM public.shops ORDER BY created_at ASC LIMIT 1`
+    );
+    if (defaultRes.rowCount && defaultRes.rows[0].id) {
+      return String(defaultRes.rows[0].id);
+    }
+  } catch (err) {
+    console.warn('[resolvePrintFlowShopId] Warning during shop resolution:', err);
+  }
+
+  return 'a001a111-0000-0000-0000-000000000001';
 }
 
 

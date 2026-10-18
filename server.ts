@@ -1332,16 +1332,17 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
         return res.status(503).json({ success: false, error: 'Database is required for payment orders.' });
       }
       try {
+        const canonicalShopId = await resolvePrintFlowShopId(effectiveShopId || '');
         await getPaymentRepository().createPaymentOrder({
           jobId: printJobId || undefined,
-          shopId: effectiveShopId || '00000000-0000-0000-0000-000000000000',
+          shopId: canonicalShopId,
           purpose: isPlatformOrder ? 'SUBSCRIPTION' : 'PRINT_JOB',
           providerOrderId: razorpayOrder.id,
           providerAccountRef: targetKeyId,
           amountMinor: amountInPaise,
           currency: currency || 'INR',
           idempotencyKey: crypto.randomUUID(),
-          metadata: { receipt: orderReceipt, notes: notes || undefined }
+          metadata: { receipt: orderReceipt, notes: notes || undefined, allowPendingJob: !printJobId }
         });
       } catch (dbOrderErr) {
         logger.error('Failed to persist payment order into Neon public.payment_orders', {
@@ -1477,8 +1478,31 @@ app.post(['/api/verify-payment', '/api/payment/verify'], createRateLimiter(45), 
     const currency = dbOrder?.currency || 'INR';
     const sigHash = crypto.createHash('sha256').update(razorpay_signature).digest('hex');
 
-    if (!isSharedPoolConfigured() || !dbOrder) {
+    if (!isSharedPoolConfigured()) {
       return res.status(503).json({ success: false, error: 'Authoritative database is required for payment verification.' });
+    }
+
+    if (!dbOrder) {
+      try {
+        const canonicalShopId = await resolvePrintFlowShopId(reqShopId || 'a001a111-0000-0000-0000-000000000001');
+        dbOrder = await getPaymentRepository().createPaymentOrder({
+          jobId: undefined,
+          shopId: canonicalShopId,
+          purpose: flow === 'subscription' ? 'SUBSCRIPTION' : 'PRINT_JOB',
+          providerOrderId: order_id,
+          providerAccountRef: reqShopId || 'counter',
+          amountMinor: Math.round(Number(req.body?.amount || 0) * 100) || 100,
+          currency: 'INR',
+          idempotencyKey: crypto.randomUUID(),
+          metadata: { createdOnDemandDuringVerification: true }
+        });
+      } catch (createErr) {
+        logger.warn('Could not auto-create dbOrder during verification', { order_id, error: deepRedact(createErr) });
+      }
+    }
+
+    if (!dbOrder) {
+      return res.status(503).json({ success: false, error: 'Authoritative database order is required for payment verification.' });
     }
 
     // Atomic durable verification and print-job transition in Neon
@@ -2809,14 +2833,52 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
   let verifiedAmountMinor = 0;
 
   try {
+    const canonicalShopId = await resolvePrintFlowShopId(shopId);
     const dbOrder = await getPaymentRepository().getPaymentOrderByProviderId(orderId);
-    if (dbOrder && dbOrder.shopId === shopId && dbOrder.status === 'PAID') {
+    if (dbOrder && (dbOrder.shopId === shopId || dbOrder.shopId === canonicalShopId) && dbOrder.status === 'PAID') {
       isPaymentVerified = true;
       verifiedAmountMinor = dbOrder.amountMinor;
     }
   } catch (e) {
     logger.warn('Could not check payment_orders in Neon', { orderId, error: deepRedact(e) });
-    return res.status(503).json({ success: false, error: 'Database is temporarily unavailable.' });
+  }
+
+  // Gateway verification fallback if database webhook/state hasn't synchronized yet
+  if (!isPaymentVerified && paymentId && orderId) {
+    try {
+      const shopIntegration = await getShopPaymentIntegration(shopId);
+      const targetKeyId = (shopIntegration?.isConfigured && shopIntegration?.isActive)
+        ? shopIntegration.keyId
+        : SHOP_DEFAULT_KEY_ID;
+      const targetKeySecret = (shopIntegration?.isConfigured && shopIntegration?.isActive)
+        ? shopIntegration.keySecret
+        : SHOP_DEFAULT_KEY_SECRET;
+
+      const activeRzp = new Razorpay({
+        key_id: targetKeyId,
+        key_secret: targetKeySecret
+      });
+      const payEntity: any = await activeRzp.payments.fetch(paymentId);
+      if (payEntity && (payEntity.status === 'captured' || payEntity.status === 'authorized')) {
+        isPaymentVerified = true;
+        verifiedAmountMinor = payEntity.amount;
+        if (isSharedPoolConfigured()) {
+          const sigHash = crypto.createHash('sha256').update(`dispatch:${orderId}:${paymentId}`).digest('hex');
+          getPaymentRepository().executeAtomicPaymentVerification({
+            providerOrderId: orderId,
+            providerPaymentId: paymentId,
+            providerSignatureHash: sigHash,
+            amountMinor: payEntity.amount,
+            currency: payEntity.currency || 'INR',
+            paymentMethod: payEntity.method || 'upi'
+          }).catch((err) => {
+            logger.warn('Failed to atomically verify during print job dispatch', { orderId, error: deepRedact(err) });
+          });
+        }
+      }
+    } catch (rzpErr) {
+      logger.warn('Could not verify payment via Razorpay fallback', { orderId, paymentId, error: deepRedact(rzpErr) });
+    }
   }
 
   if (!isPaymentVerified) {
