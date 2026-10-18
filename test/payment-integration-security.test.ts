@@ -226,16 +226,14 @@ async function runPaymentSecurityTests() {
     assert(secondRun.alreadyProcessed, 'Duplicate arrival of webhook event is deduplicated without re-executing');
   }
 
-  // TEST 11: Resilient handling of database write failures
-  console.log('\n11. Testing Local File Fallback Resilience...');
+  // TEST 11: Neon-Only Authoritative Storage (Zero Local File Fallback)
+  console.log('\n11. Testing Neon-Only Authoritative Storage & Zero Local Files...');
   {
-    // Local backup file check
     const backupPath = path.resolve(process.cwd(), '.data', 'payment_integrations.json');
-    assert(fs.existsSync(backupPath), 'Persistent backup file created for restart recovery');
-
-    const fileContent = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
-    assert(Boolean(fileContent.platformConfig), 'Persistent backup contains platformConfig');
-    assert(Boolean(fileContent.shopIntegrations['shop_shree_ganesh_xerox']), 'Persistent backup contains shop integration');
+    assert(!fs.existsSync(backupPath), 'Persistent JSON file is never created; local file persistence removed');
+    assert(!fs.existsSync(path.resolve(process.cwd(), '.data')), 'No .data directory is created or used for business data');
+    const dbIntegration = await getShopPaymentIntegration('shop_shree_ganesh_xerox');
+    assert(Boolean(dbIntegration), 'Shop payment integration retrieved directly from authoritative database');
   }
 
   // TEST 12: Secrets never appear in logs or public responses

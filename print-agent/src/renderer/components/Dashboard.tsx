@@ -77,7 +77,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
         <div className="pf-card p-4 relative overflow-hidden transition-all duration-200 hover:shadow-md hover:-translate-y-0.5">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold text-[var(--text-muted)] uppercase tracking-wider">Completed Orders</span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-green-500/10 text-green-600 dark:text-green-400 flex items-center justify-center">
               <CheckCircle2 className="w-4 h-4" />
             </div>
           </div>
@@ -85,7 +85,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             {metrics.completedJobs}
           </p>
           <div className="flex items-center gap-1.5 mt-1.5 text-[11px] text-[var(--text-muted)]">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
             <span>Printed successfully</span>
           </div>
         </div>
@@ -110,17 +110,17 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
       {/* 2. ACTIVE JOB SPOTLIGHT (WHEN PRINTING/DOWNLOADING) */}
       {activeJob && (
-        <div className="pf-card border-l-4 border-l-teal-600 p-5 space-y-4 bg-gradient-to-r from-teal-500/5 via-[var(--bg-surface)] to-[var(--bg-surface)] shadow-md">
+        <div className="pf-card border-l-4 border-l-blue-600 p-5 space-y-4 bg-gradient-to-r from-blue-500/5 via-[var(--bg-surface)] to-[var(--bg-surface)] shadow-md">
           <div className="flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5">
               <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-teal-400 opacity-75" />
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-teal-500" />
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-blue-500" />
               </span>
               <div>
                 <h2 className="text-sm font-bold text-[var(--text-primary)] uppercase tracking-wider flex items-center gap-2">
                   <span>Currently Processing Print Job</span>
-                  <Sparkles className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                 </h2>
                 <span className="text-xs text-[var(--text-muted)]">Live Windows Spooler Execution</span>
               </div>
@@ -139,7 +139,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             </div>
             <div>
               <span className="text-[var(--text-muted)] text-[11px] font-medium">Document File:</span>
-              <p className="font-bold text-teal-600 dark:text-teal-400 truncate mt-0.5 flex items-center gap-1.5">
+              <p className="font-bold text-cyan-600 dark:text-cyan-400 truncate mt-0.5 flex items-center gap-1.5">
                 <FileText className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate">{activeJob.files[0]?.fileName || 'Document.pdf'}</span>
               </p>
@@ -154,11 +154,11 @@ export const Dashboard: React.FC<DashboardProps> = ({
                     ? 'Retrieving encrypted document payload...'
                     : 'Transmitting raster data to Windows Print Spooler...'}
                 </span>
-                <span className="font-mono font-bold text-teal-600 dark:text-teal-400">{activeProgress}%</span>
+                <span className="font-mono font-bold text-blue-600 dark:text-blue-400">{activeProgress}%</span>
               </div>
               <div className="h-2 w-full overflow-hidden rounded-full bg-[var(--bg-subtle)] border border-[var(--border-default)]">
                 <div
-                  className="h-full rounded-full bg-gradient-to-r from-teal-500 to-teal-600 transition-all duration-300"
+                  className="h-full rounded-full bg-gradient-to-r from-blue-600 to-cyan-500 transition-all duration-300"
                   style={{ width: `${Math.max(0, Math.min(100, activeProgress))}%` }}
                 />
               </div>
@@ -179,7 +179,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
             <button
               type="button"
               onClick={() => onNavigateTab('QUEUE')}
-              className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline flex items-center gap-1 cursor-pointer"
+              className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
             >
               <span>View Full Queue ({jobs.length})</span>
               <ArrowRight className="w-3.5 h-3.5" />
@@ -253,7 +253,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
               <button
                 type="button"
                 onClick={() => onNavigateTab('PRINTERS')}
-                className="text-xs text-teal-600 dark:text-teal-400 hover:underline font-semibold cursor-pointer"
+                className="text-xs text-blue-600 dark:text-blue-400 hover:underline font-semibold cursor-pointer"
               >
                 Manage →
               </button>
@@ -274,7 +274,7 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   <span
                     className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-bold ${
                       p.isOnline
-                        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                        ? 'border-green-500/25 bg-green-500/10 text-green-600 dark:text-green-400'
                         : 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400'
                     }`}
                   >
@@ -291,8 +291,8 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </div>
 
           {/* M2M Hardware Security Shield */}
-          <div className="pf-card p-4 text-xs space-y-2.5 border-l-4 border-l-emerald-600">
-            <div className={`flex items-center gap-2 font-bold ${config.hasStoredCredentials ? 'text-emerald-600 dark:text-emerald-400' : 'text-amber-600 dark:text-amber-400'}`}>
+          <div className="pf-card p-4 text-xs space-y-2.5 border-l-4 border-l-teal-600">
+            <div className={`flex items-center gap-2 font-bold ${config.hasStoredCredentials ? 'text-teal-600 dark:text-teal-400' : 'text-amber-600 dark:text-amber-400'}`}>
               <ShieldCheck className="w-4 h-4" />
               <span>{config.hasStoredCredentials ? 'Windows Protected Credential' : 'Credentials Unsecured'}</span>
             </div>

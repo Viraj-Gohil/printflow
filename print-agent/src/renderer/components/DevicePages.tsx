@@ -20,8 +20,12 @@ import {
   RefreshCw,
   Check,
   AlertTriangle,
-  HardDrive
+  HardDrive,
+  Sun,
+  Moon,
+  Palette
 } from 'lucide-react';
+import { useTheme, ThemePreference } from '../context/ThemeContext';
 import { AgentStatusBadge } from './StatusBadge';
 import {
   FormField,
@@ -86,6 +90,8 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
     setAllowColorFallback(config.allowColorFallback ?? true);
   }, [config]);
 
+  const { theme, resolvedTheme, setTheme } = useTheme();
+
   // Handle Terminal Device Name Save
   const handleSaveDeviceName = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
@@ -126,7 +132,8 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
       const result = await onSave({
         pollIntervalMs,
         autoStartOnBoot,
-        allowColorFallback
+        allowColorFallback,
+        themePreference: theme
       });
 
       if (result.success) {
@@ -475,7 +482,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                 className="secondary-button !min-h-[38px] !px-3 !text-xs font-semibold"
                 title="Open device pairing dialog to enter or replace credentials"
               >
-                <Settings2 className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+                <Settings2 className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
                 <span>Reconnect / Change Token</span>
               </button>
 
@@ -511,6 +518,113 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
               <span>{prefError}</span>
             </div>
           )}
+
+          {/* Section: Appearance & Theme Mode */}
+          <div className="space-y-2.5">
+            <div>
+              <label className="block text-xs font-semibold text-[var(--text-secondary)] select-none">
+                Appearance &amp; Theme Mode
+              </label>
+              <p className="text-[11.5px] leading-relaxed text-[var(--text-muted)] select-none">
+                Select your preferred Ocean Pulse theme or automatically synchronize with Windows OS settings.
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* Light Mode Card */}
+              <button
+                type="button"
+                onClick={() => {
+                  setTheme('light');
+                  void onSave({ themePreference: 'light' });
+                }}
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                  theme === 'light'
+                    ? 'border-blue-600 bg-blue-500/10 ring-2 ring-blue-500/25 shadow-xs'
+                    : 'border-[var(--border-default)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/15 text-amber-500 flex items-center justify-center">
+                    <Sun className="w-4 h-4" />
+                  </div>
+                  {theme === 'light' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">
+                      ACTIVE
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-[var(--text-primary)]">Light Theme</h4>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-snug">
+                    Clean #F5F7FC canvas with high-contrast surfaces
+                  </p>
+                </div>
+              </button>
+
+              {/* Dark Mode Card */}
+              <button
+                type="button"
+                onClick={() => {
+                  setTheme('dark');
+                  void onSave({ themePreference: 'dark' });
+                }}
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                  theme === 'dark'
+                    ? 'border-blue-600 bg-blue-500/10 ring-2 ring-blue-500/25 shadow-xs'
+                    : 'border-[var(--border-default)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-lg bg-blue-500/15 text-blue-400 flex items-center justify-center">
+                    <Moon className="w-4 h-4" />
+                  </div>
+                  {theme === 'dark' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">
+                      ACTIVE
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-[var(--text-primary)]">Dark Theme</h4>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-snug">
+                    Deep #0B1020 canvas for low-glare counter stations
+                  </p>
+                </div>
+              </button>
+
+              {/* System Mode Card */}
+              <button
+                type="button"
+                onClick={() => {
+                  setTheme('system');
+                  void onSave({ themePreference: 'system' });
+                }}
+                className={`p-3.5 rounded-xl border text-left transition-all cursor-pointer flex flex-col justify-between gap-3 ${
+                  theme === 'system'
+                    ? 'border-blue-600 bg-blue-500/10 ring-2 ring-blue-500/25 shadow-xs'
+                    : 'border-[var(--border-default)] bg-[var(--bg-surface)] hover:bg-[var(--bg-hover)]'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <div className="w-8 h-8 rounded-lg bg-cyan-500/15 text-cyan-500 flex items-center justify-center">
+                    <Laptop className="w-4 h-4" />
+                  </div>
+                  {theme === 'system' && (
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-600 text-white">
+                      ACTIVE
+                    </span>
+                  )}
+                </div>
+                <div>
+                  <h4 className="text-xs font-bold text-[var(--text-primary)]">System (Auto)</h4>
+                  <p className="text-[11px] text-[var(--text-muted)] mt-0.5 leading-snug">
+                    Matches Windows OS ({resolvedTheme === 'dark' ? 'Dark active' : 'Light active'})
+                  </p>
+                </div>
+              </button>
+            </div>
+          </div>
 
           {/* Polling Frequency Select */}
           <div className="max-w-md">
@@ -586,7 +700,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
           <button
             type="button"
             onClick={onNavigatePrinters}
-            className="text-xs font-semibold text-teal-600 dark:text-teal-400 hover:underline flex items-center gap-1.5 cursor-pointer"
+            className="text-xs font-semibold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1.5 cursor-pointer"
           >
             <span>Manage Printers &amp; Trays ({printers.length})</span>
             <ArrowRight className="w-3.5 h-3.5" />
@@ -688,7 +802,7 @@ export const AboutView: React.FC<{ onOpenExternal: (url: string) => Promise<void
   <section className="max-w-2xl space-y-5 animate-fade-in">
     <div className="pf-card p-6 space-y-4">
       <div className="flex items-center gap-3.5">
-        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-teal-500/15 text-teal-600 dark:text-teal-400 border border-teal-500/25">
+        <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-500/15 text-blue-600 dark:text-blue-400 border border-blue-500/25">
           <Info className="h-6 w-6" />
         </div>
         <div>
@@ -710,14 +824,14 @@ export const AboutView: React.FC<{ onOpenExternal: (url: string) => Promise<void
           onClick={() => void onOpenExternal('https://printflow.cloud')}
           className="secondary-button !text-xs font-semibold"
         >
-          <ExternalLink className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+          <ExternalLink className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
           <span>Open PrintFlow Cloud Portal</span>
         </button>
       </div>
 
       <div className="grid gap-2.5 pt-4 border-t border-[var(--border-default)] text-xs text-[var(--text-muted)] sm:grid-cols-2">
         <span className="inline-flex items-center gap-2">
-          <Store className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+          <Store className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
           <span>Shop-specific M2M token pairing</span>
         </span>
         <span className="inline-flex items-center gap-2">
@@ -725,11 +839,11 @@ export const AboutView: React.FC<{ onOpenExternal: (url: string) => Promise<void
           <span>Windows DPAPI safeStorage encryption</span>
         </span>
         <span className="inline-flex items-center gap-2">
-          <Wifi className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+          <Wifi className="h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400" />
           <span>Heartbeat health diagnostics</span>
         </span>
         <span className="inline-flex items-center gap-2">
-          <Laptop className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+          <Laptop className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
           <span>Native Win32 driver integration</span>
         </span>
       </div>

@@ -114,7 +114,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
                 type="checkbox"
                 checked={autoScroll}
                 onChange={(e) => setAutoScroll(e.target.checked)}
-                className="accent-teal-600"
+                className="accent-blue-600"
               />
               <span>Auto-scroll</span>
             </label>
@@ -125,7 +125,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
               className="secondary-button !min-h-[36px] !text-xs"
               title="Save a sanitized JSON/text export of recent log records"
             >
-              <Download className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400" />
+              <Download className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
               <span>Export</span>
             </button>
 
@@ -160,7 +160,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
                 onClick={() => setLevelFilter(lvl)}
                 className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
                   isActive
-                    ? 'bg-teal-600 text-white shadow-xs'
+                    ? 'bg-blue-600 text-white shadow-xs'
                     : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
                 }`}
               >
@@ -173,8 +173,8 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
 
       {/* Notifications */}
       {copiedNotification && (
-        <div className="p-3 rounded-xl bg-teal-500/10 border border-teal-500/30 text-teal-700 dark:text-teal-300 text-xs flex items-center gap-2 font-mono animate-fade-in">
-          <CheckCircle2 className="w-4 h-4 text-teal-500 shrink-0" />
+        <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 text-xs flex items-center gap-2 font-mono animate-fade-in">
+          <CheckCircle2 className="w-4 h-4 text-cyan-500 shrink-0" />
           <span className="truncate">{copiedNotification}</span>
         </div>
       )}
@@ -189,11 +189,11 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
         </div>
       )}
 
-      {/* Terminal View */}
-      <div className="bg-[#0b0f19] border border-[#253352] rounded-2xl p-4 font-mono text-xs overflow-hidden shadow-inner text-slate-300">
-        <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#1c2842] text-[11px] text-slate-400">
+      {/* Terminal View (Exact Dark Page Background #0B1020 & Border #2A344A) */}
+      <div className="bg-[#0B1020] border border-[#2A344A] rounded-2xl p-4 font-mono text-xs overflow-hidden shadow-inner text-slate-300">
+        <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#1f283c] text-[11px] text-slate-400">
           <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-teal-400" />
+            <Terminal className="w-4 h-4 text-cyan-400" />
             <span className="font-bold text-slate-200">Desktop Spooler &amp; M2M Diagnostics Console</span>
             {isPaused && (
               <span className="px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold">
@@ -211,7 +211,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
             </p>
           ) : (
             filteredLogs.map((log) => {
-              let levelClass = 'bg-teal-500/20 text-teal-300 border border-teal-500/30';
+              let levelClass = 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30';
               let textClass = 'text-slate-200';
 
               if (log.level === 'WARN') {
@@ -236,7 +236,7 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
                   <span className={`font-bold text-[9.5px] px-1.5 py-0.2 rounded shrink-0 uppercase ${levelClass}`}>
                     {log.level}
                   </span>
-                  <span className="text-teal-400 text-[11px] shrink-0 font-semibold">[{log.category}]</span>
+                  <span className="text-cyan-400 text-[11px] shrink-0 font-semibold">[{log.category}]</span>
                   <span className={`break-words ${textClass} flex-1`}>{log.message}</span>
                 </div>
               );

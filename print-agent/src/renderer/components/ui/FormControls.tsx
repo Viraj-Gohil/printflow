@@ -123,8 +123,8 @@ export const ReadOnlyField: React.FC<ReadOnlyFieldProps> = ({
           >
             {hasCopied ? (
               <>
-                <Check className="w-3.5 h-3.5 text-emerald-600 dark:text-emerald-400" />
-                <span className="text-emerald-600 dark:text-emerald-400 font-bold">Copied</span>
+                <Check className="w-3.5 h-3.5 text-green-600 dark:text-green-400" />
+                <span className="text-green-600 dark:text-green-400 font-bold">Copied</span>
               </>
             ) : (
               <>
@@ -283,7 +283,7 @@ export const SettingsCard: React.FC<SettingsCardProps> = ({
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 pb-3 border-b border-[var(--border-default)]">
         <div className="flex items-center gap-2.5">
           {icon && (
-            <div className="w-8 h-8 rounded-lg bg-teal-500/10 text-teal-600 dark:text-teal-400 flex items-center justify-center shrink-0 border border-teal-500/20">
+            <div className="w-8 h-8 rounded-lg bg-blue-500/10 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-500/20">
               {icon}
             </div>
           )}
@@ -335,7 +335,7 @@ export const SaveButton: React.FC<SaveButtonProps> = ({
       disabled={disabled || isSaving}
       className={cn(
         'primary-button !min-h-[44px] !px-4 !text-xs font-semibold transition-all',
-        isSaved && '!bg-emerald-600 !border-emerald-500 text-white',
+        isSaved && '!bg-green-600 !border-green-500 text-white',
         isError && '!bg-red-600 !border-red-500 text-white',
         className
       )}

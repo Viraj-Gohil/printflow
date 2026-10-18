@@ -128,93 +128,21 @@ if (DATABASE_URL && DATABASE_URL.length > 0) {
   }
 }
 
-// Persistent JSON file fallback when Neon DATABASE_URL is not set
-const DATA_DIR = path.resolve(process.cwd(), '.data');
-const BACKUP_FILE = path.join(DATA_DIR, 'payment_integrations.json');
-
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    try {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
-    } catch {
-      // Ignore
-    }
+export function requirePostgresPool(): Pool {
+  if (!pgPool) {
+    const error = new Error('DATABASE_URL is required. Neon PostgreSQL is not configured or unavailable.');
+    (error as any).statusCode = 503;
+    throw error;
   }
+  return pgPool;
 }
 
-interface LocalStorageFileFormat {
-  platformConfig?: PlatformPaymentConfigRecord;
-  shopIntegrations: Record<string, ShopPaymentIntegrationRecord>;
-  agentDevices?: Record<string, LocalAgentDeviceRecord>;
+export function setNeonPoolForTest(pool: Pool | null): void {
+  pgPool = pool;
 }
 
-interface LocalAgentDeviceRecord {
-  agent_id: string;
-  shop_id: string;
-  device_name: string;
-  token_hash: string;
-  is_revoked: boolean;
-  status: 'ONLINE' | 'OFFLINE';
-  last_seen: string | null;
-  printers: unknown[];
-  created_at: string;
-  updated_at: string;
-}
-
-function loadLocalFile(): LocalStorageFileFormat {
-  try {
-    ensureDataDir();
-    if (fs.existsSync(BACKUP_FILE)) {
-      const data = fs.readFileSync(BACKUP_FILE, 'utf8');
-      const parsed = JSON.parse(data) as LocalStorageFileFormat;
-      if (!parsed.agentDevices) parsed.agentDevices = {};
-      if (!parsed.agentDevices['agent_rcx_1']) {
-        const defaultTok = 'agt_tok_royal_cyber_counter_master_2026';
-        parsed.agentDevices['agent_rcx_1'] = {
-          agent_id: 'agent_rcx_1',
-          shop_id: 'shop_royal_cyber',
-          device_name: 'ROYAL-CYBE-PC01',
-          token_hash: hashAgentToken(defaultTok),
-          is_revoked: false,
-          status: 'OFFLINE',
-          last_seen: null,
-          printers: [],
-          created_at: '2026-01-15T08:00:00Z',
-          updated_at: new Date().toISOString()
-        };
-      }
-      return parsed;
-    }
-  } catch (err) {
-    console.warn('[PaymentStorage] Failed to read local backup file:', err);
-  }
-  const defaultTok = 'agt_tok_royal_cyber_counter_master_2026';
-  return {
-    shopIntegrations: {},
-    agentDevices: {
-      agent_rcx_1: {
-        agent_id: 'agent_rcx_1',
-        shop_id: 'shop_royal_cyber',
-        device_name: 'ROYAL-CYBE-PC01',
-        token_hash: hashAgentToken(defaultTok),
-        is_revoked: false,
-        status: 'OFFLINE',
-        last_seen: null,
-        printers: [],
-        created_at: '2026-01-15T08:00:00Z',
-        updated_at: new Date().toISOString()
-      }
-    }
-  };
-}
-
-function saveLocalFile(data: LocalStorageFileFormat) {
-  try {
-    ensureDataDir();
-    fs.writeFileSync(BACKUP_FILE, JSON.stringify(data, null, 2), 'utf8');
-  } catch (err) {
-    console.warn('[PaymentStorage] Failed to persist local backup file:', err);
-  }
+function hashAgentToken(token: string): string {
+  return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
 }
 
 /**
@@ -350,34 +278,6 @@ export async function initializePaymentTables(): Promise<void> {
         ON CONFLICT (agent_id) DO NOTHING
       `, [hashAgentToken(defaultTok)]);
 
-      try {
-        const localDevices = loadLocalAgentDevices();
-        for (const dev of Object.values(localDevices)) {
-          await client.query(`
-            INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, printers, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
-            ON CONFLICT (agent_id) DO UPDATE SET
-              shop_id = EXCLUDED.shop_id,
-              device_name = EXCLUDED.device_name,
-              token_hash = EXCLUDED.token_hash,
-              is_revoked = EXCLUDED.is_revoked,
-              status = EXCLUDED.status,
-              printers = EXCLUDED.printers,
-              updated_at = NOW()
-          `, [
-            dev.agent_id,
-            dev.shop_id,
-            dev.device_name,
-            dev.token_hash,
-            Boolean(dev.is_revoked),
-            dev.status || 'OFFLINE',
-            dev.last_seen || null,
-            JSON.stringify(dev.printers || [])
-          ]);
-        }
-      } catch (localDevErr) {
-        console.warn('[PaymentStorage] Local agent device sync note:', localDevErr);
-      }
       const legacyShopId = process.env.PRINTFLOW_LEGACY_SHOP_ID;
       const neonShopId = process.env.PRINTFLOW_NEON_SHOP_ID;
       if (legacyShopId && neonShopId) {
@@ -630,12 +530,6 @@ export async function resolvePrintFlowShopId(shopId: string): Promise<string> {
   return result.rowCount ? String(result.rows[0].neon_shop_id) : shopId;
 }
 
-function requirePostgresPool(): Pool {
-  if (!pgPool) {
-    throw new Error('DATABASE_URL is required for persistent PrintFlow Agent credentials.');
-  }
-  return pgPool;
-}
 
 export function getDeterministicAgentToken(shopId: string): string {
   if (shopId === 'shop_royal_cyber') {
@@ -645,39 +539,6 @@ export function getDeterministicAgentToken(shopId: string): string {
   return `agt_tok_${cleanId}_master_2026`;
 }
 
-function requireLocalAgentStorage(): void {
-  // Gracefully allow local file storage fallback (.data/payment_integrations.json)
-  // Ensures agent token issuance and pairing never crash when DATABASE_URL is not configured
-}
-
-function loadLocalAgentDevices(): Record<string, LocalAgentDeviceRecord> {
-  requireLocalAgentStorage();
-  return loadLocalFile().agentDevices ?? {};
-}
-
-function saveLocalAgentDevices(agentDevices: Record<string, LocalAgentDeviceRecord>): void {
-  requireLocalAgentStorage();
-  ensureDataDir();
-
-  const local = fs.existsSync(BACKUP_FILE)
-    ? JSON.parse(fs.readFileSync(BACKUP_FILE, 'utf8')) as LocalStorageFileFormat
-    : { shopIntegrations: {} };
-  local.agentDevices = agentDevices;
-
-  const tempFile = `${BACKUP_FILE}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.tmp`;
-  fs.writeFileSync(tempFile, JSON.stringify(local, null, 2), { encoding: 'utf8', flag: 'wx' });
-  try {
-    fs.renameSync(tempFile, BACKUP_FILE);
-  } catch (error) {
-    if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile);
-    throw error;
-  }
-}
-
-function hashAgentToken(token: string): string {
-  return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
-}
-
 export async function issuePrintAgentToken(params: {
   agentId: string;
   shopId: string;
@@ -685,26 +546,6 @@ export async function issuePrintAgentToken(params: {
   token?: string;
 }): Promise<{ agentId: string; token: string }> {
   const token = params.token || `agt_tok_${crypto.randomBytes(32).toString('base64url')}`;
-  if (!pgPool) {
-    const devices = loadLocalAgentDevices();
-    const existing = devices[params.agentId];
-    const now = new Date().toISOString();
-    devices[params.agentId] = {
-      agent_id: params.agentId,
-      shop_id: params.shopId,
-      device_name: params.deviceName,
-      token_hash: hashAgentToken(token),
-      is_revoked: false,
-      status: 'OFFLINE',
-      last_seen: null,
-      printers: existing?.printers || [],
-      created_at: existing?.created_at || now,
-      updated_at: now
-    };
-    saveLocalAgentDevices(devices);
-    return { agentId: params.agentId, token };
-  }
-
   const pool = requirePostgresPool();
   const result = await pool.query(
     `INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
@@ -731,41 +572,6 @@ export async function pairPrintAgent(params: {
 }): Promise<{ agentId: string; shopId: string; deviceName: string } | null> {
   const expectedDefaultToken = getDeterministicAgentToken(params.shopId);
   const isDefault = params.token === expectedDefaultToken || params.token === 'agt_tok_royal_cyber_counter_master_2026';
-
-  if (!pgPool) {
-    const devices = loadLocalAgentDevices();
-    let device = devices[Object.keys(devices).find((id) => {
-      const candidate = devices[id];
-      return candidate.shop_id === params.shopId &&
-        !candidate.is_revoked &&
-        candidate.token_hash === hashAgentToken(params.token);
-    }) || ''];
-
-    if (!device && isDefault) {
-      const defaultAgentId = `agent_${params.shopId}`;
-      device = {
-        agent_id: defaultAgentId,
-        shop_id: params.shopId,
-        device_name: params.deviceName,
-        token_hash: hashAgentToken(params.token),
-        is_revoked: false,
-        status: 'OFFLINE',
-        last_seen: null,
-        printers: [],
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      devices[defaultAgentId] = device;
-      saveLocalAgentDevices(devices);
-    }
-
-    if (!device) return null;
-
-    device.device_name = params.deviceName;
-    device.updated_at = new Date().toISOString();
-    saveLocalAgentDevices(devices);
-    return { agentId: device.agent_id, shopId: device.shop_id, deviceName: device.device_name };
-  }
 
   const pool = requirePostgresPool();
   if (isDefault) {
@@ -797,44 +603,6 @@ export async function authenticatePrintAgent(params: {
 }): Promise<{ valid: boolean; shopId?: string; deviceName?: string; error?: string }> {
   const expectedDefaultToken = getDeterministicAgentToken(params.targetShopId || '');
   const isDefault = params.token === expectedDefaultToken || params.token === 'agt_tok_royal_cyber_counter_master_2026';
-
-  if (!pgPool) {
-    const devices = loadLocalAgentDevices();
-    let device = devices[params.agentId];
-    if (!device && isDefault && params.targetShopId) {
-      device = {
-        agent_id: params.agentId,
-        shop_id: params.targetShopId,
-        device_name: 'PrintFlow Agent',
-        token_hash: hashAgentToken(params.token),
-        is_revoked: false,
-        status: 'OFFLINE',
-        last_seen: null,
-        printers: [],
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      devices[params.agentId] = device;
-      saveLocalAgentDevices(devices);
-    }
-    if (!device) return { valid: false, error: 'Unrecognized agent device ID' };
-    if (device.is_revoked) return { valid: false, error: 'Agent credentials have been revoked' };
-
-    const storedHash = Buffer.from(device.token_hash, 'hex');
-    const suppliedHash = Buffer.from(hashAgentToken(params.token), 'hex');
-    if (storedHash.length !== suppliedHash.length || !crypto.timingSafeEqual(storedHash, suppliedHash)) {
-      return { valid: false, error: 'Invalid agent authentication token' };
-    }
-    if (params.targetShopId && device.shop_id !== params.targetShopId) {
-      return { valid: false, error: 'Agent is not authorized for the requested shop' };
-    }
-
-    device.status = 'ONLINE';
-    device.last_seen = new Date().toISOString();
-    device.updated_at = device.last_seen;
-    saveLocalAgentDevices(devices);
-    return { valid: true, shopId: device.shop_id, deviceName: device.device_name };
-  }
 
   const pool = requirePostgresPool();
   let result = await pool.query(
@@ -876,17 +644,6 @@ export async function authenticatePrintAgent(params: {
 }
 
 export async function revokePrintAgent(agentId: string): Promise<boolean> {
-  if (!pgPool) {
-    const devices = loadLocalAgentDevices();
-    const device = devices[agentId];
-    if (!device) return false;
-    device.is_revoked = true;
-    device.status = 'OFFLINE';
-    device.updated_at = new Date().toISOString();
-    saveLocalAgentDevices(devices);
-    return true;
-  }
-
   const result = await requirePostgresPool().query(
     `UPDATE print_agent_devices SET is_revoked = true, status = 'OFFLINE', updated_at = NOW() WHERE agent_id = $1`,
     [agentId]
@@ -899,19 +656,6 @@ export async function getPrintAgentStatus(agentId: string, shopId: string): Prom
   lastSeen: string;
   connectedPrintersCount: number;
 } | null> {
-  if (!pgPool) {
-    const device = loadLocalAgentDevices()[agentId];
-    if (!device || device.shop_id !== shopId) return null;
-
-    const lastSeenMs = device.last_seen ? new Date(device.last_seen).getTime() : 0;
-    const online = !device.is_revoked && device.status === 'ONLINE' && Date.now() - lastSeenMs <= 45_000;
-    return {
-      status: online ? 'ONLINE' : 'OFFLINE',
-      lastSeen: online ? `Heartbeat ${Math.floor((Date.now() - lastSeenMs) / 1000)}s ago` : device.is_revoked ? 'Revoked' : 'Not connected',
-      connectedPrintersCount: device.printers.length
-    };
-  }
-
   const result = await requirePostgresPool().query(
     `SELECT status, last_seen, is_revoked, jsonb_array_length(printers) AS printer_count
      FROM print_agent_devices WHERE agent_id = $1 AND shop_id = $2`,
@@ -929,16 +673,6 @@ export async function getPrintAgentStatus(agentId: string, shopId: string): Prom
 }
 
 export async function savePrintAgentPrinters(agentId: string, printers: unknown[]): Promise<number> {
-  if (!pgPool) {
-    const devices = loadLocalAgentDevices();
-    const device = devices[agentId];
-    if (!device || device.is_revoked) throw new Error('Agent record not found or revoked.');
-    device.printers = printers;
-    device.updated_at = new Date().toISOString();
-    saveLocalAgentDevices(devices);
-    return printers.length;
-  }
-
   const result = await requirePostgresPool().query(
     `UPDATE print_agent_devices SET printers = $2::jsonb, updated_at = NOW()
      WHERE agent_id = $1 AND is_revoked = false`,
@@ -1009,47 +743,29 @@ export async function getShopPrinterEntitlements(shopId: string): Promise<{ prin
     return { printerLimit: plan.isUnlimitedPrinters ? Number.MAX_SAFE_INTEGER : plan.printerLimit, planName: plan.name };
   }
 
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('DATABASE_URL is required to verify shop printer plan limits.');
-  }
-
-  const shop = INITIAL_SHOPS.find((item) => item.id === shopId);
-  const plan = INITIAL_SAAS_PLANS.find((item) => item.id === shop?.planId);
-  if (!shop || !plan) throw new Error('Shop subscription plan was not found.');
-  return { printerLimit: plan.isUnlimitedPrinters ? Number.MAX_SAFE_INTEGER : plan.printerLimit, planName: plan.name };
+  throw new Error('DATABASE_URL is required to verify shop printer plan limits in Neon.');
 }
 
 export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAgentPrinter[]> {
-  let rows: Array<{ agent_id: string; device_name: string; printers: unknown }>;
-  if (pgPool) {
-    const result = await pgPool.query(
-      `SELECT agent_id, device_name, printers FROM print_agent_devices
-       WHERE shop_id = $1 AND is_revoked = false ORDER BY created_at`,
-      [shopId]
-    );
-    rows = result.rows;
-  } else {
-    requireLocalAgentStorage();
-    rows = Object.values(loadLocalAgentDevices())
-      .filter((device) => device.shop_id === shopId && !device.is_revoked)
-      .map((device) => ({
-        agent_id: device.agent_id,
-        device_name: device.device_name,
-        printers: device.printers
-      }));
-  }
+  const pool = requirePostgresPool();
+  const result = await pool.query(
+    `SELECT agent_id, device_name, printers FROM print_agent_devices
+     WHERE shop_id = $1 AND is_revoked = false ORDER BY created_at`,
+    [shopId]
+  );
+  const rows = result.rows;
 
-  const result: PrintAgentPrinter[] = [];
+  const printers: PrintAgentPrinter[] = [];
   for (const row of rows) {
     if (!Array.isArray(row.printers)) continue;
     for (const value of row.printers) {
       if (!value || typeof value !== 'object') continue;
       const printer = value as PrintAgentPrinter['printer'];
       if (typeof printer.name !== 'string' || !printer.name) continue;
-      result.push({ agentId: row.agent_id, deviceName: row.device_name, printer });
+      printers.push({ agentId: row.agent_id, deviceName: row.device_name, printer });
     }
   }
-  return result;
+  return printers;
 }
 
 // ----------------------------------------------------------------------------
@@ -1065,54 +781,29 @@ export async function getPlatformPaymentConfig(): Promise<{
   isConfigured: boolean;
   updatedAt: string;
 } | null> {
-  // 1. Check PostgreSQL if pool exists
-  if (pgPool) {
+  const pool = requirePostgresPool();
+  const res = await pool.query(
+    `SELECT * FROM platform_payment_configs WHERE id = 'platform_master' LIMIT 1`
+  );
+  if (res.rows.length > 0) {
+    const row = res.rows[0];
     try {
-      const res = await pgPool.query(
-        `SELECT * FROM platform_payment_configs WHERE id = 'platform_master' LIMIT 1`
-      );
-      if (res.rows.length > 0) {
-        const row = res.rows[0];
-        try {
-          const secret = decryptSecret(row.encrypted_key_secret);
-          return {
-            keyId: row.key_id,
-            keySecret: secret,
-            mode: row.mode as 'test' | 'live',
-            webhookSecret: row.webhook_secret,
-            isActive: Boolean(row.is_active),
-            isConfigured: true,
-            updatedAt: new Date(row.updated_at).toISOString()
-          };
-        } catch (decryptErr) {
-          console.error('[PaymentStorage] Platform secret decryption failed:', decryptErr);
-        }
-      }
-    } catch (err) {
-      console.warn('[PaymentStorage] Database query error for platform config:', err);
-    }
-  }
-
-  // 2. Check local file store
-  const local = loadLocalFile();
-  if (local.platformConfig) {
-    try {
-      const secret = decryptSecret(local.platformConfig.encrypted_key_secret);
+      const secret = decryptSecret(row.encrypted_key_secret);
       return {
-        keyId: local.platformConfig.key_id,
+        keyId: row.key_id,
         keySecret: secret,
-        mode: local.platformConfig.mode,
-        webhookSecret: local.platformConfig.webhook_secret,
-        isActive: local.platformConfig.is_active,
+        mode: row.mode as 'test' | 'live',
+        webhookSecret: row.webhook_secret,
+        isActive: Boolean(row.is_active),
         isConfigured: true,
-        updatedAt: local.platformConfig.updated_at
+        updatedAt: new Date(row.updated_at).toISOString()
       };
-    } catch (err) {
-      console.warn('[PaymentStorage] Local platform config decryption error:', err);
+    } catch (decryptErr) {
+      console.error('[PaymentStorage] Platform secret decryption failed:', decryptErr);
     }
   }
 
-  // 3. Fallback to server-side environment variables
+  // Fallback to server-side environment variables if not yet set in database
   const envKeyId = process.env.ADMIN_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
   const envKeySecret = process.env.ADMIN_RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET;
 
@@ -1150,40 +841,19 @@ export async function savePlatformPaymentConfig(params: {
   const now = new Date().toISOString();
   const isActive = params.isActive !== undefined ? params.isActive : true;
 
-  // Persist to Neon PostgreSQL if available
-  if (pgPool) {
-    try {
-      await pgPool.query(
-        `INSERT INTO platform_payment_configs (id, provider, key_id, encrypted_key_secret, mode, webhook_secret, is_active, updated_at)
-         VALUES ('platform_master', 'razorpay', $1, $2, $3, $4, $5, $6)
-         ON CONFLICT (id) DO UPDATE SET
-           key_id = EXCLUDED.key_id,
-           encrypted_key_secret = EXCLUDED.encrypted_key_secret,
-           mode = EXCLUDED.mode,
-           webhook_secret = EXCLUDED.webhook_secret,
-           is_active = EXCLUDED.is_active,
-           updated_at = EXCLUDED.updated_at`,
-        [params.keyId.trim(), encryptedSecret, params.mode, params.webhookSecret || null, isActive, now]
-      );
-    } catch (err) {
-      console.warn('[PaymentStorage] Failed to save platform config in Neon, falling back to local persistent store:', err);
-    }
-  }
-
-  // Also persist in local file
-  const local = loadLocalFile();
-  local.platformConfig = {
-    id: 'platform_master',
-    provider: 'razorpay',
-    key_id: params.keyId.trim(),
-    encrypted_key_secret: encryptedSecret,
-    mode: params.mode,
-    webhook_secret: params.webhookSecret,
-    is_active: isActive,
-    created_at: local.platformConfig?.created_at || now,
-    updated_at: now
-  };
-  saveLocalFile(local);
+  const pool = requirePostgresPool();
+  await pool.query(
+    `INSERT INTO platform_payment_configs (id, provider, key_id, encrypted_key_secret, mode, webhook_secret, is_active, updated_at)
+     VALUES ('platform_master', 'razorpay', $1, $2, $3, $4, $5, $6)
+     ON CONFLICT (id) DO UPDATE SET
+       key_id = EXCLUDED.key_id,
+       encrypted_key_secret = EXCLUDED.encrypted_key_secret,
+       mode = EXCLUDED.mode,
+       webhook_secret = EXCLUDED.webhook_secret,
+       is_active = EXCLUDED.is_active,
+       updated_at = EXCLUDED.updated_at`,
+    [params.keyId.trim(), encryptedSecret, params.mode, params.webhookSecret || null, isActive, now]
+  );
 
   return {
     provider: 'razorpay',
@@ -1214,56 +884,28 @@ export async function getShopPaymentIntegration(shopId: string): Promise<{
 } | null> {
   if (!shopId) return null;
 
-  // 1. Check PostgreSQL
-  if (pgPool) {
+  const pool = requirePostgresPool();
+  const res = await pool.query(
+    `SELECT * FROM shop_payment_integrations WHERE shop_id = $1 AND is_active = true LIMIT 1`,
+    [shopId]
+  );
+  if (res.rows.length > 0) {
+    const row = res.rows[0];
     try {
-      const res = await pgPool.query(
-        `SELECT * FROM shop_payment_integrations WHERE shop_id = $1 AND is_active = true LIMIT 1`,
-        [shopId]
-      );
-      if (res.rows.length > 0) {
-        const row = res.rows[0];
-        try {
-          const secret = decryptSecret(row.encrypted_key_secret);
-          return {
-            id: row.id,
-            shopId: row.shop_id,
-            provider: row.provider,
-            keyId: row.key_id,
-            keySecret: secret,
-            mode: row.mode as 'test' | 'live',
-            isActive: Boolean(row.is_active),
-            isConfigured: true,
-            updatedAt: new Date(row.updated_at).toISOString()
-          };
-        } catch (decryptErr) {
-          console.error(`[PaymentStorage] Shop ${shopId} secret decryption failed:`, decryptErr);
-        }
-      }
-    } catch (err) {
-      console.warn(`[PaymentStorage] Database query error for shop ${shopId}:`, err);
-    }
-  }
-
-  // 2. Check local file store
-  const local = loadLocalFile();
-  const shopRecord = local.shopIntegrations[shopId];
-  if (shopRecord && shopRecord.is_active) {
-    try {
-      const secret = decryptSecret(shopRecord.encrypted_key_secret);
+      const secret = decryptSecret(row.encrypted_key_secret);
       return {
-        id: shopRecord.id,
-        shopId: shopRecord.shop_id,
-        provider: shopRecord.provider,
-        keyId: shopRecord.key_id,
+        id: row.id,
+        shopId: row.shop_id,
+        provider: row.provider,
+        keyId: row.key_id,
         keySecret: secret,
-        mode: shopRecord.mode,
-        isActive: shopRecord.is_active,
+        mode: row.mode as 'test' | 'live',
+        isActive: Boolean(row.is_active),
         isConfigured: true,
-        updatedAt: shopRecord.updated_at
+        updatedAt: new Date(row.updated_at).toISOString()
       };
-    } catch (err) {
-      console.warn(`[PaymentStorage] Local shop ${shopId} secret decryption error:`, err);
+    } catch (decryptErr) {
+      console.error(`[PaymentStorage] Shop ${shopId} secret decryption failed:`, decryptErr);
     }
   }
 
@@ -1294,39 +936,18 @@ export async function saveShopPaymentIntegration(params: {
   const isActive = params.isActive !== undefined ? params.isActive : true;
   const integrationId = existing?.id || `spi_${shopId}_${Date.now()}`;
 
-  // 1. Persist to Neon PostgreSQL if available
-  if (pgPool) {
-    try {
-      await pgPool.query(
-        `INSERT INTO shop_payment_integrations (id, shop_id, provider, key_id, encrypted_key_secret, mode, is_active, updated_at)
-         VALUES ($1, $2, 'razorpay', $3, $4, $5, $6, $7)
-         ON CONFLICT (id) DO UPDATE SET
-           key_id = EXCLUDED.key_id,
-           encrypted_key_secret = EXCLUDED.encrypted_key_secret,
-           mode = EXCLUDED.mode,
-           is_active = EXCLUDED.is_active,
-           updated_at = EXCLUDED.updated_at`,
-        [integrationId, shopId, keyId.trim(), encryptedSecret, mode, isActive, now]
-      );
-    } catch (err) {
-      console.warn(`[PaymentStorage] Failed to save shop integration ${shopId} in Neon, using local backup:`, err);
-    }
-  }
-
-  // 2. Save in local backup
-  const local = loadLocalFile();
-  local.shopIntegrations[shopId] = {
-    id: integrationId,
-    shop_id: shopId,
-    provider: 'razorpay',
-    key_id: keyId.trim(),
-    encrypted_key_secret: encryptedSecret,
-    mode,
-    is_active: isActive,
-    created_at: existing?.updatedAt || now,
-    updated_at: now
-  };
-  saveLocalFile(local);
+  const pool = requirePostgresPool();
+  await pool.query(
+    `INSERT INTO shop_payment_integrations (id, shop_id, provider, key_id, encrypted_key_secret, mode, is_active, updated_at)
+     VALUES ($1, $2, 'razorpay', $3, $4, $5, $6, $7)
+     ON CONFLICT (id) DO UPDATE SET
+       key_id = EXCLUDED.key_id,
+       encrypted_key_secret = EXCLUDED.encrypted_key_secret,
+       mode = EXCLUDED.mode,
+       is_active = EXCLUDED.is_active,
+       updated_at = EXCLUDED.updated_at`,
+    [integrationId, shopId, keyId.trim(), encryptedSecret, mode, isActive, now]
+  );
 
   return {
     provider: 'razorpay',
@@ -1341,20 +962,8 @@ export async function saveShopPaymentIntegration(params: {
 }
 
 export async function deleteShopPaymentIntegration(shopId: string): Promise<boolean> {
-  if (pgPool) {
-    try {
-      await pgPool.query(`DELETE FROM shop_payment_integrations WHERE shop_id = $1`, [shopId]);
-    } catch (err) {
-      console.warn(`[PaymentStorage] Could not delete shop integration from Neon:`, err);
-    }
-  }
-
-  const local = loadLocalFile();
-  if (local.shopIntegrations[shopId]) {
-    delete local.shopIntegrations[shopId];
-    saveLocalFile(local);
-  }
-
+  const pool = requirePostgresPool();
+  await pool.query(`DELETE FROM shop_payment_integrations WHERE shop_id = $1`, [shopId]);
   return true;
 }
 
@@ -1403,9 +1012,9 @@ export interface PersistShopUserInput {
 }
 
 export async function getPersistedUsers(): Promise<PersistedUserRecord[]> {
-  if (!pgPool) return [];
+  const pool = requirePostgresPool();
   try {
-    const result = await pgPool.query<PersistedUserRecord>(`
+    const result = await pool.query<PersistedUserRecord>(`
       SELECT id, email, password_hash AS password, full_name AS "fullName",
              phone, role, shop_id AS "shopId", created_at::text AS "createdAt"
       FROM public.printflow_users
@@ -1447,99 +1056,98 @@ export async function persistNewShopAndUser(input: PersistShopUserInput): Promis
     createdAt: now
   };
 
-  if (pgPool) {
-    const client = await pgPool.connect();
-    try {
-      await client.query('BEGIN');
+  const pool = requirePostgresPool();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
 
-      // 1. Save to printflow_users
+    // 1. Save to printflow_users
+    await client.query(`
+      INSERT INTO public.printflow_users (id, email, password_hash, full_name, phone, role, shop_id, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+      ON CONFLICT (email) DO UPDATE SET
+        password_hash = EXCLUDED.password_hash,
+        full_name = EXCLUDED.full_name,
+        phone = EXCLUDED.phone,
+        shop_id = EXCLUDED.shop_id,
+        updated_at = NOW()
+    `, [user.id, user.email.toLowerCase(), user.passwordHash, user.fullName, user.phone || '', user.role, user.shopId]);
+
+    // 2. Save Print Agent Device
+    await client.query(`
+      INSERT INTO public.print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
+      VALUES ($1, $2, $3, $4, false, 'OFFLINE', NULL, NOW())
+      ON CONFLICT (agent_id) DO UPDATE SET
+        device_name = EXCLUDED.device_name,
+        token_hash = EXCLUDED.token_hash,
+        is_revoked = false,
+        updated_at = NOW()
+    `, [agentObj.id, shop.id, agentObj.deviceName, hashAgentToken(token)]);
+
+    // 3. Save to printflow_app_state
+    const statePairs: Array<[string, unknown]> = [
+      ['shops', [shop]],
+      ['active_shop_id', shop.id],
+      ['pricing_rules', defaultRules],
+      ['printers', input.printers || []],
+      ['agents', [agentObj]],
+      ['print_jobs', []],
+      ['transactions', []],
+      ['audit_logs', []],
+      ['support_tickets', []]
+    ];
+
+    for (const [key, val] of statePairs) {
+      const json = JSON.stringify(val);
       await client.query(`
-        INSERT INTO public.printflow_users (id, email, password_hash, full_name, phone, role, shop_id, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-        ON CONFLICT (email) DO UPDATE SET
-          password_hash = EXCLUDED.password_hash,
-          full_name = EXCLUDED.full_name,
-          phone = EXCLUDED.phone,
-          shop_id = EXCLUDED.shop_id,
+        INSERT INTO public.printflow_app_state (scope_id, data_key, state_data, payload, updated_at)
+        VALUES ($1, $2, $3::jsonb, $3::jsonb, NOW())
+        ON CONFLICT (scope_id, data_key) DO UPDATE SET
+          state_data = EXCLUDED.state_data,
+          payload = EXCLUDED.payload,
           updated_at = NOW()
-      `, [user.id, user.email.toLowerCase(), user.passwordHash, user.fullName, user.phone || '', user.role, user.shopId]);
-
-      // 2. Save Print Agent Device
-      await client.query(`
-        INSERT INTO public.print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
-        VALUES ($1, $2, $3, $4, false, 'OFFLINE', NULL, NOW())
-        ON CONFLICT (agent_id) DO UPDATE SET
-          device_name = EXCLUDED.device_name,
-          token_hash = EXCLUDED.token_hash,
-          is_revoked = false,
-          updated_at = NOW()
-      `, [agentObj.id, shop.id, agentObj.deviceName, hashAgentToken(token)]);
-
-      // 3. Save to printflow_app_state
-      const statePairs: Array<[string, unknown]> = [
-        ['shops', [shop]],
-        ['active_shop_id', shop.id],
-        ['pricing_rules', defaultRules],
-        ['printers', input.printers || []],
-        ['agents', [agentObj]],
-        ['print_jobs', []],
-        ['transactions', []],
-        ['audit_logs', []],
-        ['support_tickets', []]
-      ];
-
-      for (const [key, val] of statePairs) {
-        const json = JSON.stringify(val);
-        await client.query(`
-          INSERT INTO public.printflow_app_state (scope_id, data_key, state_data, payload, updated_at)
-          VALUES ($1, $2, $3::jsonb, $3::jsonb, NOW())
-          ON CONFLICT (scope_id, data_key) DO UPDATE SET
-            state_data = EXCLUDED.state_data,
-            payload = EXCLUDED.payload,
-            updated_at = NOW()
-        `, [shop.id, key, json]);
-      }
-
-      // 4. Also register in public.shops and public.profiles if tables exist
-      try {
-        const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-        const shopUuid = isUuid.test(shop.id) ? shop.id : crypto.randomUUID();
-        const userUuid = isUuid.test(user.id) ? user.id : crypto.randomUUID();
-
-        await client.query(`
-          INSERT INTO public.shops (
-            id, name, slug, address, phone, email, status, is_open, business_hours,
-            min_order_amount, auto_accept, file_retention_days, razorpay_enabled,
-            razorpay_test_mode, created_at, updated_at
-          ) VALUES (
-            $1, $2, $3, $4, $5, $6, 'ACTIVE', true, '9:00 AM - 9:00 PM',
-            5.00, true, 7, true, false, NOW(), NOW()
-          ) ON CONFLICT (id) DO NOTHING
-        `, [shopUuid, shop.name, shop.slug, shop.address || 'Counter Shop', user.phone || '9876543210', user.email]);
-
-        await client.query(`
-          INSERT INTO public.profiles (id, email, full_name, phone, role, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, 'SHOP_OWNER', NOW(), NOW())
-          ON CONFLICT (id) DO NOTHING
-        `, [userUuid, user.email.toLowerCase(), user.fullName, user.phone || '']);
-
-        await client.query(`
-          INSERT INTO public.printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
-          VALUES ($1, $2, NOW())
-          ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id
-        `, [shop.id, shopUuid]);
-      } catch (tableErr) {
-        // Optional tables skipped safely
-      }
-
-      await client.query('COMMIT');
-    } catch (err) {
-      await client.query('ROLLBACK');
-      console.error('[PaymentStorage] Failed to persist new shop in Neon:', err);
-      throw err;
-    } finally {
-      client.release();
+      `, [shop.id, key, json]);
     }
+
+    // 4. Also register in public.shops and public.profiles if tables exist
+    try {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+      const shopUuid = isUuid.test(shop.id) ? shop.id : crypto.randomUUID();
+      const userUuid = isUuid.test(user.id) ? user.id : crypto.randomUUID();
+
+      await client.query(`
+        INSERT INTO public.shops (
+          id, name, slug, address, phone, email, status, is_open, business_hours,
+          min_order_amount, auto_accept, file_retention_days, razorpay_enabled,
+          razorpay_test_mode, created_at, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, 'ACTIVE', true, '9:00 AM - 9:00 PM',
+          5.00, true, 7, true, false, NOW(), NOW()
+        ) ON CONFLICT (id) DO NOTHING
+      `, [shopUuid, shop.name, shop.slug, shop.address || 'Counter Shop', user.phone || '9876543210', user.email]);
+
+      await client.query(`
+        INSERT INTO public.profiles (id, email, full_name, phone, role, created_at, updated_at)
+        VALUES ($1, $2, $3, $4, 'SHOP_OWNER', NOW(), NOW())
+        ON CONFLICT (id) DO NOTHING
+      `, [userUuid, user.email.toLowerCase(), user.fullName, user.phone || '']);
+
+      await client.query(`
+        INSERT INTO public.printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
+        VALUES ($1, $2, NOW())
+        ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id
+      `, [shop.id, shopUuid]);
+    } catch (tableErr) {
+      // Optional tables skipped safely
+    }
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK');
+    console.error('[PaymentStorage] Failed to persist new shop in Neon:', err);
+    throw err;
+  } finally {
+    client.release();
   }
 }
 

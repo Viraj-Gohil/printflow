@@ -12,14 +12,14 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold tracking-wide',
-            'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25',
+            'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/25',
             'transition-colors duration-200',
             className
           )}
         >
           <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
           <span className="font-semibold text-[11px] uppercase tracking-wider">Online</span>
         </span>
@@ -77,11 +77,11 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/25',
+            'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/25',
             className
           )}
         >
-          <CheckCircle2 className="w-3 h-3 text-emerald-500" />
+          <CheckCircle2 className="w-3 h-3 text-green-500" />
           <span>Printed</span>
         </span>
       );
@@ -104,11 +104,11 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/25',
+            'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/25',
             className
           )}
         >
-          <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />
+          <Loader2 className="w-3 h-3 text-cyan-500 animate-spin" />
           <span>Downloading</span>
         </span>
       );
@@ -135,7 +135,7 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
             className
           )}
         >
-          <AlertCircle className="w-3 h-3 text-red-500" />
+          <AlertCircle className="w-3.5 h-3.5 text-red-500" />
           <span>Failed</span>
         </span>
       );
@@ -149,7 +149,7 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
             className
           )}
         >
-          <AlertTriangle className="w-3 h-3 text-amber-500" />
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
           <span>Needs Review</span>
         </span>
       );
@@ -162,7 +162,7 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
             className
           )}
         >
-          <XCircle className="w-3 h-3 text-slate-400" />
+          <XCircle className="w-3.5 h-3.5 text-slate-400" />
           <span>Cancelled</span>
         </span>
       );

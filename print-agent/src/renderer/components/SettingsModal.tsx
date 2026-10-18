@@ -159,7 +159,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         {/* Modal Header */}
         <div className="flex items-center justify-between pb-3 border-b border-[var(--border-default)]">
           <div className="flex items-center gap-2">
-            <Server className="w-4 h-4 text-teal-600 dark:text-teal-400" />
+            <Server className="w-4 h-4 text-blue-600 dark:text-blue-400" />
             <h2 id="setup-dialog-title" className="text-sm font-bold text-[var(--text-primary)]">
               {required ? 'Connect Terminal to Shop' : 'Agent Connection & Credentials'}
             </h2>
@@ -181,12 +181,12 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           <div
             className={`p-3 rounded-xl border flex items-center gap-2 animate-fade-in ${
               statusMessage.type === 'success'
-                ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-800 dark:text-emerald-300'
+                ? 'bg-green-500/10 border-green-500/25 text-green-800 dark:text-green-300'
                 : 'bg-red-500/10 border-red-500/25 text-red-800 dark:text-red-300'
             }`}
           >
             {statusMessage.type === 'success' ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0" />
             ) : (
               <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
             )}
@@ -314,8 +314,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
 
           {/* Security Notice Callout */}
-          <div className="p-3 bg-teal-500/10 border border-teal-500/25 rounded-xl text-[11px] text-teal-800 dark:text-teal-300 flex items-start gap-2.5">
-            <ShieldCheck className="w-4 h-4 text-teal-600 dark:text-teal-400 shrink-0 mt-0.5" />
+          <div className="p-3 bg-blue-500/10 border border-blue-500/25 rounded-xl text-[11px] text-blue-800 dark:text-blue-300 flex items-start gap-2.5">
+            <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
             <p className="leading-relaxed">
               Upon successful pairing, your token is secured via hardware DPAPI encryption (Windows safeStorage) and is never
               re-exposed to the renderer or stored in unencrypted browser storage.

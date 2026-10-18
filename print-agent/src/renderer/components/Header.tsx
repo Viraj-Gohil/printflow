@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
+import React from 'react';
 import { AgentConfig, AgentConnectionStatus } from '../types/agent';
 import { AgentStatusBadge } from './StatusBadge';
 import { Printer, RefreshCw, Settings, Minus, Sun, Moon, Store, Laptop } from 'lucide-react';
+import { useTheme, ThemePreference } from '../context/ThemeContext';
 import packageMetadata from '../../../package.json';
 
 interface HeaderProps {
@@ -23,32 +24,13 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenSettings,
   onMinimizeToTray
 }) => {
-  const [isDark, setIsDark] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    const stored = localStorage.getItem('printflow_agent_theme');
-    if (stored) return stored === 'dark';
-    return window.matchMedia('(prefers-color-scheme: dark)').matches;
-  });
-
-  useEffect(() => {
-    if (isDark) {
-      document.documentElement.classList.add('dark');
-      document.documentElement.setAttribute('data-theme', 'dark');
-      localStorage.setItem('printflow_agent_theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      document.documentElement.setAttribute('data-theme', 'light');
-      localStorage.setItem('printflow_agent_theme', 'light');
-    }
-  }, [isDark]);
-
-  const toggleTheme = () => setIsDark((prev) => !prev);
+  const { theme, resolvedTheme, setTheme } = useTheme();
 
   return (
     <header className="agent-topbar px-5 py-2.5 flex items-center justify-between border-b border-[var(--border-default)] transition-colors">
       {/* Brand & Terminal Meta */}
       <div className="flex items-center gap-3.5 min-w-0">
-        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-teal-700 to-teal-500 text-white flex items-center justify-center shadow-sm shadow-teal-700/20 shrink-0">
+        <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-blue-600 via-blue-500 to-cyan-500 text-white flex items-center justify-center shadow-sm shadow-blue-600/30 shrink-0">
           <Printer className="w-5 h-5 stroke-[2.2]" />
         </div>
 
@@ -91,7 +73,7 @@ export const Header: React.FC<HeaderProps> = ({
       <div className="flex items-center gap-2 shrink-0">
         <AgentStatusBadge status={status} />
 
-        {/* Manual Poll Button */}
+        {/* Manual Poll Button (Cyan Highlight) */}
         <button
           type="button"
           onClick={onPollNow}
@@ -99,20 +81,61 @@ export const Header: React.FC<HeaderProps> = ({
           className="secondary-button !min-h-[32px] !py-1 !px-2.5 text-xs font-semibold"
           title="Force poll cloud queue immediately"
         >
-          <RefreshCw className={`w-3.5 h-3.5 text-teal-600 dark:text-teal-400 ${isPolling ? 'animate-spin' : ''}`} />
+          <RefreshCw className={`w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 ${isPolling ? 'animate-spin' : ''}`} />
           <span className="hidden md:inline font-medium">{isPolling ? 'Checking...' : 'Check Jobs'}</span>
         </button>
 
-        {/* Theme Toggle Button */}
-        <button
-          type="button"
-          onClick={toggleTheme}
-          className="p-1.5 rounded-lg border border-[var(--border-default)] bg-[var(--bg-surface)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
-          title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
-          aria-label={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
+        {/* 3-Mode Theme Selector (Light, Dark, System) */}
+        <div
+          role="group"
+          aria-label="Appearance Mode"
+          className="flex items-center p-0.5 rounded-lg border border-[var(--border-default)] bg-[var(--bg-subtle)]"
         >
-          {isDark ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
-        </button>
+          <button
+            type="button"
+            onClick={() => setTheme('light')}
+            className={`p-1 rounded-md transition-colors ${
+              theme === 'light'
+                ? 'bg-[var(--bg-surface)] text-amber-500 shadow-xs'
+                : 'text-[var(--text-faint)] hover:text-[var(--text-primary)]'
+            }`}
+            title="Light Theme"
+            aria-pressed={theme === 'light'}
+            aria-label="Light Theme"
+          >
+            <Sun className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTheme('dark')}
+            className={`p-1 rounded-md transition-colors ${
+              theme === 'dark'
+                ? 'bg-[var(--bg-surface)] text-blue-400 shadow-xs'
+                : 'text-[var(--text-faint)] hover:text-[var(--text-primary)]'
+            }`}
+            title="Dark Theme"
+            aria-pressed={theme === 'dark'}
+            aria-label="Dark Theme"
+          >
+            <Moon className="w-3.5 h-3.5" />
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setTheme('system')}
+            className={`p-1 rounded-md transition-colors ${
+              theme === 'system'
+                ? 'bg-[var(--bg-surface)] text-cyan-500 shadow-xs'
+                : 'text-[var(--text-faint)] hover:text-[var(--text-primary)]'
+            }`}
+            title={`System Theme (${resolvedTheme === 'dark' ? 'Dark OS' : 'Light OS'})`}
+            aria-pressed={theme === 'system'}
+            aria-label="System Theme (Follow OS)"
+          >
+            <Laptop className="w-3.5 h-3.5" />
+          </button>
+        </div>
 
         {/* Settings Button */}
         <button

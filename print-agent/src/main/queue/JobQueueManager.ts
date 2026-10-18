@@ -15,8 +15,8 @@ export class JobQueueManager {
   constructor(apiClient: ApiClient, printerManager: WindowsPrinterManager) {
     this.apiClient = apiClient;
     this.printerManager = printerManager;
-    // Load existing queued jobs from local storage
-    this.queue = localVault.getAllJobs().filter((j) => j.printStatus === 'QUEUED' || j.printStatus === 'ASSIGNED');
+    // Runtime queue begins empty; authoritative jobs are reconciled from Neon on startup
+    this.queue = [];
   }
 
   public setOnJobUpdateListener(listener: (job: PrintJobItem) => void): void {

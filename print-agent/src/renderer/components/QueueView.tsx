@@ -159,7 +159,7 @@ export const QueueView: React.FC<QueueViewProps> = ({
               className="secondary-button !min-h-[36px] !text-xs"
               title="Poll cloud backend for newly authorized print jobs"
             >
-              <RefreshCw className={`h-3.5 w-3.5 text-teal-600 dark:text-teal-400 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <RefreshCw className={`h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 ${isRefreshing ? 'animate-spin' : ''}`} />
               <span>Refresh</span>
             </button>
 
@@ -201,7 +201,7 @@ export const QueueView: React.FC<QueueViewProps> = ({
                 onClick={() => setFilter(tab.id)}
                 className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold transition-all ${
                   isActive
-                    ? 'bg-teal-600 text-white shadow-xs'
+                    ? 'bg-blue-600 text-white shadow-xs'
                     : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
                 }`}
               >
@@ -276,7 +276,7 @@ export const QueueView: React.FC<QueueViewProps> = ({
                         <button
                           type="button"
                           onClick={() => setSelectedJob(job)}
-                          className="hover:text-teal-600 dark:hover:text-teal-400 hover:underline cursor-pointer"
+                          className="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer"
                         >
                           {job.id}
                         </button>
@@ -285,11 +285,11 @@ export const QueueView: React.FC<QueueViewProps> = ({
                       {/* Filename & Progress */}
                       <td className="max-w-xs px-4 py-3.5">
                         <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 shrink-0 text-teal-600 dark:text-teal-400" />
+                          <FileText className="h-4 w-4 shrink-0 text-cyan-600 dark:text-cyan-400" />
                           <button
                             type="button"
                             onClick={() => setSelectedJob(job)}
-                            className="truncate text-left font-medium text-[var(--text-secondary)] hover:text-teal-600 dark:hover:text-teal-400"
+                            className="truncate text-left font-medium text-[var(--text-secondary)] hover:text-blue-600 dark:hover:text-blue-400"
                             title="Inspect full job details"
                           >
                             {fileName}
@@ -306,13 +306,13 @@ export const QueueView: React.FC<QueueViewProps> = ({
 
                         {progress !== undefined && (
                           <div className="mt-1.5 space-y-1">
-                            <div className="flex justify-between text-[10px] text-teal-600 dark:text-teal-400 font-semibold">
+                            <div className="flex justify-between text-[10px] text-cyan-600 dark:text-cyan-400 font-semibold">
                               <span>{job.printStatus === 'DOWNLOADING' ? 'Downloading' : 'Spooling'}</span>
                               <span className="font-mono">{progress}%</span>
                             </div>
                             <div className="h-1.5 w-full bg-[var(--border-default)] rounded-full overflow-hidden">
                               <div
-                                className="h-full bg-teal-500 rounded-full transition-all duration-300"
+                                className="h-full bg-gradient-to-r from-blue-600 to-cyan-500 rounded-full transition-all duration-300"
                                 style={{ width: `${progress}%` }}
                               />
                             </div>
@@ -468,7 +468,7 @@ export const QueueView: React.FC<QueueViewProps> = ({
                     className="p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-default)] space-y-1"
                   >
                     <div className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
-                      <FileText className="w-3.5 h-3.5 text-teal-600 dark:text-teal-400 shrink-0" />
+                      <FileText className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
                       <span className="truncate">{file.fileName}</span>
                     </div>
                     <div className="grid grid-cols-2 gap-2 text-[11px] text-[var(--text-muted)] pt-1">

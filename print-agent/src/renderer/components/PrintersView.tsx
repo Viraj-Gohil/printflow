@@ -79,13 +79,13 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
         <div
           className={`p-3.5 rounded-xl border text-xs flex items-center justify-between gap-3 animate-fade-in ${
             testResult.success
-              ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-800 dark:text-emerald-300'
+              ? 'bg-green-500/10 border-green-500/25 text-green-800 dark:text-green-300'
               : 'bg-red-500/10 border-red-500/25 text-red-800 dark:text-red-300'
           }`}
         >
           <div className="flex items-center gap-2">
             {testResult.success ? (
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 dark:text-emerald-400 shrink-0" />
+              <CheckCircle2 className="w-4 h-4 text-green-600 dark:text-green-400 shrink-0" />
             ) : (
               <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
             )}
@@ -116,7 +116,7 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
               key={printer.name}
               className={`pf-card p-5 space-y-4 transition-all duration-200 ${
                 isSelected
-                  ? 'border-teal-500/60 shadow-md shadow-teal-500/5 ring-1 ring-teal-500/30'
+                  ? 'border-teal-500/60 shadow-md shadow-teal-500/10 ring-1 ring-teal-500/30'
                   : ''
               }`}
             >
@@ -147,7 +147,7 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                   <span
                     className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${
                       printer.isOnline
-                        ? 'border-emerald-500/25 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                        ? 'border-green-500/25 bg-green-500/10 text-green-600 dark:text-green-400'
                         : 'border-red-500/25 bg-red-500/10 text-red-600 dark:text-red-400'
                     }`}
                   >
@@ -261,7 +261,7 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                   type="button"
                   onClick={() => void handleTest(printer.name)}
                   disabled={testingPrinter === printer.name || !isEnabled || !isRegistered}
-                  className="secondary-button !min-h-[28px] !px-2.5 !py-1 !text-xs disabled:cursor-not-allowed disabled:opacity-40 font-semibold text-teal-600 dark:text-teal-400"
+                  className="secondary-button !min-h-[28px] !px-2.5 !py-1 !text-xs disabled:cursor-not-allowed disabled:opacity-40 font-semibold text-blue-600 dark:text-blue-400"
                   title="Print test calibration page"
                 >
                   <Play className={`w-3 h-3 ${testingPrinter === printer.name ? 'animate-spin' : ''}`} />

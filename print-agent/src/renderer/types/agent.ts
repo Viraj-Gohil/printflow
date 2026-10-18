@@ -28,6 +28,7 @@ export interface AgentConfig {
   spoolerTimeoutMs: number;
   hasStoredCredentials?: boolean;
   credentialStorageStatus?: 'SECURE' | 'LEGACY' | 'NONE';
+  themePreference?: 'light' | 'dark' | 'system';
 }
 
 export interface DiscoveredPrinter {

@@ -42,7 +42,8 @@ const DEFAULT_CONFIG: AgentConfig = {
   pollIntervalMs: 5000,
   autoStartOnBoot: false,
   allowColorFallback: true,
-  spoolerTimeoutMs: 30000
+  spoolerTimeoutMs: 30000,
+  themePreference: 'system'
 };
 
 const PAGE_DETAILS: Record<AgentPage, { title: string; description: string; icon: React.ReactNode }> = {
@@ -374,7 +375,7 @@ export const App: React.FC = () => {
               </div>
 
               <div className="setup-secure-note">
-                <ShieldCheck className="w-4 h-4 shrink-0 text-teal-600 dark:text-teal-400" />
+                <ShieldCheck className="w-4 h-4 shrink-0 text-blue-600 dark:text-blue-400" />
                 <span>Device tokens are securely isolated with Windows DPAPI hardware encryption.</span>
               </div>
             </section>
@@ -459,7 +460,7 @@ export const App: React.FC = () => {
                   title={isSidebarCollapsed ? item.label : undefined}
                   className={`flex min-h-9 items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-xs font-semibold transition-all cursor-pointer ${
                     isActive
-                      ? 'bg-teal-600 text-white shadow-xs font-bold'
+                      ? 'bg-blue-600 text-white shadow-xs font-bold'
                       : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
                   }`}
                 >
@@ -469,7 +470,7 @@ export const App: React.FC = () => {
                     <span
                       className={`rounded-full px-1.5 py-0.2 text-[10px] font-mono font-bold ${
                         isActive
-                          ? 'bg-white text-teal-800'
+                          ? 'bg-white text-blue-700'
                           : 'bg-amber-500 text-white'
                       } ${isSidebarCollapsed ? 'ml-0' : 'ml-auto'}`}
                     >
@@ -484,7 +485,7 @@ export const App: React.FC = () => {
           {!isSidebarCollapsed && (
             <div className="mt-4 pt-3 border-t border-[var(--border-default)] px-2 text-[11px] text-[var(--text-muted)] space-y-1">
               <div className="flex items-center gap-1.5 font-medium">
-                <Printer className="h-3.5 w-3.5 text-teal-600 dark:text-teal-400" />
+                <Printer className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
                 <span>
                   {printers.length} Installed Printer{printers.length === 1 ? '' : 's'}
                 </span>
@@ -498,7 +499,7 @@ export const App: React.FC = () => {
           {/* Page Heading Bar */}
           <div className="agent-page-heading flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-teal-500/10 text-teal-600 dark:text-teal-400 border border-teal-500/25 shrink-0">
+              <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/25 shrink-0">
                 {currentPage.icon}
               </span>
               <div>

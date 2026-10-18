@@ -102,6 +102,11 @@ interface AppContextType {
   activeShop: Shop;
   setActiveShopId: (shopId: string) => void;
 
+  // Cloud Synchronization & Database Observability
+  isLoadingData: boolean;
+  dataLoadError: string | null;
+  isCloudSynced: boolean;
+
   // Shops
   shops: Shop[];
   updateShopProfile: (shopId: string, updates: Partial<Shop>) => void;
@@ -250,11 +255,17 @@ function cloudSafeValue(value: unknown): unknown {
   return value;
 }
 
-// Security Hardening: Immediately purge any legacy authentication credentials from browser localStorage
+// Security Hardening: Immediately purge all business entities and legacy authentication credentials from browser localStorage
 if (typeof window !== 'undefined' && window.localStorage) {
   try {
-    const sensitiveKeys = ['current_user', 'users', 'auth_token', 'jwt', 'api_token', 'session_id'];
-    for (const k of sensitiveKeys) {
+    const businessKeys = [
+      'current_user', 'users', 'auth_token', 'jwt', 'api_token', 'session_id',
+      'shops', 'active_shop_id', 'pricing_rules', 'saas_plans', 'saas_subscriptions',
+      'platform_policies', 'printers', 'agents', 'print_jobs', 'transactions',
+      'audit_logs', 'support_settings', 'support_tickets', 'admin_razorpay',
+      'app_data', 'cloud_state'
+    ];
+    for (const k of businessKeys) {
       window.localStorage.removeItem(STORAGE_KEY_PREFIX + k);
       window.localStorage.removeItem(k);
     }
@@ -263,21 +274,15 @@ if (typeof window !== 'undefined' && window.localStorage) {
   }
 }
 
-function getStoredItem<T>(key: string, fallback: T): T {
-  try {
-    const item = localStorage.getItem(STORAGE_KEY_PREFIX + key);
-    return item ? JSON.parse(item) : fallback;
-  } catch (e) {
-    return fallback;
-  }
+function getStoredItem<T>(_key: string, fallback: T): T {
+  // Authoritative business data is loaded from Neon via backend APIs; localStorage persistence is eliminated.
+  return fallback;
 }
 
 function setStoredItem<T>(key: string, value: T) {
-  try {
-    localStorage.setItem(STORAGE_KEY_PREFIX + key, JSON.stringify(value));
-    if (CLOUD_STATE_KEYS.has(key)) cloudStateWriter?.(key, value);
-  } catch (e) {
-    console.error('Failed to save to localStorage', e);
+  // Authoritative business data is persisted to Neon via backend APIs; localStorage persistence is eliminated.
+  if (CLOUD_STATE_KEYS.has(key)) {
+    cloudStateWriter?.(key, value);
   }
 }
 
@@ -315,6 +320,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Current authenticated user (null by default; authenticates upon login or registration)
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+
+  // Cloud Synchronization & Observability States
+  const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
+  const [dataLoadError, setDataLoadError] = useState<string | null>(null);
+  const [isCloudSynced, setIsCloudSynced] = useState<boolean>(false);
+
+  // Restore authenticated session from HttpOnly cookie on mount
+  useEffect(() => {
+    fetch(apiUrl('/api/auth/session'), { credentials: 'same-origin' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.success && data?.user) {
+          setCurrentUser(data.user);
+          if (data.user.shopId) setActiveShopIdState(data.user.shopId);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   const isAuthenticated = currentUser !== null;
 
@@ -375,7 +398,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }): Promise<{ success: boolean; message?: string }> => {
     const trimmedEmail = data.email.trim().toLowerCase();
 
-    // Check if email already registered locally
+    // Check if email already registered locally in memory
     const existing = users.find((u) => u.email.toLowerCase() === trimmedEmail);
     if (existing) {
       return { success: false, message: 'This email is already registered. Please sign in.' };
@@ -384,9 +407,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     // Determine chosen SaaS Plan (defaults to Free Starter or selected plan)
     const selectedPlan = plans.find((p) => p.id === data.planId) || plans[0] || INITIAL_SAAS_PLANS[0];
 
-    // Try server registration to persist to Neon PostgreSQL
-    let serverShop: Shop | null = null;
-    let serverUser: UserProfile | null = null;
+    // Server registration is authoritative: persist to Neon PostgreSQL
+    let serverShop: Shop;
+    let serverUser: UserProfile;
 
     try {
       const response = await fetch(apiUrl('/api/auth/register'), {
@@ -400,13 +423,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           phone: data.phone.trim(),
           city: data.city.trim(),
           password: data.password,
-          planId: selectedPlan.id
+          planId: selectedPlan?.id || 'plan_starter'
         })
       });
 
       const resData = await response.json();
       if (!response.ok || !resData.success) {
-        return { success: false, message: resData.error || 'Server registration failed. Please try again.' };
+        return { success: false, message: resData.error || 'Registration failed. Database is currently unavailable.' };
       }
       serverShop = resData.shop;
       serverUser = {
@@ -419,89 +442,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         password: data.password,
         createdAt: new Date().toISOString()
       };
-    } catch (err) {
-      console.warn('Backend registration failed, continuing in offline mode:', err);
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Network error: could not connect to server database.' };
     }
 
-    // Generate fallback unique slug and IDs if offline
-    let baseSlug = data.shopName
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '');
-    if (!baseSlug) baseSlug = `shop-${Date.now().toString().slice(-4)}`;
-
-    const slugExists = shops.some((s) => s.slug === baseSlug);
-    const finalSlug = slugExists ? `${baseSlug}-${Math.floor(100 + Math.random() * 900)}` : baseSlug;
-    const newShopId = serverShop?.id || `shop_${Date.now()}`;
-    const newUserId = serverUser?.id || `usr_${Date.now()}`;
-
-    // Create new Shop with chosen plan and production settings
-    const newShop: Shop = serverShop || {
-      id: newShopId,
-      name: data.shopName.trim(),
-      slug: finalSlug,
-      ownerId: newUserId,
-      ownerName: data.ownerName.trim(),
-      ownerEmail: trimmedEmail,
-      ownerPhone: data.phone.trim(),
-      status: 'ACTIVE',
-      planId: selectedPlan.id,
-      planName: selectedPlan.name,
-      address: `${data.city.trim()} Center`,
-      city: data.city.trim(),
-      businessHours: '9:00 AM - 9:00 PM',
-      minimumOrder: 5,
-      primaryColor: '#2563EB',
-      createdAt: new Date().toISOString(),
-      razorpaySettings: {
-        enabled: true,
-        isTestMode: false,
-        keyId: '',
-        keySecret: '',
-        upiId: `${finalSlug}@upi`,
-        autoCapture: true,
-        receiptPrefix: finalSlug.slice(0, 3).toUpperCase() + '-'
-      }
-    };
-
-    // Create new User
-    const newUser: UserProfile = serverUser || {
-      id: newUserId,
-      email: trimmedEmail,
-      fullName: data.ownerName.trim(),
-      phone: data.phone.trim(),
-      role: 'SHOP_OWNER',
-      shopId: newShopId,
-      password: data.password,
-      createdAt: new Date().toISOString()
-    };
-
-    // Create default pricing rules for this new shop
+    // Default pricing rules for newly registered shop in memory
     const defaultRules: PricingRule[] = [
-      { id: `pr_${Date.now()}_1`, shopId: newShopId, paperSize: 'A4', color: 'BW', sides: 'SINGLE', pricePerPage: 2.0 },
-      { id: `pr_${Date.now()}_2`, shopId: newShopId, paperSize: 'A4', color: 'BW', sides: 'DOUBLE', pricePerPage: 1.5 },
-      { id: `pr_${Date.now()}_3`, shopId: newShopId, paperSize: 'A4', color: 'COLOR', sides: 'SINGLE', pricePerPage: 10.0 },
-      { id: `pr_${Date.now()}_4`, shopId: newShopId, paperSize: 'A4', color: 'COLOR', sides: 'DOUBLE', pricePerPage: 8.0 },
-      { id: `pr_${Date.now()}_5`, shopId: newShopId, paperSize: 'A3', color: 'BW', sides: 'SINGLE', pricePerPage: 5.0 },
-      { id: `pr_${Date.now()}_6`, shopId: newShopId, paperSize: 'Legal', color: 'BW', sides: 'SINGLE', pricePerPage: 3.0 }
+      { id: `pr_${Date.now()}_1`, shopId: serverShop.id, paperSize: 'A4', color: 'BW', sides: 'SINGLE', pricePerPage: 2.0 },
+      { id: `pr_${Date.now()}_2`, shopId: serverShop.id, paperSize: 'A4', color: 'BW', sides: 'DOUBLE', pricePerPage: 1.5 },
+      { id: `pr_${Date.now()}_3`, shopId: serverShop.id, paperSize: 'A4', color: 'COLOR', sides: 'SINGLE', pricePerPage: 10.0 },
+      { id: `pr_${Date.now()}_4`, shopId: serverShop.id, paperSize: 'A4', color: 'COLOR', sides: 'DOUBLE', pricePerPage: 8.0 },
+      { id: `pr_${Date.now()}_5`, shopId: serverShop.id, paperSize: 'A3', color: 'BW', sides: 'SINGLE', pricePerPage: 5.0 },
+      { id: `pr_${Date.now()}_6`, shopId: serverShop.id, paperSize: 'Legal', color: 'BW', sides: 'SINGLE', pricePerPage: 3.0 }
     ];
 
-    const nextUsers = [...users, newUser];
-    const nextShops = [newShop, ...shops];
-    const nextRules = [...pricingRules, ...defaultRules];
-
-    setUsers(nextUsers);
-    setShops(nextShops);
-    setPricingRules(nextRules);
-
-    setStoredItem('users', nextUsers);
-    setStoredItem('shops', nextShops);
-    setStoredItem('pricing_rules', nextRules);
+    setUsers((prev) => [...prev, serverUser]);
+    setShops((prev) => [serverShop, ...prev]);
+    setPricingRules((prev) => [...prev, ...defaultRules]);
 
     // Auto login
-    setCurrentUser(newUser);
-    setActiveShopId(newShopId);
+    setCurrentUser(serverUser);
+    setActiveShopId(serverShop.id);
 
     showToast('Shop Registered Successfully!', `Welcome to PrintFlow, ${data.ownerName}!`, 'success', 4000);
     navigate('/shop/dashboard');
@@ -2299,6 +2260,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     cloudStateWriter = writeCloudState;
 
     const syncFromNeon = async () => {
+      setIsLoadingData(true);
+      setDataLoadError(null);
       let response: Response | undefined;
       let result: {
         success?: boolean;
@@ -2307,139 +2270,101 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         canonicalShopId?: string;
         records?: Record<string, unknown>;
       } = {};
-      for (let attempt = 0; attempt < 4; attempt++) {
-        response = await fetch(apiUrl(`/api/app-data?shopId=${encodeURIComponent(activeShop.id)}`), {
-          credentials: 'same-origin',
-          headers: requestHeaders
-        });
-        result = await response.json() as typeof result;
-        if (response.ok || response.status !== 401) break;
-        await new Promise((resolve) => window.setTimeout(resolve, 500));
-      }
-      if (!response?.ok || !result.success) {
-        throw new Error(result.error || `Could not load PrintFlow data from Neon (HTTP ${response?.status || 0}).`);
-      }
-      if (cancelled) return;
+      try {
+        for (let attempt = 0; attempt < 4; attempt++) {
+          response = await fetch(apiUrl(`/api/app-data?shopId=${encodeURIComponent(activeShop.id)}`), {
+            credentials: 'same-origin',
+            headers: requestHeaders
+          });
+          result = await response.json() as typeof result;
+          if (response.ok || response.status !== 401) break;
+          await new Promise((resolve) => window.setTimeout(resolve, 500));
+        }
+        if (!response?.ok || !result.success) {
+          throw new Error(result.error || `Could not load PrintFlow data from Neon (HTTP ${response?.status || 0}).`);
+        }
+        if (cancelled) return;
 
-      const canonicalShopId = result.canonicalShopId || activeShop.id;
-      const legacyShopId = activeShop.id;
-      const records = result.records || {};
-      const saveLocal = (key: string, value: unknown) => {
-        localStorage.setItem(STORAGE_KEY_PREFIX + key, JSON.stringify(value));
-      };
-      const mergeShopList = <T extends { id: string }>(previous: T[], remote: T[]) => [
-        ...previous.filter((item) => item.id !== legacyShopId && item.id !== canonicalShopId),
-        ...remote
-      ];
-      const mergeShopRecords = <T extends { shopId: string }>(previous: T[], remote: T[]) => [
-        ...previous.filter((item) => item.shopId !== legacyShopId && item.shopId !== canonicalShopId),
-        ...remote
-      ];
+        const canonicalShopId = result.canonicalShopId || activeShop.id;
+        const legacyShopId = activeShop.id;
+        const records = result.records || {};
 
-      if (result.hasData) {
-        if (Array.isArray(records.shops)) {
-          const remote = records.shops as Shop[];
-          setShops((previous) => mergeShopList(previous, remote));
-          saveLocal('shops', remote);
-        }
-        if (typeof records.active_shop_id === 'string') {
-          setActiveShopIdState(records.active_shop_id);
-          saveLocal('active_shop_id', records.active_shop_id);
-        } else if (currentUser.role === 'SHOP_OWNER') {
-          setActiveShopIdState(canonicalShopId);
-          saveLocal('active_shop_id', canonicalShopId);
-        }
-        if (Array.isArray(records.pricing_rules)) {
-          const remote = records.pricing_rules as PricingRule[];
-          setPricingRules((previous) => mergeShopRecords(previous, remote));
-          saveLocal('pricing_rules', remote);
-        }
-        if (Array.isArray(records.printers)) {
-          const remote = records.printers as PrinterDevice[];
-          setPrinters((previous) => mergeShopRecords(previous, remote));
-          saveLocal('printers', remote);
-        }
-        if (Array.isArray(records.agents)) {
-          const remote = records.agents as ElectronAgent[];
-          setAgents((previous) => mergeShopRecords(previous, remote));
-          saveLocal('agents', remote);
-        }
-        if (Array.isArray(records.print_jobs)) {
-          const remote = records.print_jobs as PrintJob[];
-          setPrintJobs((previous) => mergeShopRecords(previous, remote));
-          saveLocal('print_jobs', remote);
-        }
-        if (Array.isArray(records.transactions)) {
-          const remote = records.transactions as Transaction[];
-          setTransactions((previous) => mergeShopRecords(previous, remote));
-          saveLocal('transactions', remote);
-        }
-        if (Array.isArray(records.support_tickets)) {
-          const remote = records.support_tickets as SupportTicket[];
-          setSupportTickets((previous) => mergeShopRecords(previous, remote));
-          saveLocal('support_tickets', remote);
-        }
-        if (currentUser.role === 'ADMIN') {
-          if (Array.isArray(records.saas_plans)) setPlans(records.saas_plans as SaasPlan[]);
-          if (Array.isArray(records.saas_subscriptions)) setSubscriptions(records.saas_subscriptions as Subscription[]);
-          if (records.platform_policies) setPlatformPolicies(records.platform_policies as PlatformPolicies);
-          if (Array.isArray(records.audit_logs)) setAuditLogs(records.audit_logs as AuditLog[]);
-          if (records.support_settings) setSupportSettings(records.support_settings as SupportSettings);
-        }
-        setCurrentUser((previous) =>
-          previous?.role === 'SHOP_OWNER' && previous.shopId === legacyShopId
-            ? { ...previous, shopId: canonicalShopId }
-            : previous
-        );
-        cloudReady = true;
-        return;
-      }
+        const mergeShopList = <T extends { id: string }>(previous: T[], remote: T[]) => [
+          ...previous.filter((item) => item.id !== legacyShopId && item.id !== canonicalShopId),
+          ...remote
+        ];
+        const mergeShopRecords = <T extends { shopId: string }>(previous: T[], remote: T[]) => [
+          ...previous.filter((item) => item.shopId !== legacyShopId && item.shopId !== canonicalShopId),
+          ...remote
+        ];
 
-      if (currentUser.role === 'SHOP_OWNER') {
-        setCurrentUser((previous) =>
-          previous?.role === 'SHOP_OWNER' && previous.shopId === legacyShopId
-            ? { ...previous, shopId: canonicalShopId }
-            : previous
-        );
-        setActiveShopIdState(canonicalShopId);
-      }
-
-      cloudReady = true;
-      const initialState: Record<string, unknown> = currentUser.role === 'ADMIN'
-        ? {
-            shops, pricing_rules: pricingRules, saas_plans: plans, saas_subscriptions: subscriptions,
-            platform_policies: platformPolicies, printers, agents, print_jobs: printJobs,
-            transactions, audit_logs: auditLogs, support_settings: supportSettings,
-            support_tickets: supportTickets
+        if (result.hasData) {
+          if (Array.isArray(records.shops)) {
+            const remote = records.shops as Shop[];
+            setShops((previous) => mergeShopList(previous, remote));
           }
-        : {
-            shops, active_shop_id: canonicalShopId, pricing_rules: pricingRules, printers, agents,
-            print_jobs: printJobs, transactions, support_tickets: supportTickets
-          };
-      const normalizeShopId = (value: unknown): unknown => {
-        if (value === legacyShopId) return canonicalShopId;
-        if (Array.isArray(value)) return value.map(normalizeShopId);
-        if (value && typeof value === 'object') {
-          return Object.fromEntries(
-            Object.entries(value).map(([key, item]) => [key, normalizeShopId(item)])
+          if (typeof records.active_shop_id === 'string') {
+            setActiveShopIdState(records.active_shop_id);
+          } else if (currentUser.role === 'SHOP_OWNER') {
+            setActiveShopIdState(canonicalShopId);
+          }
+          if (Array.isArray(records.pricing_rules)) {
+            const remote = records.pricing_rules as PricingRule[];
+            setPricingRules((previous) => mergeShopRecords(previous, remote));
+          }
+          if (Array.isArray(records.printers)) {
+            const remote = records.printers as PrinterDevice[];
+            setPrinters((previous) => mergeShopRecords(previous, remote));
+          }
+          if (Array.isArray(records.agents)) {
+            const remote = records.agents as ElectronAgent[];
+            setAgents((previous) => mergeShopRecords(previous, remote));
+          }
+          if (Array.isArray(records.print_jobs)) {
+            const remote = records.print_jobs as PrintJob[];
+            setPrintJobs((previous) => mergeShopRecords(previous, remote));
+          }
+          if (Array.isArray(records.transactions)) {
+            const remote = records.transactions as Transaction[];
+            setTransactions((previous) => mergeShopRecords(previous, remote));
+          }
+          if (Array.isArray(records.support_tickets)) {
+            const remote = records.support_tickets as SupportTicket[];
+            setSupportTickets((previous) => mergeShopRecords(previous, remote));
+          }
+          if (currentUser.role === 'ADMIN') {
+            if (Array.isArray(records.saas_plans)) setPlans(records.saas_plans as SaasPlan[]);
+            if (Array.isArray(records.saas_subscriptions)) setSubscriptions(records.saas_subscriptions as Subscription[]);
+            if (records.platform_policies) setPlatformPolicies(records.platform_policies as PlatformPolicies);
+            if (Array.isArray(records.audit_logs)) setAuditLogs(records.audit_logs as AuditLog[]);
+            if (records.support_settings) setSupportSettings(records.support_settings as SupportSettings);
+          }
+          setCurrentUser((previous) =>
+            previous?.role === 'SHOP_OWNER' && previous.shopId === legacyShopId
+              ? { ...previous, shopId: canonicalShopId }
+              : previous
           );
+        } else if (currentUser.role === 'SHOP_OWNER') {
+          setCurrentUser((previous) =>
+            previous?.role === 'SHOP_OWNER' && previous.shopId === legacyShopId
+              ? { ...previous, shopId: canonicalShopId }
+              : previous
+          );
+          setActiveShopIdState(canonicalShopId);
         }
-        return value;
-      };
-      const normalizedState = Object.fromEntries(
-        Object.entries(initialState).map(([key, value]) => [key, normalizeShopId(value)])
-      );
-      if (currentUser.role === 'SHOP_OWNER') {
-        if (Array.isArray(normalizedState.shops)) setShops(normalizedState.shops as Shop[]);
-        if (Array.isArray(normalizedState.pricing_rules)) setPricingRules(normalizedState.pricing_rules as PricingRule[]);
-        if (Array.isArray(normalizedState.printers)) setPrinters(normalizedState.printers as PrinterDevice[]);
-        if (Array.isArray(normalizedState.agents)) setAgents(normalizedState.agents as ElectronAgent[]);
-        if (Array.isArray(normalizedState.print_jobs)) setPrintJobs(normalizedState.print_jobs as PrintJob[]);
-        if (Array.isArray(normalizedState.transactions)) setTransactions(normalizedState.transactions as Transaction[]);
-        if (Array.isArray(normalizedState.support_tickets)) setSupportTickets(normalizedState.support_tickets as SupportTicket[]);
-        saveLocal('active_shop_id', canonicalShopId);
+
+        cloudReady = true;
+        setIsCloudSynced(true);
+      } catch (err: any) {
+        if (!cancelled) {
+          setDataLoadError(err?.message || 'Could not load data from Neon database.');
+          setIsCloudSynced(false);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingData(false);
+        }
       }
-      for (const [key, value] of Object.entries(normalizedState)) writeCloudState(key, value);
     };
 
     void syncFromNeon().catch((error: unknown) => {
@@ -2472,6 +2397,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isMfaStepUpVerified,
         activeShop,
         setActiveShopId,
+        isLoadingData,
+        dataLoadError,
+        isCloudSynced,
         shops,
         updateShopProfile,
         updateShopStatus,

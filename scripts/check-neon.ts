@@ -8,16 +8,12 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
+import { initializePaymentTables } from '../src/db/paymentStorage';
+
 async function main() {
-  const appState = await pool.query(`SELECT scope_id, data_key, jsonb_typeof(state_data) as type FROM printflow_app_state`);
-  console.log('App state rows in Neon:', appState.rows);
-
-  const shops = await pool.query(`SELECT id, name, slug FROM shops`);
-  console.log('Shops in Neon:', shops.rows);
-
-  const users = await pool.query(`SELECT id, email, role FROM users`);
-  console.log('Users in Neon:', users.rows);
-
+  await initializePaymentTables();
+  const userCols = await pool.query(`SELECT column_name, data_type FROM information_schema.columns WHERE table_name = 'printflow_users'`);
+  console.log('printflow_users columns:', userCols.rows);
   await pool.end();
 }
 

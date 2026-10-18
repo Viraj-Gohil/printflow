@@ -190,17 +190,34 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // ============================================================================
 // 1.8. HEALTH & READINESS PROBE (OBSERVABILITY)
 // ============================================================================
-const handleHealthCheck = (_req: Request, res: Response) => {
+const handleHealthCheck = async (_req: Request, res: Response) => {
   const dbConfigured = isSharedPoolConfigured();
   const storageConfigured = getStorageProvider().isConfigured();
-  return res.json({
-    status: 'ok',
+  let dbHealthy = false;
+  let dbError: string | undefined;
+
+  if (dbConfigured) {
+    try {
+      await requireSharedPool().query('SELECT 1');
+      dbHealthy = true;
+    } catch (err) {
+      dbHealthy = false;
+      dbError = err instanceof Error ? err.message : 'Database ping failed';
+    }
+  }
+
+  const isHealthy = dbConfigured && dbHealthy;
+  const statusCode = isHealthy ? 200 : 503;
+
+  return res.status(statusCode).json({
+    status: isHealthy ? 'ok' : 'degraded',
     uptimeSeconds: Math.floor(process.uptime()),
     timestamp: new Date().toISOString(),
     services: {
-      database: dbConfigured ? 'configured' : 'unconfigured',
+      database: dbHealthy ? 'healthy' : (dbConfigured ? 'unreachable' : 'unconfigured'),
       storage: storageConfigured ? 'configured' : 'unconfigured'
-    }
+    },
+    ...(dbError ? { error: dbError } : {})
   });
 };
 
@@ -813,33 +830,8 @@ const RAZORPAY_KEY_ID = ADMIN_RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = ADMIN_RAZORPAY_KEY_SECRET;
 const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'whsec_admin_platform_live_events';
 
-// In-memory idempotency store for webhook events and verified transactions
+// Short-lived in-flight idempotency set for incoming webhook events
 const processedWebhookEvents = new Set<string>();
-const verifiedPayments = new Map<string, any>();
-const orderIdToPaymentId = new Map<string, string>();
-
-export interface TrackedPaymentOrder {
-  orderId: string;
-  amount: number;
-  currency: string;
-  shopId?: string;
-  keyId: string;
-  keySecret: string;
-  mode: 'test' | 'live';
-  receipt: string;
-  notes?: Record<string, any>;
-  printJobId?: string;
-  flow?: string;
-  status: 'created' | 'pending' | 'authorized' | 'captured' | 'paid' | 'PAID' | 'failed' | 'cancelled';
-  paymentId?: string;
-  signature?: string;
-  error?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-const trackedPaymentOrders = new Map<string, TrackedPaymentOrder>();
-const inMemoryPrivateFiles = new Map<string, { buffer: Buffer; mime: string; filename: string; shopId: string; jobId: string; fileId: string }>();
 
 /**
  * Validates Razorpay credentials by testing API handshake.
@@ -1335,46 +1327,29 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
         isPlatformOrder
       });
 
-      // Track order in Neon PostgreSQL durably
-      if (isSharedPoolConfigured()) {
-        try {
-          await getPaymentRepository().createPaymentOrder({
-            jobId: printJobId || undefined,
-            shopId: effectiveShopId || '00000000-0000-0000-0000-000000000000',
-            purpose: isPlatformOrder ? 'SUBSCRIPTION' : 'PRINT_JOB',
-            providerOrderId: razorpayOrder.id,
-            providerAccountRef: targetKeyId,
-            amountMinor: amountInPaise,
-            currency: currency || 'INR',
-            idempotencyKey: crypto.randomUUID(),
-            metadata: { receipt: orderReceipt, notes: notes || undefined }
-          });
-        } catch (dbOrderErr) {
-          logger.error('Failed to persist payment order into Neon public.payment_orders', {
-            orderId: razorpayOrder.id,
-            error: deepRedact(dbOrderErr)
-          });
-          getPaymentRepository().markOrderReconciliationNeeded(razorpayOrder.id, 'Durable persistence failure during order creation').catch(() => {});
-        }
+      // Track order in Neon PostgreSQL durably (Neon is the sole authoritative store)
+      if (!isSharedPoolConfigured()) {
+        return res.status(503).json({ success: false, error: 'Database is required for payment orders.' });
       }
-
-      // Track order in memory for fast lookup, status checking, and reconciliation
-      trackedPaymentOrders.set(razorpayOrder.id, {
-        orderId: razorpayOrder.id,
-        amount: amountInPaise,
-        currency: currency || 'INR',
-        shopId: effectiveShopId || undefined,
-        keyId: targetKeyId,
-        keySecret: targetKeySecret,
-        mode: targetMode,
-        receipt: orderReceipt,
-        notes: notes || undefined,
-        printJobId: printJobId || undefined,
-        flow: isPlatformOrder ? 'subscription' : 'counter_print',
-        status: 'created',
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
+      try {
+        await getPaymentRepository().createPaymentOrder({
+          jobId: printJobId || undefined,
+          shopId: effectiveShopId || '00000000-0000-0000-0000-000000000000',
+          purpose: isPlatformOrder ? 'SUBSCRIPTION' : 'PRINT_JOB',
+          providerOrderId: razorpayOrder.id,
+          providerAccountRef: targetKeyId,
+          amountMinor: amountInPaise,
+          currency: currency || 'INR',
+          idempotencyKey: crypto.randomUUID(),
+          metadata: { receipt: orderReceipt, notes: notes || undefined }
+        });
+      } catch (dbOrderErr) {
+        logger.error('Failed to persist payment order into Neon public.payment_orders', {
+          orderId: razorpayOrder.id,
+          error: deepRedact(dbOrderErr)
+        });
+        getPaymentRepository().markOrderReconciliationNeeded(razorpayOrder.id, 'Durable persistence failure during order creation').catch(() => {});
+      }
     } catch (apiError: any) {
       logger.error('Razorpay SDK orders.create API error', {
         requestId: (req as any).requestId,
@@ -1498,65 +1473,35 @@ app.post(['/api/verify-payment', '/api/payment/verify'], createRateLimiter(45), 
       });
     }
 
-    const tracked = trackedPaymentOrders.get(order_id);
-    const amountMinor = dbOrder?.amountMinor || tracked?.amount || 0;
-    const currency = dbOrder?.currency || tracked?.currency || 'INR';
+    const amountMinor = dbOrder?.amountMinor || 0;
+    const currency = dbOrder?.currency || 'INR';
     const sigHash = crypto.createHash('sha256').update(razorpay_signature).digest('hex');
+
+    if (!isSharedPoolConfigured() || !dbOrder) {
+      return res.status(503).json({ success: false, error: 'Authoritative database is required for payment verification.' });
+    }
 
     // Atomic durable verification and print-job transition in Neon
     let atomicResult: any = null;
-    if (isSharedPoolConfigured() && dbOrder) {
-      try {
-        atomicResult = await getPaymentRepository().executeAtomicPaymentVerification({
-          providerOrderId: order_id,
-          providerPaymentId: payment_id,
-          providerSignatureHash: sigHash,
-          amountMinor,
-          currency,
-          paymentMethod: req.body?.method || 'upi'
-        });
-      } catch (atomicErr: any) {
-        logger.error('Atomic payment verification failed in Neon', {
-          order_id,
-          payment_id,
-          error: deepRedact(atomicErr)
-        });
-        return res.status(400).json({
-          success: false,
-          error: atomicErr.message || 'Payment verification failed.'
-        });
-      }
-    } else {
-      if (order_id && payment_id) {
-        recordVerifiedPaymentToNeon({
-          providerOrderId: order_id,
-          providerPaymentId: payment_id,
-          providerSignatureHash: sigHash,
-          amountMinor,
-          currency
-        }).catch(() => {});
-      }
-    }
-
-    // Maintain in-memory tracking for backwards compatibility
-    verifiedPayments.set(payment_id, {
-      paymentId: payment_id,
-      orderId: order_id,
-      printJobId: dbOrder?.jobId || printJobId || null,
-      flow: dbOrder?.purpose === 'SUBSCRIPTION' ? 'subscription' : (flow || 'payment'),
-      planId: planId || null,
-      shopId: dbOrder?.shopId || reqShopId || null,
-      verifiedAt: new Date().toISOString(),
-      status: 'PAID'
-    });
-
-    orderIdToPaymentId.set(order_id, payment_id);
-
-    if (tracked) {
-      tracked.status = 'PAID';
-      tracked.paymentId = payment_id;
-      tracked.signature = razorpay_signature;
-      tracked.updatedAt = new Date().toISOString();
+    try {
+      atomicResult = await getPaymentRepository().executeAtomicPaymentVerification({
+        providerOrderId: order_id,
+        providerPaymentId: payment_id,
+        providerSignatureHash: sigHash,
+        amountMinor,
+        currency,
+        paymentMethod: req.body?.method || 'upi'
+      });
+    } catch (atomicErr: any) {
+      logger.error('Atomic payment verification failed in Neon', {
+        order_id,
+        payment_id,
+        error: deepRedact(atomicErr)
+      });
+      return res.status(400).json({
+        success: false,
+        error: atomicErr.message || 'Payment verification failed.'
+      });
     }
 
     logger.info('Payment verified successfully', {
@@ -1612,80 +1557,50 @@ app.all(['/api/payment/check-status', '/api/payment/order-status/:orderId?'], cr
       });
     }
 
-    // 1. Check if already recorded as verified/PAID in verifiedPayments or orderIdToPaymentId
-    const knownPaymentId = orderIdToPaymentId.get(orderId);
-    if (knownPaymentId && verifiedPayments.has(knownPaymentId)) {
-      const rec = verifiedPayments.get(knownPaymentId);
-      return res.json({
-        success: true,
-        status: 'PAID',
-        orderId,
-        paymentId: knownPaymentId,
-        verified: true,
-        method: rec.method || 'upi',
-        amount: rec.amount,
-        verifiedAt: rec.verifiedAt || rec.capturedAt
-      });
+    // 1. Check durable database state in Neon
+    if (!isSharedPoolConfigured()) {
+      return res.status(503).json({ success: false, error: 'Authoritative database is required for payment status.' });
     }
 
-    // Check tracked payment order in memory
-    const tracked = trackedPaymentOrders.get(orderId);
-    if (tracked && tracked.status === 'PAID') {
-      return res.json({
-        success: true,
-        status: 'PAID',
-        orderId,
-        paymentId: tracked.paymentId,
-        verified: true,
-        amount: tracked.amount,
-        updatedAt: tracked.updatedAt
-      });
-    }
-
-    // Check durable database state in Neon
-    if (isSharedPoolConfigured()) {
-      try {
-        const dbOrder = await getPaymentRepository().getPaymentOrderByProviderId(orderId);
-        if (dbOrder && dbOrder.status === 'PAID') {
-          return res.json({
-            success: true,
-            status: 'PAID',
-            orderId,
-            paymentId: knownPaymentId || tracked?.paymentId || 'pay_durable_verified',
-            verified: true,
-            amount: dbOrder.amountMinor,
-            currency: dbOrder.currency,
-            verifiedAt: dbOrder.updatedAt
-          });
-        }
-      } catch (err) {
-        logger.warn('Failed to check payment order in Neon for check-status', { orderId, error: deepRedact(err) });
+    try {
+      const dbOrder = await getPaymentRepository().getPaymentOrderByProviderId(orderId);
+      if (dbOrder && dbOrder.status === 'PAID') {
+        return res.json({
+          success: true,
+          status: 'PAID',
+          orderId,
+          paymentId: 'pay_durable_verified',
+          verified: true,
+          amount: dbOrder.amountMinor,
+          currency: dbOrder.currency,
+          verifiedAt: dbOrder.updatedAt
+        });
       }
+    } catch (err) {
+      logger.warn('Failed to check payment order in Neon for check-status', { orderId, error: deepRedact(err) });
     }
 
     // 2. Resolve credentials for this order
-    let targetKeyId = tracked?.keyId;
-    let targetKeySecret = tracked?.keySecret;
+    let targetKeyId = '';
+    let targetKeySecret = '';
 
-    if (!targetKeyId || !targetKeySecret) {
-      if (shopId && shopId !== 'platform') {
-        const shopIntegration = await getShopPaymentIntegration(shopId);
-        if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
-          targetKeyId = shopIntegration.keyId;
-          targetKeySecret = shopIntegration.keySecret;
-        } else {
-          targetKeyId = SHOP_DEFAULT_KEY_ID;
-          targetKeySecret = SHOP_DEFAULT_KEY_SECRET;
-        }
+    if (shopId && shopId !== 'platform') {
+      const shopIntegration = await getShopPaymentIntegration(shopId);
+      if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
+        targetKeyId = shopIntegration.keyId;
+        targetKeySecret = shopIntegration.keySecret;
       } else {
-        const platformConfig = await getPlatformPaymentConfig();
-        if (platformConfig?.isConfigured) {
-          targetKeyId = platformConfig.keyId;
-          targetKeySecret = platformConfig.keySecret;
-        } else {
-          targetKeyId = ADMIN_RAZORPAY_KEY_ID;
-          targetKeySecret = ADMIN_RAZORPAY_KEY_SECRET;
-        }
+        targetKeyId = SHOP_DEFAULT_KEY_ID;
+        targetKeySecret = SHOP_DEFAULT_KEY_SECRET;
+      }
+    } else {
+      const platformConfig = await getPlatformPaymentConfig();
+      if (platformConfig?.isConfigured) {
+        targetKeyId = platformConfig.keyId;
+        targetKeySecret = platformConfig.keySecret;
+      } else {
+        targetKeyId = ADMIN_RAZORPAY_KEY_ID;
+        targetKeySecret = ADMIN_RAZORPAY_KEY_SECRET;
       }
     }
 
@@ -1711,21 +1626,18 @@ app.all(['/api/payment/check-status', '/api/payment/order-status/:orderId?'], cr
       const successfulPayment = capturedPayment || authorizedPayment;
 
       if (successfulPayment) {
-        // Mark as verified & paid idempotently
-        verifiedPayments.set(successfulPayment.id, {
-          paymentId: successfulPayment.id,
-          orderId,
-          amount: successfulPayment.amount,
-          method: successfulPayment.method,
-          status: 'PAID',
-          verifiedAt: new Date().toISOString()
-        });
-        orderIdToPaymentId.set(orderId, successfulPayment.id);
-
-        if (tracked) {
-          tracked.status = 'PAID';
-          tracked.paymentId = successfulPayment.id;
-          tracked.updatedAt = new Date().toISOString();
+        const sigHash = crypto.createHash('sha256').update(`check-status:${orderId}:${successfulPayment.id}`).digest('hex');
+        if (isSharedPoolConfigured()) {
+          getPaymentRepository().executeAtomicPaymentVerification({
+            providerOrderId: orderId,
+            providerPaymentId: successfulPayment.id,
+            providerSignatureHash: sigHash,
+            amountMinor: successfulPayment.amount,
+            currency: successfulPayment.currency || 'INR',
+            paymentMethod: successfulPayment.method || 'upi'
+          }).catch((atomErr) => {
+            logger.warn('Could not execute atomic verification in check-status', { orderId, error: deepRedact(atomErr) });
+          });
         }
 
         return res.json({
@@ -1743,10 +1655,6 @@ app.all(['/api/payment/check-status', '/api/payment/order-status/:orderId?'], cr
       // Check for pending / processing payment
       const pendingPayment = items.find((p: any) => p.status === 'pending' || p.status === 'created');
       if (pendingPayment) {
-        if (tracked) {
-          tracked.status = 'pending';
-          tracked.updatedAt = new Date().toISOString();
-        }
         return res.json({
           success: true,
           status: 'PENDING',
@@ -1759,11 +1667,6 @@ app.all(['/api/payment/check-status', '/api/payment/order-status/:orderId?'], cr
       // Check if any payment attempt failed
       const failedPayment = items.find((p: any) => p.status === 'failed');
       if (failedPayment && items.every((p: any) => p.status === 'failed')) {
-        if (tracked) {
-          tracked.status = 'failed';
-          tracked.error = failedPayment.error_description || 'Payment failed';
-          tracked.updatedAt = new Date().toISOString();
-        }
         return res.json({
           success: false,
           status: 'FAILED',
@@ -1774,43 +1677,17 @@ app.all(['/api/payment/check-status', '/api/payment/order-status/:orderId?'], cr
         });
       }
 
-      // If no payments attempted yet on this order
-      // Check order creation age
-      const createdAtMs = tracked ? new Date(tracked.createdAt).getTime() : Date.now();
-      const ageMinutes = (Date.now() - createdAtMs) / (60 * 1000);
-
-      if (ageMinutes < 15) {
-        return res.json({
-          success: true,
-          status: 'PENDING',
-          orderId,
-          message: 'Payment processing. Please wait.'
-        });
-      } else {
-        return res.json({
-          success: false,
-          status: 'CANCELLED',
-          orderId,
-          message: 'Payment window closed or expired. Order was not placed.',
-          canRetry: true
-        });
-      }
+      return res.json({
+        success: true,
+        status: 'PENDING',
+        orderId,
+        message: 'Payment processing. Please wait.'
+      });
     } catch (rzpErr: any) {
       logger.warn('Could not fetch payments from Razorpay API', {
         orderId,
         error: rzpErr?.message || rzpErr
       });
-
-      // Fall back to recorded status in tracked orders or verifiedPayments
-      if (tracked && tracked.status === 'PAID') {
-        return res.json({
-          success: true,
-          status: 'PAID',
-          orderId,
-          paymentId: tracked.paymentId,
-          verified: true
-        });
-      }
 
       return res.json({
         success: true,
@@ -1843,36 +1720,14 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
       });
     }
 
-    const effectiveOrderId = orderId || (paymentId ? Array.from(verifiedPayments.values()).find(p => p.paymentId === paymentId)?.orderId : null);
+    const effectiveOrderId = orderId || null;
 
-    // 1. Check if already marked as verified
-    if (paymentId && verifiedPayments.has(paymentId)) {
-      const rec = verifiedPayments.get(paymentId);
-      return res.json({
-        success: true,
-        status: 'PAID',
-        verified: true,
-        orderId: rec.orderId || effectiveOrderId,
-        paymentId,
-        message: 'Payment already verified successfully.'
-      });
+    if (!isSharedPoolConfigured()) {
+      return res.status(503).json({ success: false, error: 'Authoritative database is required for payment reconciliation.' });
     }
 
-    const knownPayment = effectiveOrderId ? orderIdToPaymentId.get(effectiveOrderId) : null;
-    if (knownPayment && verifiedPayments.has(knownPayment)) {
-      const rec = verifiedPayments.get(knownPayment);
-      return res.json({
-        success: true,
-        status: 'PAID',
-        verified: true,
-        orderId: effectiveOrderId,
-        paymentId: knownPayment,
-        message: 'Payment reconciled and confirmed.'
-      });
-    }
-
-    // Check durable database state in Neon
-    if (effectiveOrderId && isSharedPoolConfigured()) {
+    // 1. Check durable database state in Neon
+    if (effectiveOrderId) {
       try {
         const dbOrder = await getPaymentRepository().getPaymentOrderByProviderId(effectiveOrderId);
         if (dbOrder && dbOrder.status === 'PAID') {
@@ -1881,7 +1736,7 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
             status: 'PAID',
             verified: true,
             orderId: effectiveOrderId,
-            paymentId: knownPayment || 'pay_durable_reconciled',
+            paymentId: paymentId || 'pay_durable_reconciled',
             message: 'Payment already verified successfully in database.'
           });
         }
@@ -1891,29 +1746,26 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
     }
 
     // 2. Resolve credentials
-    const tracked = effectiveOrderId ? trackedPaymentOrders.get(effectiveOrderId) : null;
-    let targetKeyId = tracked?.keyId;
-    let targetKeySecret = tracked?.keySecret;
+    let targetKeyId = '';
+    let targetKeySecret = '';
 
-    if (!targetKeyId || !targetKeySecret) {
-      if (shopId && shopId !== 'platform') {
-        const shopIntegration = await getShopPaymentIntegration(shopId);
-        if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
-          targetKeyId = shopIntegration.keyId;
-          targetKeySecret = shopIntegration.keySecret;
-        } else {
-          targetKeyId = SHOP_DEFAULT_KEY_ID;
-          targetKeySecret = SHOP_DEFAULT_KEY_SECRET;
-        }
+    if (shopId && shopId !== 'platform') {
+      const shopIntegration = await getShopPaymentIntegration(shopId);
+      if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
+        targetKeyId = shopIntegration.keyId;
+        targetKeySecret = shopIntegration.keySecret;
       } else {
-        const platformConfig = await getPlatformPaymentConfig();
-        if (platformConfig?.isConfigured) {
-          targetKeyId = platformConfig.keyId;
-          targetKeySecret = platformConfig.keySecret;
-        } else {
-          targetKeyId = ADMIN_RAZORPAY_KEY_ID;
-          targetKeySecret = ADMIN_RAZORPAY_KEY_SECRET;
-        }
+        targetKeyId = SHOP_DEFAULT_KEY_ID;
+        targetKeySecret = SHOP_DEFAULT_KEY_SECRET;
+      }
+    } else {
+      const platformConfig = await getPlatformPaymentConfig();
+      if (platformConfig?.isConfigured) {
+        targetKeyId = platformConfig.keyId;
+        targetKeySecret = platformConfig.keySecret;
+      } else {
+        targetKeyId = ADMIN_RAZORPAY_KEY_ID;
+        targetKeySecret = ADMIN_RAZORPAY_KEY_SECRET;
       }
     }
 
@@ -1927,23 +1779,9 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
       try {
         const payEntity: any = await activeRzp.payments.fetch(paymentId);
         if (payEntity && (payEntity.status === 'captured' || payEntity.status === 'authorized')) {
-          verifiedPayments.set(paymentId, {
-            paymentId,
-            orderId: payEntity.order_id || effectiveOrderId,
-            amount: payEntity.amount,
-            method: payEntity.method,
-            status: 'PAID',
-            verifiedAt: new Date().toISOString()
-          });
-          if (effectiveOrderId) orderIdToPaymentId.set(effectiveOrderId, paymentId);
-          if (tracked) {
-            tracked.status = 'PAID';
-            tracked.paymentId = paymentId;
-          }
-
-          if (isSharedPoolConfigured() && (payEntity.order_id || effectiveOrderId)) {
-            const rOrderId = payEntity.order_id || effectiveOrderId;
-            const sigHash = crypto.createHash('sha256').update(`reconcile:${rOrderId}:${paymentId}`).digest('hex');
+          const rOrderId = payEntity.order_id || effectiveOrderId || 'unknown_order';
+          const sigHash = crypto.createHash('sha256').update(`reconcile:${rOrderId}:${paymentId}`).digest('hex');
+          if (isSharedPoolConfigured()) {
             getPaymentRepository().executeAtomicPaymentVerification({
               providerOrderId: rOrderId,
               providerPaymentId: paymentId,
@@ -1960,7 +1798,7 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
             success: true,
             status: 'PAID',
             verified: true,
-            orderId: payEntity.order_id || effectiveOrderId,
+            orderId: rOrderId,
             paymentId,
             amount: payEntity.amount,
             message: 'Payment verified and captured via Razorpay reconciliation.'
@@ -1979,20 +1817,6 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
         const success = items.find((p: any) => p.status === 'captured' || p.status === 'authorized');
 
         if (success) {
-          verifiedPayments.set(success.id, {
-            paymentId: success.id,
-            orderId: effectiveOrderId,
-            amount: success.amount,
-            method: success.method,
-            status: 'PAID',
-            verifiedAt: new Date().toISOString()
-          });
-          orderIdToPaymentId.set(effectiveOrderId, success.id);
-          if (tracked) {
-            tracked.status = 'PAID';
-            tracked.paymentId = success.id;
-          }
-
           if (isSharedPoolConfigured()) {
             const sigHash = crypto.createHash('sha256').update(`reconcile:${effectiveOrderId}:${success.id}`).digest('hex');
             getPaymentRepository().executeAtomicPaymentVerification({
@@ -2050,7 +1874,7 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
 // ============================================================================
 // 3. SECURE FILE UPLOAD & TENANT STORAGE VALIDATION (MAGIC BYTES & PRIVATE VAULT)
 // ============================================================================
-app.post('/api/upload', createRateLimiter(30), (req: Request, res: Response) => {
+app.post('/api/upload', createRateLimiter(30), async (req: Request, res: Response) => {
   try {
     const { filename, fileBase64, shopId, jobId, declaredMime } = req.body;
 
@@ -2087,14 +1911,33 @@ app.post('/api/upload', createRateLimiter(30), (req: Request, res: Response) => 
     const cleanJobId = jobId || `job_${Date.now()}`;
     const storageKey = validation.storageKey!;
 
-    // Store in private tenant storage
-    inMemoryPrivateFiles.set(storageKey, {
-      buffer,
-      mime: validation.detectedMime!,
-      filename: validation.sanitizedFilename!,
+    const storageProvider = getStorageProvider();
+    if (!storageProvider.isConfigured() || !isSharedPoolConfigured()) {
+      return res.status(503).json({ success: false, error: 'Durable document storage is required.' });
+    }
+
+    const ext = path.extname(validation.sanitizedFilename!) || '.pdf';
+    const objectPath = buildObjectPath(shopId, cleanJobId, fileId, ext);
+
+    await storageProvider.upload({
       shopId,
       jobId: cleanJobId,
-      fileId
+      fileId,
+      extension: ext,
+      buffer,
+      contentType: validation.detectedMime!
+    });
+
+    await getGuestCheckoutRepository().persistUploadedFileMetadata({
+      jobId: cleanJobId,
+      shopId,
+      fileId,
+      objectPath,
+      originalFilename: validation.sanitizedFilename!,
+      mimeType: validation.detectedMime!,
+      sizeBytes: buffer.length,
+      sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+      verifiedPageCount: 1
     });
 
     // Generate signed download token (valid 1 hour)
@@ -2172,50 +2015,36 @@ app.get('/api/storage/files/:shopId/:jobId/:fileId', async (req: Request, res: R
       }
     }
 
-    // Locate file in storage: first check durable uploaded_files in Neon + Supabase Storage
-    if (isSharedPoolConfigured()) {
-      try {
-        const dbFile = await getGuestCheckoutRepository().getUploadedFileById(jobId, fileId);
-        if (dbFile && dbFile.shopId === shopId && dbFile.uploadState !== 'DELETED') {
-          if (!getStorageProvider().isConfigured()) {
-            return res.status(503).json({
-              success: false,
-              error: 'Supabase Storage is not configured on this server.'
-            });
-          }
-          const buffer = await getStorageProvider().download(dbFile.objectPath);
-          res.setHeader('Content-Type', dbFile.mimeType);
-          res.setHeader('X-Content-Type-Options', 'nosniff');
-          res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(dbFile.originalFilename)}"`);
-          return res.send(buffer);
+    // Locate file in storage: check durable uploaded_files in Neon + Supabase Storage
+    if (!isSharedPoolConfigured()) {
+      return res.status(503).json({ success: false, error: 'Database is required for document retrieval.' });
+    }
+
+    try {
+      const dbFile = await getGuestCheckoutRepository().getUploadedFileById(jobId, fileId);
+      if (dbFile && dbFile.shopId === shopId && dbFile.uploadState !== 'DELETED') {
+        if (!getStorageProvider().isConfigured()) {
+          return res.status(503).json({
+            success: false,
+            error: 'Supabase Storage is not configured on this server.'
+          });
         }
-      } catch (storageErr) {
-        logger.error('Failed to retrieve file from Supabase Storage', {
-          jobId,
-          fileId,
-          error: deepRedact(storageErr)
-        });
-        return res.status(503).json({ success: false, error: 'Document storage is temporarily unavailable.' });
+        const buffer = await getStorageProvider().download(dbFile.objectPath);
+        res.setHeader('Content-Type', dbFile.mimeType);
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(dbFile.originalFilename)}"`);
+        return res.send(buffer);
       }
+    } catch (storageErr) {
+      logger.error('Failed to retrieve file from Supabase Storage', {
+        jobId,
+        fileId,
+        error: deepRedact(storageErr)
+      });
+      return res.status(503).json({ success: false, error: 'Document storage is temporarily unavailable.' });
     }
 
-    // Fallback for legacy development in-memory files
-    let matchedFile: { buffer: Buffer; mime: string; filename: string } | null = null;
-    for (const f of inMemoryPrivateFiles.values()) {
-      if (f.shopId === shopId && f.jobId === jobId && f.fileId === fileId) {
-        matchedFile = f;
-        break;
-      }
-    }
-
-    if (!matchedFile) {
-      return res.status(404).json({ success: false, error: 'File not found in private storage vault.' });
-    }
-
-    res.setHeader('Content-Type', matchedFile.mime);
-    res.setHeader('X-Content-Type-Options', 'nosniff');
-    res.setHeader('Content-Disposition', `attachment; filename="${matchedFile.filename}"`);
-    return res.send(matchedFile.buffer);
+    return res.status(404).json({ success: false, error: 'File not found in private storage vault.' });
   } catch (err: any) {
     return res.status(500).json({ success: false, error: 'File download failed' });
   }
@@ -2281,13 +2110,33 @@ app.post('/api/fetch-remote-document', createRateLimiter(20), async (req: Reques
     const fileId = `file_${crypto.randomBytes(8).toString('hex')}`;
     const storageKey = uploadCheck.storageKey!;
 
-    inMemoryPrivateFiles.set(storageKey, {
-      buffer: fetchResult.buffer,
-      mime: uploadCheck.detectedMime!,
-      filename: uploadCheck.sanitizedFilename!,
+    const storageProvider = getStorageProvider();
+    if (!storageProvider.isConfigured() || !isSharedPoolConfigured()) {
+      return res.status(503).json({ success: false, error: 'Durable private document storage is required.' });
+    }
+
+    const ext = path.extname(safeFilename) || '.pdf';
+    const objectPath = buildObjectPath(shopId, cleanJobId, fileId, ext);
+
+    await storageProvider.upload({
       shopId,
       jobId: cleanJobId,
-      fileId
+      fileId,
+      extension: ext,
+      buffer: fetchResult.buffer,
+      contentType: uploadCheck.detectedMime!
+    });
+
+    await getGuestCheckoutRepository().persistUploadedFileMetadata({
+      jobId: cleanJobId,
+      shopId,
+      fileId,
+      objectPath,
+      originalFilename: safeFilename,
+      mimeType: uploadCheck.detectedMime!,
+      sizeBytes: fetchResult.buffer.length,
+      sha256: crypto.createHash('sha256').update(fetchResult.buffer).digest('hex'),
+      verifiedPageCount: 1
     });
 
     const expiresAt = Date.now() + 3600000;
@@ -2448,30 +2297,6 @@ app.post(['/api/payment/webhook', '/api/payments/webhook'], async (req: Request,
         const effectiveOrderId = payment?.order_id || order?.id;
         const effectivePaymentId = payment?.id;
 
-        if (effectivePaymentId) {
-          verifiedPayments.set(effectivePaymentId, {
-            paymentId: effectivePaymentId,
-            orderId: effectiveOrderId,
-            amount: payment?.amount || order?.amount_paid,
-            method: payment?.method,
-            status: 'PAID',
-            capturedAt: new Date().toISOString()
-          });
-        }
-
-        if (effectiveOrderId && effectivePaymentId) {
-          orderIdToPaymentId.set(effectiveOrderId, effectivePaymentId);
-        }
-
-        if (effectiveOrderId) {
-          const tracked = trackedPaymentOrders.get(effectiveOrderId);
-          if (tracked) {
-            tracked.status = 'PAID';
-            if (effectivePaymentId) tracked.paymentId = effectivePaymentId;
-            tracked.updatedAt = new Date().toISOString();
-          }
-        }
-
         // Persist verified payment to Neon durably via atomic verification
         if (effectiveOrderId && effectivePaymentId) {
           const sigHash = signature
@@ -2507,40 +2332,13 @@ app.post(['/api/payment/webhook', '/api/payments/webhook'], async (req: Request,
       }
       case 'payment.failed': {
         const payment = payload?.payment?.entity;
-        if (payment && payment.id) {
-          if (isSharedPoolConfigured() && payment.order_id) {
-            getPaymentRepository().handlePaymentFailure(
-              payment.order_id,
-              payment.error_description || 'Payment failed'
-            ).catch((failErr) => {
-              logger.warn('Could not handle payment failure in DB', { error: deepRedact(failErr) });
-            });
-          }
-
-          // Out-of-order defense: Never downgrade an already PAID payment or order in memory
-          const existingVerified = verifiedPayments.get(payment.id);
-          const existingTracked = payment.order_id ? trackedPaymentOrders.get(payment.order_id) : undefined;
-          if (existingVerified?.status !== 'PAID' && existingTracked?.status !== 'PAID') {
-            verifiedPayments.set(payment.id, {
-              paymentId: payment.id,
-              orderId: payment.order_id,
-              status: 'FAILED',
-              failedAt: new Date().toISOString()
-            });
-            if (payment.order_id) {
-              const tracked = trackedPaymentOrders.get(payment.order_id);
-              if (tracked && tracked.status !== 'PAID') {
-                tracked.status = 'failed';
-                tracked.error = payment.error_description || 'Payment failed';
-                tracked.updatedAt = new Date().toISOString();
-              }
-            }
-          } else {
-            logger.info('Ignored late payment.failed webhook event for already PAID order', {
-              orderId: payment.order_id,
-              paymentId: payment.id
-            });
-          }
+        if (payment && payment.id && payment.order_id && isSharedPoolConfigured()) {
+          getPaymentRepository().handlePaymentFailure(
+            payment.order_id,
+            payment.error_description || 'Payment failed'
+          ).catch((failErr) => {
+            logger.warn('Could not handle payment failure in DB', { error: deepRedact(failErr) });
+          });
         }
         break;
       }
@@ -2991,12 +2789,9 @@ interface BackendPrintJob {
   pagesPrinted?: number;
 }
 
-const backendPrintJobs = new Map<string, BackendPrintJob>();
-const backendPrintJobsByOrder = new Map<string, string>();
-
 app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request, res: Response) => {
-  if (process.env.NODE_ENV === 'production' && !isNeonDatabaseConfigured()) {
-    return res.status(503).json({ success: false, error: 'Durable print queue storage is required before paid orders can be dispatched.' });
+  if (!isNeonDatabaseConfigured() || !isSharedPoolConfigured()) {
+    return res.status(503).json({ success: false, error: 'Authoritative database is required and currently unavailable.' });
   }
   const { orderId, paymentId, shopId, customerName, customerPhone, files } = req.body || {};
   if (
@@ -3013,51 +2808,28 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
   let isPaymentVerified = false;
   let verifiedAmountMinor = 0;
 
-  if (isSharedPoolConfigured()) {
-    try {
-      const dbOrder = await getPaymentRepository().getPaymentOrderByProviderId(orderId);
-      if (dbOrder && dbOrder.shopId === shopId && dbOrder.status === 'PAID') {
-        isPaymentVerified = true;
-        verifiedAmountMinor = dbOrder.amountMinor;
-      }
-    } catch (e) {
-      logger.warn('Could not check payment_orders in Neon', { orderId, error: deepRedact(e) });
-    }
-  }
-
-  if (!isPaymentVerified) {
-    const trackedOrder = trackedPaymentOrders.get(orderId);
-    const verifiedPayment = verifiedPayments.get(paymentId);
-    if (
-      trackedOrder &&
-      trackedOrder.shopId === shopId &&
-      trackedOrder.status === 'PAID' &&
-      trackedOrder.paymentId === paymentId &&
-      verifiedPayment?.orderId === orderId &&
-      verifiedPayment?.status === 'PAID'
-    ) {
+  try {
+    const dbOrder = await getPaymentRepository().getPaymentOrderByProviderId(orderId);
+    if (dbOrder && dbOrder.shopId === shopId && dbOrder.status === 'PAID') {
       isPaymentVerified = true;
-      verifiedAmountMinor = trackedOrder.amount;
+      verifiedAmountMinor = dbOrder.amountMinor;
     }
+  } catch (e) {
+    logger.warn('Could not check payment_orders in Neon', { orderId, error: deepRedact(e) });
+    return res.status(503).json({ success: false, error: 'Database is temporarily unavailable.' });
   }
 
   if (!isPaymentVerified) {
     return res.status(403).json({ success: false, error: 'A verified payment for this shop is required before dispatch.' });
   }
 
-  if (isNeonDatabaseConfigured()) {
-    try {
-      const existingJob = await getPrintAgentJobByOrder(shopId, orderId);
-      if (existingJob) return res.json({ success: true, job: existingJob, alreadyQueued: true });
-    } catch (error) {
-      logger.error('Could not check existing Neon print job', { shopId, error: deepRedact(error) });
-      return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
-    }
+  try {
+    const existingJob = await getPrintAgentJobByOrder(shopId, orderId);
+    if (existingJob) return res.json({ success: true, job: existingJob, alreadyQueued: true });
+  } catch (error) {
+    logger.error('Could not check existing Neon print job', { shopId, error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
   }
-
-  const existingJobId = backendPrintJobsByOrder.get(orderId);
-  const existingJob = existingJobId ? backendPrintJobs.get(existingJobId) : undefined;
-  if (existingJob) return res.json({ success: true, job: existingJob, alreadyQueued: true });
 
   const totalAmount = Number(req.body.totalAmount);
   if (!Number.isFinite(totalAmount) || Math.round(totalAmount * 100) !== verifiedAmountMinor) {
@@ -3167,75 +2939,60 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
     updatedAt: now
   };
 
-  if (isNeonDatabaseConfigured()) {
-    try {
-      const storedJob = await insertPrintAgentJob(
-        job,
-        preparedFiles.map((file) => ({
-          id: file.id,
-          mime: file.mime,
-          filename: file.sanitizedFilename,
-          buffer: file.buffer
-        }))
-      );
-      if (!storedJob) return res.status(503).json({ success: false, error: 'Print job could not be stored.' });
-      if (isSharedPoolConfigured()) {
-        try {
-          const pool = requireSharedPool();
-          await pool.query(
-            `INSERT INTO public.print_jobs
-               (order_code, tracking_token, shop_id, customer_name, customer_phone, files,
-                total_amount, file_status, payment_status, print_status, payment_method, payment_id)
-             VALUES ($1, $2, $3::uuid, $4, $5, $6::jsonb, $7, 'VERIFIED', 'SUCCESS', 'QUEUED', 'RAZORPAY', $8)
-             ON CONFLICT (order_code) DO NOTHING`,
-            [
-              id,
-              job.trackingToken,
-              shopId,
-              job.customerName,
-              job.customerPhone,
-              JSON.stringify(job.files),
-              totalAmount,
-              paymentId
-            ]
-          );
-        } catch {
-          // Non-critical mirror write
-        }
+  try {
+    const storedJob = await insertPrintAgentJob(
+      job,
+      preparedFiles.map((file) => ({
+        id: file.id,
+        mime: file.mime,
+        filename: file.sanitizedFilename,
+        buffer: file.buffer
+      }))
+    );
+    if (!storedJob) return res.status(503).json({ success: false, error: 'Print job could not be stored.' });
+    if (isSharedPoolConfigured()) {
+      try {
+        const pool = requireSharedPool();
+        await pool.query(
+          `INSERT INTO public.print_jobs
+             (order_code, tracking_token, shop_id, customer_name, customer_phone, files,
+              total_amount, file_status, payment_status, print_status, payment_method, payment_id)
+           VALUES ($1, $2, $3::uuid, $4, $5, $6::jsonb, $7, 'VERIFIED', 'SUCCESS', 'QUEUED', 'RAZORPAY', $8)
+           ON CONFLICT (order_code) DO NOTHING`,
+          [
+            id,
+            job.trackingToken,
+            shopId,
+            job.customerName,
+            job.customerPhone,
+            JSON.stringify(job.files),
+            totalAmount,
+            paymentId
+          ]
+        );
+      } catch {
+        // Non-critical mirror write
       }
-      const created = storedJob.id === id;
-      return res.status(created ? 201 : 200).json({ success: true, job: storedJob, alreadyQueued: !created });
-    } catch (error) {
-      logger.error('Could not persist print job in Neon', { shopId, jobId: id, error: deepRedact(error) });
-      return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
     }
+    const created = storedJob.id === id;
+    return res.status(created ? 201 : 200).json({ success: true, job: storedJob, alreadyQueued: !created });
+  } catch (error) {
+    logger.error('Could not persist print job in Neon', { shopId, jobId: id, error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
   }
-
-  for (const file of preparedFiles) {
-    inMemoryPrivateFiles.set(file.storageKey, {
-      buffer: file.buffer,
-      mime: file.mime,
-      filename: file.sanitizedFilename,
-      shopId,
-      jobId: id,
-      fileId: file.id
-    });
-  }
-  backendPrintJobs.set(id, job);
-  backendPrintJobsByOrder.set(orderId, id);
-  return res.status(201).json({ success: true, job });
 });
 
 app.get('/api/customer/print-jobs/:id/status', createRateLimiter(60), async (req: Request, res: Response) => {
+  if (!isNeonDatabaseConfigured()) {
+    return res.status(503).json({ success: false, error: 'Authoritative database is required and currently unavailable.' });
+  }
   const trackingToken = req.header('x-print-tracking-token') || '';
   if (!trackingToken || trackingToken.length > 128) {
     return res.status(400).json({ success: false, error: 'A valid order tracking token is required.' });
   }
 
   try {
-    const job = isNeonDatabaseConfigured()
-      ? await getPrintAgentJob(req.params.id)
-      : backendPrintJobs.get(req.params.id);
+    const job = await getPrintAgentJob(req.params.id);
     if (!job || job.paymentStatus !== 'SUCCESS') {
       return res.status(404).json({ success: false, error: 'Print order not found.' });
     }
@@ -3446,13 +3203,12 @@ app.get('/api/shop/:shopId/live', requireShopOwnerRole, async (req: Request, res
     return res.status(403).json({ success: false, error: 'You cannot view another shop’s live data.' });
   }
 
+  if (!isNeonDatabaseConfigured()) {
+    return res.status(503).json({ success: false, error: 'Authoritative database is required and currently unavailable.' });
+  }
   try {
     const printers = await getShopPrintAgentPrinters(shopId);
-    const jobs = isNeonDatabaseConfigured()
-      ? await listPrintAgentJobs(shopId)
-      : [...backendPrintJobs.values()]
-          .filter((job) => job.shopId === shopId)
-          .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const jobs = await listPrintAgentJobs(shopId);
     return res.json({ success: true, printers, jobs, updatedAt: new Date().toISOString() });
   } catch (error) {
     logger.error('Shop live data lookup failed', { shopId, error: deepRedact(error) });
@@ -3462,6 +3218,9 @@ app.get('/api/shop/:shopId/live', requireShopOwnerRole, async (req: Request, res
 
 // Agent Poll Pending Jobs for Registered Shop
 app.get('/api/agent/jobs', async (req: Request, res: Response) => {
+  if (!isNeonDatabaseConfigured()) {
+    return res.status(503).json({ success: false, error: 'Authoritative database is required and currently unavailable.' });
+  }
   const agentToken = req.headers['x-agent-token'] as string;
   const agentId = req.headers['x-agent-id'] as string;
   const shopId = (req.query.shopId as string) || (req.headers['x-shop-id'] as string);
@@ -3472,15 +3231,7 @@ app.get('/api/agent/jobs', async (req: Request, res: Response) => {
       return res.status(403).json({ success: false, error: agentCheck.error || 'Agent access unauthorized' });
     }
 
-    const jobs = isNeonDatabaseConfigured()
-      ? await listPrintAgentJobs(agentCheck.shopId, true, agentId)
-      : [...backendPrintJobs.values()].filter((job) =>
-          job.shopId === agentCheck.shopId &&
-          job.paymentStatus === 'SUCCESS' &&
-          (job.printStatus === 'QUEUED' ||
-           (job.printStatus === 'ASSIGNED' && (job.claimedBy === agentId || (Date.now() - new Date(job.claimedAt || 0).getTime() > 300_000))) ||
-           (job.printStatus === 'DOWNLOADING' && (Date.now() - new Date(job.claimedAt || 0).getTime() > 300_000)))
-        );
+    const jobs = await listPrintAgentJobs(agentCheck.shopId, true, agentId);
     return res.json({ success: true, shopId: agentCheck.shopId, jobs });
   } catch (error) {
     logger.error('Print agent job polling authentication failed', { error: deepRedact(error) });
@@ -3490,6 +3241,9 @@ app.get('/api/agent/jobs', async (req: Request, res: Response) => {
 
 // Agent Claim Job (Restricted to Agent's Registered Shop)
 app.post('/api/agent/jobs/:id/claim', async (req: Request, res: Response) => {
+  if (!isNeonDatabaseConfigured()) {
+    return res.status(503).json({ success: false, error: 'Authoritative database is required and currently unavailable.' });
+  }
   const agentToken = req.headers['x-agent-token'] as string;
   const agentId = req.headers['x-agent-id'] as string;
 
@@ -3506,9 +3260,7 @@ app.post('/api/agent/jobs/:id/claim', async (req: Request, res: Response) => {
 
   let job: BackendPrintJob | null | undefined;
   try {
-    job = isNeonDatabaseConfigured()
-      ? await getPrintAgentJob(req.params.id) as BackendPrintJob | null
-      : backendPrintJobs.get(req.params.id);
+    job = (await getPrintAgentJob(req.params.id)) as BackendPrintJob | null;
   } catch (error) {
     logger.error('Neon print job lookup failed during claim', { jobId: req.params.id, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
@@ -3522,68 +3274,51 @@ app.post('/api/agent/jobs/:id/claim', async (req: Request, res: Response) => {
   if (job.paymentStatus !== 'SUCCESS') {
     return res.status(403).json({ success: false, error: 'Only payment-confirmed print jobs can be claimed.' });
   }
-  if (isNeonDatabaseConfigured()) {
-    try {
-      const claimedAt = new Date().toISOString();
-      const claimedJob = await claimPrintAgentJob(job.id, agentCheck.shopId, agentId, claimedAt);
-      if (!claimedJob) {
-        return res.status(409).json({ success: false, error: 'Print job is no longer available to claim.' });
-      }
-      if (isSharedPoolConfigured()) {
-        try {
-          const pool = requireSharedPool();
-          await pool.query(
-            `UPDATE public.print_jobs
-             SET print_status = 'ASSIGNED', updated_at = NOW()
-             WHERE id::text = $1 AND shop_id::text = $2`,
-            [job.id, agentCheck.shopId]
-          );
-          await pool.query(
-            `INSERT INTO public.print_job_events
-               (job_id, actor_type, actor_id, from_status, to_status, event_code, metadata)
-             VALUES ($1::uuid, 'AGENT', $2, 'QUEUED', 'ASSIGNED', 'AGENT_CLAIMED_JOB', $3::jsonb)`,
-            [job.id, agentId, JSON.stringify({ claimedAt })]
-          ).catch(() => {});
-        } catch {
-          // Non-critical mirror write
-        }
-      }
-      return res.json({
-        success: true,
-        jobId: req.params.id,
-        claimedBy: agentId,
-        shopId: agentCheck.shopId,
-        job: claimedJob,
-        claimedAt
-      });
-    } catch (error) {
-      logger.error('Neon print job claim failed', { jobId: req.params.id, error: deepRedact(error) });
-      return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
-    }
-  }
-  const isClaimable = job.printStatus === 'QUEUED' ||
-    ((job.printStatus === 'ASSIGNED' || job.printStatus === 'DOWNLOADING') &&
-     Date.now() - new Date(job.claimedAt || 0).getTime() > 300_000);
-  if (!isClaimable) {
-    return res.status(409).json({ success: false, error: 'Print job is not available to claim.' });
-  }
-  job.printStatus = 'ASSIGNED';
-  job.claimedBy = agentId;
-  job.claimedAt = new Date().toISOString();
-  job.updatedAt = new Date().toISOString();
 
-  return res.json({
-    success: true,
-    jobId: req.params.id,
-    claimedBy: agentId,
-    shopId: agentCheck.shopId,
-    job: job || undefined,
-    claimedAt: new Date().toISOString()
-  });
+  try {
+    const claimedAt = new Date().toISOString();
+    const claimedJob = await claimPrintAgentJob(job.id, agentCheck.shopId, agentId, claimedAt);
+    if (!claimedJob) {
+      return res.status(409).json({ success: false, error: 'Print job is no longer available to claim.' });
+    }
+    if (isSharedPoolConfigured()) {
+      try {
+        const pool = requireSharedPool();
+        await pool.query(
+          `UPDATE public.print_jobs
+           SET print_status = 'ASSIGNED', updated_at = NOW()
+           WHERE id::text = $1 AND shop_id::text = $2`,
+          [job.id, agentCheck.shopId]
+        );
+        await pool.query(
+          `INSERT INTO public.print_job_events
+             (job_id, actor_type, actor_id, from_status, to_status, event_code, metadata)
+           VALUES ($1::uuid, 'AGENT', $2, 'QUEUED', 'ASSIGNED', 'AGENT_CLAIMED_JOB', $3::jsonb)`,
+          [job.id, agentId, JSON.stringify({ claimedAt })]
+        ).catch(() => {});
+      } catch {
+        // Non-critical mirror write
+      }
+    }
+    return res.json({
+      success: true,
+      jobId: req.params.id,
+      claimedBy: agentId,
+      shopId: agentCheck.shopId,
+      job: claimedJob,
+      claimedAt
+    });
+  } catch (error) {
+    logger.error('Neon print job claim failed', { jobId: req.params.id, error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
+  }
 });
 
 // Agent Update Job Status (DOWNLOADING | PRINTING | COMPLETED | FAILED)
 app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
+  if (!isNeonDatabaseConfigured()) {
+    return res.status(503).json({ success: false, error: 'Authoritative database is required and currently unavailable.' });
+  }
   const agentToken = req.headers['x-agent-token'] as string;
   const agentId = req.headers['x-agent-id'] as string;
   const body = req.body || {};
@@ -3616,9 +3351,7 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
 
   let job: BackendPrintJob | null | undefined;
   try {
-    job = isNeonDatabaseConfigured()
-      ? await getPrintAgentJob(req.params.id) as BackendPrintJob | null
-      : backendPrintJobs.get(req.params.id);
+    job = (await getPrintAgentJob(req.params.id)) as BackendPrintJob | null;
   } catch (error) {
     logger.error('Neon print job lookup failed during status update', { jobId: req.params.id, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
@@ -3650,86 +3383,68 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
   ) {
     return res.status(409).json({ success: false, error: `Invalid print job transition from ${job.printStatus} to ${status}.` });
   }
-  if (isNeonDatabaseConfigured()) {
-    try {
-      const updatedAt = new Date().toISOString();
-      const pagesPrinted = Number.isSafeInteger(body.pagesPrinted) && body.pagesPrinted >= 0
-        ? body.pagesPrinted
-        : undefined;
-      const updated = await updatePrintAgentJobStatus({
-        jobId: job.id,
-        shopId: agentCheck.shopId,
-        agentId,
-        status: status as BackendPrintJob['printStatus'],
-        updatedAt,
-        expectedStatus: job.printStatus,
-        errorMessage: typeof errorMessage === 'string' ? errorMessage.slice(0, 1000) : undefined,
-        printerName: typeof printerName === 'string' ? printerName.trim().slice(0, 200) : undefined,
-        retrySafe,
-        pagesPrinted
-      });
-      if (!updated) return res.status(409).json({ success: false, error: 'Print job status could not be updated.' });
-      if (isSharedPoolConfigured()) {
-        try {
-          const pool = requireSharedPool();
-          await pool.query(
-            `UPDATE public.print_jobs
-             SET print_status = $2, updated_at = NOW()
-             WHERE id::text = $1 AND shop_id::text = $3`,
-            [job.id, status, agentCheck.shopId]
-          );
-          await pool.query(
-            `INSERT INTO public.print_job_events
-               (job_id, actor_type, actor_id, from_status, to_status, event_code, metadata)
-             VALUES ($1::uuid, 'AGENT', $2, $3, $4, $5, $6::jsonb)`,
-            [
-              job.id,
-              agentId,
-              job.printStatus,
-              status,
-              `AGENT_STATUS_${status}`,
-              JSON.stringify({
-                printerName,
-                errorMessage,
-                retrySafe,
-                pagesPrinted
-              })
-            ]
-          ).catch(() => {});
-        } catch {
-          // Non-critical mirror write
-        }
-      }
-      return res.json({ success: true, jobId: req.params.id, newStatus: status, updatedAt });
-    } catch (error) {
-      logger.error('Neon print job status update failed', { jobId: req.params.id, error: deepRedact(error) });
-      return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
-    }
-  }
-  job.printStatus = status as BackendPrintJob['printStatus'];
-  job.updatedAt = new Date().toISOString();
-  if (status === 'QUEUED') {
-    job.errorMessage = undefined;
-    job.retrySafe = false;
-  } else if (typeof errorMessage === 'string') {
-    job.errorMessage = errorMessage.slice(0, 1000);
-  }
-  if (typeof printerName === 'string' && printerName.trim()) job.printerName = printerName.trim().slice(0, 200);
-  job.retrySafe = retrySafe;
-  if (Number.isSafeInteger(body.pagesPrinted) && body.pagesPrinted >= 0) {
-    job.pagesPrinted = body.pagesPrinted;
-  }
 
-  return res.json({
-    success: true,
-    jobId: req.params.id,
-    newStatus: status,
-    updatedAt: new Date().toISOString()
-  });
+  try {
+    const updatedAt = new Date().toISOString();
+    const pagesPrinted = Number.isSafeInteger(body.pagesPrinted) && body.pagesPrinted >= 0
+      ? body.pagesPrinted
+      : undefined;
+    const updated = await updatePrintAgentJobStatus({
+      jobId: job.id,
+      shopId: agentCheck.shopId,
+      agentId,
+      status: status as BackendPrintJob['printStatus'],
+      updatedAt,
+      expectedStatus: job.printStatus,
+      errorMessage: typeof errorMessage === 'string' ? errorMessage.slice(0, 1000) : undefined,
+      printerName: typeof printerName === 'string' ? printerName.trim().slice(0, 200) : undefined,
+      retrySafe,
+      pagesPrinted
+    });
+    if (!updated) return res.status(409).json({ success: false, error: 'Print job status could not be updated.' });
+    if (isSharedPoolConfigured()) {
+      try {
+        const pool = requireSharedPool();
+        await pool.query(
+          `UPDATE public.print_jobs
+           SET print_status = $2, updated_at = NOW()
+           WHERE id::text = $1 AND shop_id::text = $3`,
+          [job.id, status, agentCheck.shopId]
+        );
+        await pool.query(
+          `INSERT INTO public.print_job_events
+             (job_id, actor_type, actor_id, from_status, to_status, event_code, metadata)
+           VALUES ($1::uuid, 'AGENT', $2, $3, $4, $5, $6::jsonb)`,
+          [
+            job.id,
+            agentId,
+            job.printStatus,
+            status,
+            `AGENT_STATUS_${status}`,
+            JSON.stringify({
+              printerName,
+              errorMessage,
+              retrySafe,
+              pagesPrinted
+            })
+          ]
+        ).catch(() => {});
+      } catch {
+        // Non-critical mirror write
+      }
+    }
+    return res.json({ success: true, jobId: req.params.id, newStatus: status, updatedAt });
+  } catch (error) {
+    logger.error('Neon print job status update failed', { jobId: req.params.id, error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
+  }
 });
 
 // Agent Document Download Stream (Direct M2M authentication)
 app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
+  if (!isNeonDatabaseConfigured()) {
+    return res.status(503).json({ success: false, error: 'Authoritative database is required and currently unavailable.' });
+  }
   const agentToken = req.headers['x-agent-token'] as string;
   const agentId = req.headers['x-agent-id'] as string;
 
@@ -3747,9 +3462,7 @@ app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
   let job: BackendPrintJob | null | undefined;
   let storedFile: { mime: string; filename: string; buffer: Buffer } | undefined | null;
   try {
-    job = isNeonDatabaseConfigured()
-      ? await getPrintAgentJob(req.params.id) as BackendPrintJob | null
-      : backendPrintJobs.get(req.params.id);
+    job = (await getPrintAgentJob(req.params.id)) as BackendPrintJob | null;
     if (job && isSharedPoolConfigured() && getStorageProvider().isConfigured()) {
       const requestedFileId = typeof req.query.fileId === 'string' ? req.query.fileId : '';
       const targetFileId = requestedFileId || (job.files.length === 1 ? job.files[0]?.id : '');
@@ -3770,7 +3483,7 @@ app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
       }
     }
 
-    if (!storedFile && job && isNeonDatabaseConfigured()) {
+    if (!storedFile && job) {
       const requestedFileId = typeof req.query.fileId === 'string' ? req.query.fileId : '';
       const file = requestedFileId
         ? job.files.find((item) => item.id === requestedFileId)
@@ -3799,13 +3512,6 @@ app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
     : job.files.length === 1 ? job.files[0] : undefined;
   if (!jobFile) {
     return res.status(400).json({ success: false, error: 'A valid print file ID is required.' });
-  }
-  if (!isNeonDatabaseConfigured()) {
-    storedFile = Array.from(inMemoryPrivateFiles.values()).find((file) =>
-        file.shopId === job.shopId &&
-        file.jobId === job.id &&
-        file.fileId === jobFile.id
-      );
   }
   if (!storedFile) {
     return res.status(404).json({ success: false, error: 'Print document is not available in private storage.' });
@@ -4176,7 +3882,6 @@ async function recordVerifiedPaymentToNeon(params: {
       paymentId: params.providerPaymentId
     });
   } catch (error) {
-    // Log but do not throw — the in-memory verifiedPayments Map still tracks it
     logger.error('Failed to persist verified payment to Neon', {
       orderId: params.providerOrderId,
       error: deepRedact(error)

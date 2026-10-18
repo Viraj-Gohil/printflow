@@ -17,7 +17,8 @@ const DEFAULT_CONFIG: AgentConfig = {
   selectedPrinterName: undefined,
   disabledPrinterNames: [],
   allowColorFallback: true,
-  spoolerTimeoutMs: 30000
+  spoolerTimeoutMs: 30000,
+  themePreference: 'system'
 };
 
 const CONFIG_VERSION = 1;
@@ -138,7 +139,10 @@ export class LocalDataVault {
             : DEFAULT_CONFIG.allowColorFallback,
           spoolerTimeoutMs: this.validNumber(stored.spoolerTimeoutMs, 5000, 120000)
             ? stored.spoolerTimeoutMs
-            : DEFAULT_CONFIG.spoolerTimeoutMs
+            : DEFAULT_CONFIG.spoolerTimeoutMs,
+          themePreference: stored.themePreference === 'light' || stored.themePreference === 'dark' || stored.themePreference === 'system'
+            ? stored.themePreference
+            : DEFAULT_CONFIG.themePreference
         };
         return config;
       }
@@ -217,6 +221,7 @@ export class LocalDataVault {
       allowColorFallback: this.config.allowColorFallback,
       spoolerTimeoutMs: this.config.spoolerTimeoutMs,
       hasStoredCredentials: Boolean(this.config.authToken),
+      themePreference: this.config.themePreference || 'system',
       credentialStorageStatus: !this.config.authToken
         ? 'NONE'
         : this.credentialStorageSecure
@@ -282,37 +287,24 @@ export class LocalDataVault {
   }
 
   private loadJobs(): void {
+    // Local database authority removed: Purge legacy jobs_queue.json if present on disk
     try {
-      if (fs.existsSync(this.jobsFilePath)) {
-        const raw = fs.readFileSync(this.jobsFilePath, 'utf8');
-        const list: PrintJobItem[] = JSON.parse(raw);
-        for (const j of list) {
-          this.jobs.set(j.id, j);
-        }
+      if (this.jobsFilePath && fs.existsSync(this.jobsFilePath)) {
+        fs.unlinkSync(this.jobsFilePath);
+        logger.info('STORAGE', 'Legacy local jobs_queue.json removed; Neon PostgreSQL is the authoritative queue.');
+      }
+      const tmpPath = `${this.jobsFilePath}.tmp`;
+      if (fs.existsSync(tmpPath)) {
+        fs.unlinkSync(tmpPath);
       }
     } catch (err: any) {
-      logger.warn('RECOVERY', 'Could not load saved jobs queue', { error: err.message });
+      logger.warn('STORAGE', 'Could not purge legacy jobs_queue.json', { error: err.message });
     }
   }
 
   public persistJobs(): void {
-    const temporaryPath = `${this.jobsFilePath}.tmp`;
-    try {
-      const arr = Array.from(this.jobs.values());
-      fs.writeFileSync(temporaryPath, JSON.stringify(arr, null, 2), 'utf8');
-      fs.renameSync(temporaryPath, this.jobsFilePath);
-    } catch (err: any) {
-      if (fs.existsSync(temporaryPath)) {
-        try {
-          fs.unlinkSync(temporaryPath);
-        } catch (cleanupError) {
-          logger.error('STORAGE', 'Failed to clean up incomplete local queue state', {
-            error: cleanupError instanceof Error ? cleanupError.message : 'Unknown cleanup error'
-          });
-        }
-      }
-      logger.error('STORAGE', 'Failed to save jobs queue', { error: err.message });
-    }
+    // No-op: Print queue is an ephemeral runtime execution buffer.
+    // Neon PostgreSQL is the sole authoritative database for all jobs.
   }
 
   public saveJob(job: PrintJobItem): void {
