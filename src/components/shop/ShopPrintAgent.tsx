@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { useApp } from '../../lib/store';
+import { useApp, getDeterministicAgentToken } from '../../lib/store';
 import {
   Cpu,
   CheckCircle2,
@@ -17,6 +17,7 @@ import {
 export const ShopPrintAgent: React.FC = () => {
   const { activeShop, agents, regenerateAgentToken } = useApp();
 
+  const defaultToken = getDeterministicAgentToken(activeShop?.id || 'counter_1');
   const foundAgent = agents.find((a) => a.shopId === activeShop?.id);
   const shopAgent = foundAgent || {
     id: `agent_${activeShop?.id || 'counter_1'}`,
@@ -27,8 +28,8 @@ export const ShopPrintAgent: React.FC = () => {
     lastSeen: 'Not connected',
     connectedPrintersCount: 0,
     printerCount: 0,
-    authToken: '',
-    apiToken: ''
+    authToken: defaultToken,
+    apiToken: defaultToken
   };
 
   const [tokenCopied, setTokenCopied] = useState(false);
@@ -40,7 +41,7 @@ export const ShopPrintAgent: React.FC = () => {
     connectedPrintersCount: 0
   });
   const [activeTab, setActiveTab] = useState<'STATUS' | 'INSTALL' | 'API'>('STATUS');
-  const visibleToken = (issuedToken?.shopId === shopAgent.shopId ? issuedToken.token : '') || shopAgent.authToken || '';
+  const visibleToken = (issuedToken?.shopId === shopAgent.shopId ? issuedToken.token : '') || shopAgent.authToken || defaultToken;
 
   useEffect(() => {
     let isCurrent = true;

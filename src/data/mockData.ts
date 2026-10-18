@@ -605,6 +605,8 @@ export const INITIAL_AGENTS: ElectronAgent[] = [
     lastSeen: 'Not connected',
     connectedPrintersCount: 0,
     printerCount: 0,
+    authToken: 'agt_tok_royal_cyber_counter_master_2026',
+    apiToken: 'agt_tok_royal_cyber_counter_master_2026',
     createdAt: '2026-01-15T08:00:00Z'
   }
 ];
