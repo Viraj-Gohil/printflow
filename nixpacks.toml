@@ -1,12 +1,14 @@
 [phases.setup]
-nixPkgs = ["nodejs_20"]
+nixPkgs = ["nodejs_22"]
 
 [phases.install]
-cmds = ["npm install --include=dev"]
+cmds = [
+  "npm install --include=dev",
+  "npm install @rolldown/binding-linux-x64-gnu@1.2.12 lightningcss-linux-x64-gnu@1.33.0 @esbuild/linux-x64@0.28.0 --no-save"
+]
 
 [phases.build]
 cmds = ["npm run build"]
 
 [start]
 cmd = "node server.js"
-

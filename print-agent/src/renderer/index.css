@@ -165,6 +165,8 @@
     text-rendering: optimizeLegibility;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    min-height: 100%;
+    scroll-behavior: smooth;
   }
 
   body {
@@ -172,11 +174,17 @@
     min-height: 100vh;
     background-color: var(--bg-app);
     color: var(--text-primary);
-    overflow-x: hidden;
-    overflow-y: auto;
+    overflow-x: hidden !important;
+    overflow-y: auto !important;
     font-size: 13px;
     line-height: 1.5;
     transition: background-color var(--transition-normal), color var(--transition-normal);
+  }
+
+  #root {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
   }
 
   button, input, select, textarea {
@@ -578,6 +586,7 @@ input[type="checkbox"] {
   display: flex;
   flex-direction: column;
   background-color: var(--bg-app);
+  flex: 1;
 }
 
 .agent-topbar {
@@ -597,7 +606,7 @@ input[type="checkbox"] {
   width: 100%;
   max-width: 1600px;
   margin: 0 auto;
-  padding: 20px 24px 32px;
+  padding: 20px 24px 40px;
   gap: 22px;
 }
 
@@ -610,8 +619,11 @@ input[type="checkbox"] {
   box-shadow: var(--shadow-sm);
   padding: 10px;
   height: fit-content;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
   position: sticky;
   top: 80px;
+  align-self: flex-start;
   transition: width var(--transition-normal), transform var(--transition-normal);
 }
 

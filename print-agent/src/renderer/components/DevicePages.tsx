@@ -226,7 +226,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
   const onlinePrintersCount = printers.filter((p) => p.isOnline).length;
 
   return (
-    <div className="space-y-6 animate-fade-in pb-8">
+    <div className="space-y-6 animate-fade-in pb-16">
       {/* Global Feedback Banner */}
       {globalMessage && (
         <div

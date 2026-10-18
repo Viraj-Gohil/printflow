@@ -152,7 +152,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="setup-dialog-title"
-        className={`w-full max-w-lg p-6 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl shadow-2xl space-y-4 text-xs animate-scale-in ${
+        className={`w-full max-w-lg max-h-[92vh] overflow-y-auto p-6 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl shadow-2xl space-y-4 text-xs animate-scale-in ${
           required ? 'setup-dialog-required' : ''
         }`}
       >
