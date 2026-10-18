@@ -966,8 +966,8 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
       {
         id: 'msg_101',
         ticketId: 'tck_1041',
-        senderId: 'usr_owner_1',
-        senderName: 'Ramesh Patel (Shop Owner)',
+        senderId: 'usr_owner_2',
+        senderName: 'Vikram Singh (Shop Owner)',
         senderRole: 'SHOP_OWNER',
         message: 'Whenever a customer orders color prints on our Canon imageRUNNER 2625i, the Windows Electron Agent sends the postscript spooler file in monochrome black and white. Paper size is A4. Please help us configure the color driver mapping.',
         isInternalNote: false,
@@ -979,7 +979,7 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
         senderId: 'usr_admin_tech',
         senderName: 'Arjun Mehta (Hardware Eng)',
         senderRole: 'ADMIN',
-        message: 'Hello Ramesh, could you verify if the Canon driver installed under Windows Devices & Printers is using Canon Generic Plus PCL6 or PS3? PrintFlow Agent v2.4 requires PostScript 3 emulation to pass RGB CMYK color streams directly.',
+        message: 'Hello Vikram, could you verify if the Canon driver installed under Windows Devices & Printers is using Canon Generic Plus PCL6 or PS3? PrintFlow Agent v2.4 requires PostScript 3 emulation to pass RGB CMYK color streams directly.',
         isInternalNote: false,
         createdAt: '2026-10-07T09:00:00Z'
       },
@@ -996,8 +996,8 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
       {
         id: 'msg_104',
         ticketId: 'tck_1041',
-        senderId: 'usr_owner_1',
-        senderName: 'Ramesh Patel (Shop Owner)',
+        senderId: 'usr_owner_2',
+        senderName: 'Vikram Singh (Shop Owner)',
         senderRole: 'SHOP_OWNER',
         message: 'We installed the PS3 driver and restarted PrintFlow Agent. The test page printed in full color! But checking with our student customer orders now.',
         isInternalNote: false,
@@ -1008,8 +1008,8 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
       {
         id: 'hist_101',
         ticketId: 'tck_1041',
-        actorId: 'usr_owner_1',
-        actorName: 'Ramesh Patel',
+        actorId: 'usr_owner_2',
+        actorName: 'Vikram Singh',
         actorRole: 'SHOP_OWNER',
         action: 'TICKET_CREATED',
         newValue: 'HIGH Priority',
@@ -1447,8 +1447,8 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
       {
         id: 'msg_701',
         ticketId: 'tck_1047',
-        senderId: 'usr_owner_1',
-        senderName: 'Ramesh Patel (Shop Owner)',
+        senderId: 'usr_owner_2',
+        senderName: 'Vikram Singh (Shop Owner)',
         senderRole: 'SHOP_OWNER',
         message: 'Can we send an automated WhatsApp message to customer when their print job finishes? Many students leave their files and return 10 minutes later.',
         isInternalNote: false,
@@ -1460,7 +1460,7 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
         senderId: 'usr_admin_ops',
         senderName: 'Priya Nair (Operations)',
         senderRole: 'ADMIN',
-        message: 'Great suggestion Ramesh! We have added WhatsApp Business Cloud API integration into our Q4 product roadmap. Closing this ticket as recorded.',
+        message: 'Great suggestion Vikram! We have added WhatsApp Business Cloud API integration into our Q4 product roadmap. Closing this ticket as recorded.',
         isInternalNote: false,
         createdAt: '2026-10-03T12:00:00Z'
       }
@@ -1469,8 +1469,8 @@ export const INITIAL_SUPPORT_TICKETS: SupportTicket[] = [
       {
         id: 'hist_701',
         ticketId: 'tck_1047',
-        actorId: 'usr_owner_1',
-        actorName: 'Ramesh Patel',
+        actorId: 'usr_owner_2',
+        actorName: 'Vikram Singh',
         actorRole: 'SHOP_OWNER',
         action: 'TICKET_CREATED',
         newValue: 'LOW Priority',

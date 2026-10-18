@@ -1336,9 +1336,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Print Jobs: starts clean for real production orders!
-  const [printJobs, setPrintJobs] = useState<PrintJob[]>(() =>
-    getStoredItem('print_jobs', INITIAL_PRINT_JOBS)
-  );
+  const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => {
+    const loaded = getStoredItem<PrintJob[]>('print_jobs', []);
+    return Array.isArray(loaded)
+      ? loaded.filter((j) => !j.id?.startsWith('pj_88') && !j.orderCode?.startsWith('ORD-88'))
+      : [];
+  });
 
   // Sync print jobs & transactions across tabs in real time
   useEffect(() => {
@@ -1770,10 +1773,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     });
   };
 
-  // Transactions
-  const [transactions, setTransactions] = useState<Transaction[]>(() =>
-    getStoredItem('transactions', INITIAL_TRANSACTIONS)
-  );
+  // Transactions: starts clean for real customer payments!
+  const [transactions, setTransactions] = useState<Transaction[]>(() => {
+    const loaded = getStoredItem<Transaction[]>('transactions', []);
+    return Array.isArray(loaded)
+      ? loaded.filter((t) => !t.id?.startsWith('txn_88') && !t.orderId?.startsWith('ORD-88'))
+      : [];
+  });
 
   const refundTransaction = (transactionId: string) => {
     const targetTxn = transactions.find((t) => t.id === transactionId);
@@ -1806,10 +1812,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addAuditLog('TRANSACTION_REFUNDED', 'PAYMENT', transactionId, `Refunded transaction: ${transactionId}`);
   };
 
-  // Audit Logs
-  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() =>
-    getStoredItem('audit_logs', INITIAL_AUDIT_LOGS)
-  );
+  // Audit Logs: starts clean for real production audits!
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>(() => {
+    const loaded = getStoredItem<AuditLog[]>('audit_logs', []);
+    return Array.isArray(loaded)
+      ? loaded.filter((l) => !l.id?.startsWith('log_mock_'))
+      : [];
+  });
 
   const addAuditLog = (
     action: string,

@@ -48,7 +48,7 @@ export const ShopSettings: React.FC = () => {
   // Razorpay form state
   const [keyIdInput, setKeyIdInput] = useState(activeShop.razorpaySettings?.keyId || '');
   const [replaceSecret, setReplaceSecret] = useState('');
-  const [mode, setMode] = useState<'test' | 'live'>(activeShop.razorpaySettings?.isTestMode ? 'test' : 'live');
+  const [mode, setMode] = useState<'test' | 'live'>('live');
   const [upiId, setUpiId] = useState(activeShop.razorpaySettings?.upiId || '');
   const [autoCapture, setAutoCapture] = useState(activeShop.razorpaySettings?.autoCapture ?? true);
   const [receiptPrefix, setReceiptPrefix] = useState(activeShop.razorpaySettings?.receiptPrefix || 'SGX-');
@@ -153,12 +153,12 @@ export const ShopSettings: React.FC = () => {
       }
       setTestResult({
         success: Boolean(res.ok && data.success),
-        message: data.message || `Credentials verified for ${mode === 'live' ? 'Live Production' : 'Test Sandbox'} mode.`
+        message: data.message || 'Credentials verified for Live Production gateway.'
       });
     } catch (err: any) {
       setTestResult({
         success: false,
-        message: err.message || `Key format check (${mode === 'live' ? 'Live Production' : 'Sandbox Test'}).`
+        message: err.message || 'Key format check (Live Production gateway).'
       });
     } finally {
       setTestingConnection(false);
@@ -181,6 +181,7 @@ export const ShopSettings: React.FC = () => {
     }
 
     setIsSaving(true);
+    const effectiveMode = keyIdInput.trim().startsWith('rzp_test_') ? 'test' : 'live';
     try {
       const res = await fetch(`/api/shop/${activeShop.id}/payment-settings`, {
         method: 'POST',
@@ -193,7 +194,7 @@ export const ShopSettings: React.FC = () => {
         body: JSON.stringify({
           keyId: keyIdInput.trim(),
           keySecret: replaceSecret.trim() ? replaceSecret.trim() : undefined,
-          mode,
+          mode: effectiveMode,
           isActive: isEnabled
         })
       });
@@ -216,11 +217,11 @@ export const ShopSettings: React.FC = () => {
       setShopMeta(data.config);
       setReplaceSecret('');
       setSaveSuccess(true);
-      showToast('Shop Gateway Saved', 'Credentials encrypted with AES-256-GCM and saved.', 'success', 3500);
+      showToast('Shop Gateway Saved', 'Live credentials encrypted with AES-256-GCM and saved.', 'success', 3500);
 
       updateShopRazorpay(activeShop.id, {
         enabled: isEnabled,
-        isTestMode: mode === 'test',
+        isTestMode: false,
         keyId: keyIdInput.trim(),
         keySecret: '', // Never store plaintext secret
         upiId: upiId.trim(),
@@ -374,35 +375,20 @@ export const ShopSettings: React.FC = () => {
             </div>
           )}
 
-          {/* Mode Switcher */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="razorpayMode"
-                checked={mode === 'test'}
-                onChange={() => setMode('test')}
-                className="text-blue-600 focus:ring-blue-500"
-              />
-              <div>
-                <span className="text-xs font-bold text-slate-900 block">Test Mode (Recommended for testing)</span>
-                <span className="text-[11px] text-slate-500">Uses test API keys starting with `rzp_test_`</span>
+          {/* Live Production Direct Gateway Notice */}
+          <div className="flex items-center justify-between p-4 bg-emerald-50 border border-emerald-200 rounded-xl">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center font-bold text-xs">
+                LIVE
               </div>
-            </label>
-
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="razorpayMode"
-                checked={mode === 'live'}
-                onChange={() => setMode('live')}
-                className="text-blue-600 focus:ring-blue-500"
-              />
               <div>
-                <span className="text-xs font-bold text-slate-900 block">Live Production Mode</span>
-                <span className="text-[11px] text-slate-500">Real customer money directly to your shop bank account</span>
+                <span className="text-xs font-bold text-emerald-950 block">Live Production Gateway</span>
+                <span className="text-[11px] text-emerald-700">Enter your original Razorpay credentials. Customer payments credit directly to your shop bank account.</span>
               </div>
-            </label>
+            </div>
+            <span className="px-2.5 py-1 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full uppercase tracking-wider">
+              Direct Settlement
+            </span>
           </div>
 
           {/* Input Fields */}
@@ -410,14 +396,14 @@ export const ShopSettings: React.FC = () => {
             {/* Gateway Key ID */}
             <div className="space-y-1.5">
               <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                <span>Gateway Key ID *</span>
-                <span className="text-[11px] text-slate-400">e.g. {mode === 'live' ? 'rzp_live_...' : 'rzp_test_...'}</span>
+                <span>Gateway Key ID * (Original Razorpay Key)</span>
+                <span className="text-[11px] text-slate-400">e.g. rzp_live_...</span>
               </label>
               <div className="relative">
                 <input
                   type="text"
                   required
-                  placeholder={mode === 'live' ? 'rzp_live_xxxxxxxxxxxxxx' : 'rzp_test_xxxxxxxxxxxxxx'}
+                  placeholder="rzp_live_xxxxxxxxxxxxxx"
                   value={keyIdInput}
                   onChange={(e) => setKeyIdInput(e.target.value)}
                   className="w-full pl-3 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -425,7 +411,7 @@ export const ShopSettings: React.FC = () => {
                 <Key className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
               </div>
               <p className="text-[11px] text-slate-500">
-                Merchant API Key ID for instant online payments
+                Original Merchant Key ID from Razorpay Dashboard (API Keys &gt; Live Key)
               </p>
             </div>
 

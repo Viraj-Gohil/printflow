@@ -1672,15 +1672,15 @@ export const AdminSupport: React.FC = () => {
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[10px] uppercase font-bold">Owner Contact</span>
-                        <span>{activeTicketShop?.ownerName || 'Ramesh Patel'}</span>
+                        <span>{activeTicketShop?.ownerName || 'Shop Owner'}</span>
                       </div>
                       <div>
                         <span className="text-slate-400 block text-[10px] uppercase font-bold">Phone / Email</span>
-                        <span>{activeTicketShop?.ownerPhone || '9825012345'}</span>
+                        <span>{activeTicketShop?.ownerPhone || activeTicketShop?.ownerEmail || '—'}</span>
                       </div>
                       <div className="col-span-2">
                         <span className="text-slate-400 block text-[10px] uppercase font-bold">Address & City</span>
-                        <span>{activeTicketShop?.address || 'Campus Square, Ahmedabad'}</span>
+                        <span>{activeTicketShop?.address || activeTicketShop?.city || '—'}</span>
                       </div>
                     </div>
                   </div>

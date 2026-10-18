@@ -305,6 +305,30 @@ export async function initializePaymentTables(): Promise<void> {
           neon_shop_id VARCHAR(128) NOT NULL,
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'printflow_app_state' AND column_name = 'payload'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'printflow_app_state' AND column_name = 'state_data'
+          ) THEN
+            ALTER TABLE public.printflow_app_state ADD COLUMN state_data JSONB;
+            UPDATE public.printflow_app_state SET state_data = payload WHERE state_data IS NULL;
+          END IF;
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'printflow_app_state' AND column_name = 'state_data'
+          ) AND NOT EXISTS (
+            SELECT 1 FROM information_schema.columns 
+            WHERE table_name = 'printflow_app_state' AND column_name = 'payload'
+          ) THEN
+            ALTER TABLE public.printflow_app_state ADD COLUMN payload JSONB;
+            UPDATE public.printflow_app_state SET payload = state_data WHERE payload IS NULL;
+          END IF;
+        END $$;
       `);
 
       const defaultTok = 'agt_tok_royal_cyber_counter_master_2026';
@@ -313,6 +337,35 @@ export async function initializePaymentTables(): Promise<void> {
         VALUES ('agent_rcx_1', 'shop_royal_cyber', 'ROYAL-CYBE-PC01', $1, false, 'OFFLINE', NULL, NOW())
         ON CONFLICT (agent_id) DO NOTHING
       `, [hashAgentToken(defaultTok)]);
+
+      try {
+        const localDevices = loadLocalAgentDevices();
+        for (const dev of Object.values(localDevices)) {
+          await client.query(`
+            INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, printers, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())
+            ON CONFLICT (agent_id) DO UPDATE SET
+              shop_id = EXCLUDED.shop_id,
+              device_name = EXCLUDED.device_name,
+              token_hash = EXCLUDED.token_hash,
+              is_revoked = EXCLUDED.is_revoked,
+              status = EXCLUDED.status,
+              printers = EXCLUDED.printers,
+              updated_at = NOW()
+          `, [
+            dev.agent_id,
+            dev.shop_id,
+            dev.device_name,
+            dev.token_hash,
+            Boolean(dev.is_revoked),
+            dev.status || 'OFFLINE',
+            dev.last_seen || null,
+            JSON.stringify(dev.printers || [])
+          ]);
+        }
+      } catch (localDevErr) {
+        console.warn('[PaymentStorage] Local agent device sync note:', localDevErr);
+      }
       const legacyShopId = process.env.PRINTFLOW_LEGACY_SHOP_ID;
       const neonShopId = process.env.PRINTFLOW_NEON_SHOP_ID;
       if (legacyShopId && neonShopId) {
@@ -533,7 +586,7 @@ export async function getPrintAgentJobFile(
 
 export async function getPrintFlowAppState(scopeId: string): Promise<Record<string, unknown>> {
   const result = await requirePostgresPool().query(
-    `SELECT data_key, state_data FROM printflow_app_state WHERE scope_id = $1`,
+    `SELECT data_key, COALESCE(state_data, payload) AS state_data FROM printflow_app_state WHERE scope_id = $1`,
     [scopeId]
   );
   return Object.fromEntries(result.rows.map((row) => [row.data_key, row.state_data]));
@@ -544,12 +597,16 @@ export async function savePrintFlowAppState(
   dataKey: string,
   stateData: unknown
 ): Promise<void> {
+  const jsonStr = JSON.stringify(stateData);
   await requirePostgresPool().query(
-    `INSERT INTO printflow_app_state (scope_id, data_key, state_data, updated_at)
-     VALUES ($1, $2, $3::jsonb, NOW())
+    `INSERT INTO printflow_app_state (scope_id, data_key, state_data, payload, updated_at)
+     VALUES ($1, $2, $3::jsonb, $3::jsonb, NOW())
      ON CONFLICT (scope_id, data_key)
-     DO UPDATE SET state_data = EXCLUDED.state_data, updated_at = NOW()`,
-    [scopeId, dataKey, JSON.stringify(stateData)]
+     DO UPDATE SET 
+       state_data = EXCLUDED.state_data,
+       payload = EXCLUDED.payload,
+       updated_at = NOW()`,
+    [scopeId, dataKey, jsonStr]
   );
 }
 
@@ -919,11 +976,17 @@ export async function getShopPrinterEntitlements(shopId: string): Promise<{ prin
          ORDER BY current_period_end DESC NULLS LAST
          LIMIT 1
        ) sub ON true
-       WHERE s.id = $1 OR s.slug = $2
+       WHERE s.id::text = $1 OR s.slug = $2
        LIMIT 1`,
       [canonicalShopId, normalizedSlug]
     );
-    if (result.rowCount !== 1) throw new Error('Shop subscription plan was not found in Neon.');
+    if (result.rowCount !== 1) {
+      const mockShop = INITIAL_SHOPS.find((item) => item.id === shopId || item.id === canonicalShopId);
+      const fallbackPlan = INITIAL_SAAS_PLANS.find((item) => item.id === mockShop?.planId) ||
+                           INITIAL_SAAS_PLANS.find((p) => p.name === 'Pro') ||
+                           INITIAL_SAAS_PLANS[0];
+      return { printerLimit: fallbackPlan.isUnlimitedPrinters ? Number.MAX_SAFE_INTEGER : fallbackPlan.printerLimit, planName: fallbackPlan.name };
+    }
     const planName = String(result.rows[0].plan_name);
     const plan = INITIAL_SAAS_PLANS.find((item) =>
       item.name.toLowerCase() === planName.toLowerCase() ||
