@@ -26,23 +26,71 @@ import {
   PaymentStatus,
   Role
 } from '../types';
-import {
-  INITIAL_ADMIN_RAZORPAY_SETTINGS,
-  INITIAL_PLATFORM_POLICIES,
-  INITIAL_SAAS_PLANS,
-  INITIAL_SUBSCRIPTIONS,
-  INITIAL_SHOPS,
-  INITIAL_PRINTERS,
-  INITIAL_AGENTS,
-  INITIAL_USERS,
-  INITIAL_PRINT_JOBS,
-  INITIAL_TRANSACTIONS,
-  INITIAL_PRICING_RULES,
-  INITIAL_AUDIT_LOGS,
-  INITIAL_SUPPORT_TICKETS,
-  SUPPORT_ADMIN_USERS,
-  INITIAL_SUPPORT_SETTINGS
-} from '../data/mockData';
+const DEFAULT_ADMIN_RAZORPAY_SETTINGS: AdminRazorpaySettings = {
+  keyId: '',
+  keySecret: '',
+  isTestMode: false,
+  enabled: false,
+  currency: 'INR',
+  platformFeePercent: 2.5
+};
+
+const DEFAULT_PLATFORM_POLICIES: PlatformPolicies = {
+  defaultFileRetentionHours: 168,
+  maxAllowedUploadSizeMb: 50,
+  globalRateLimitPerMin: 60,
+  trialDurationDays: 14,
+  trialPerShopEligibility: true,
+  failedPaymentGracePeriodDays: 3,
+  warningThresholdPercent: 80,
+  criticalThresholdPercent: 95,
+  overagePolicy: 'BLOCK_PRINTS',
+  cancellationPolicy: 'END_OF_CYCLE'
+};
+
+const DEFAULT_SUPPORT_SETTINGS: SupportSettings = {
+  autoAssignEnabled: false,
+  defaultAssigneeId: 'usr_admin',
+  emailNotifications: true,
+  slaPolicies: {
+    CRITICAL: { responseHours: 1, resolveHours: 4 },
+    HIGH: { responseHours: 2, resolveHours: 8 },
+    NORMAL: { responseHours: 4, resolveHours: 24 },
+    LOW: { responseHours: 8, resolveHours: 48 }
+  },
+  businessHoursOnly: false,
+  supportEmail: 'support@printflow.in',
+  escalationEmail: 'support@printflow.in'
+};
+
+const SUPPORT_ADMIN_USERS = [
+  { id: 'usr_admin', name: 'Platform Super Admin', email: 'admin@printflow.io', role: 'ADMIN' as const }
+];
+
+const EMPTY_SHOP: Shop = {
+  id: '',
+  name: 'No Shop Registered',
+  slug: '',
+  ownerId: '',
+  ownerName: '',
+  ownerEmail: '',
+  ownerPhone: '',
+  status: 'PENDING',
+  planId: '',
+  planName: '',
+  address: '',
+  city: '',
+  businessHours: '',
+  minimumOrder: 0,
+  primaryColor: '#2563EB',
+  createdAt: '',
+  razorpaySettings: {
+    enabled: false,
+    isTestMode: true,
+    keyId: '',
+    keySecret: ''
+  }
+};
 import {
   hashPassword,
   verifyPassword,
@@ -85,8 +133,8 @@ interface AppContextType {
     password: string;
     planId?: string;
   }) => Promise<{ success: boolean; message?: string }> | { success: boolean; message?: string };
-  login: (email: string, password: string) => { success: boolean; message?: string };
-  adminLogin: (email: string, password: string) => { success: boolean; message?: string };
+  login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
+  adminLogin: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
   forgotPassword: (email: string, newPassword?: string) => { success: boolean; message?: string };
   logout: () => void;
   switchRole: (role: Role) => void;
@@ -316,7 +364,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   // Registered Users list kept strictly IN-MEMORY (zero credential exposure to localStorage)
-  const [users, setUsers] = useState<UserProfile[]>(INITIAL_USERS);
+  const [users, setUsers] = useState<UserProfile[]>([]);
 
   // Current authenticated user (null by default; authenticates upon login or registration)
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
@@ -339,42 +387,67 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       .catch(() => {});
   }, []);
 
+  // Public shops loader: fetch live shops from Supabase for public directory and customers
+  useEffect(() => {
+    fetch(apiUrl('/api/public/shops'))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.success && Array.isArray(data.shops)) {
+          const newShops: Shop[] = data.shops.map((s: any) => ({
+            id: s.id,
+            name: s.name,
+            slug: s.slug,
+            tagline: s.tagline || '',
+            address: s.address || '',
+            phone: s.phone || '',
+            email: s.email || '',
+            status: s.status || 'ACTIVE',
+            isOpen: s.isOpen !== false,
+            businessHours: s.businessHours || '9:00 AM - 9:00 PM',
+            logoUrl: s.logoUrl || '',
+            primaryColor: s.primaryColor || '#2563EB',
+            minimumOrder: s.minOrderAmount || 2.00,
+            autoAccept: s.autoAccept !== false,
+            planId: s.currentPlanId || 'plan_free',
+            planName: 'Counter Plan',
+            ownerId: s.ownerId || '',
+            ownerName: s.name || 'Counter Owner',
+            ownerEmail: s.email || '',
+            ownerPhone: s.phone || '',
+            createdAt: s.createdAt || new Date().toISOString()
+          }));
+          setShops(newShops);
+          if (newShops.length > 0) {
+            setActiveShopIdState((prev) => prev || newShops[0].id);
+          }
+        }
+      })
+      .catch((err) => {
+        console.warn('[store] Public shop directory fetch notice:', err);
+      });
+  }, []);
+
+  // Public SaaS plans loader: fetch live plans from Supabase PostgreSQL
+  useEffect(() => {
+    fetch(apiUrl('/api/public/plans'))
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (data?.success && Array.isArray(data.plans) && data.plans.length > 0) {
+          setPlans(data.plans);
+        }
+      })
+      .catch((err) => {
+        console.warn('[store] Public plans fetch notice:', err);
+      });
+  }, []);
+
   const isAuthenticated = currentUser !== null;
 
   // Shops
-  const [shops, setShops] = useState<Shop[]>(() => {
-    const loaded = getStoredItem<Shop[]>('shops', INITIAL_SHOPS);
-    const cleaned = loaded.filter((s) => s.id !== 'shop_shree_ganesh');
-    const list = cleaned.length > 0 ? cleaned : INITIAL_SHOPS;
-    return list;
-  });
+  const [shops, setShops] = useState<Shop[]>([]);
+  const [activeShopId, setActiveShopIdState] = useState<string>('');
 
-  const [activeShopId, setActiveShopIdState] = useState<string>(() => {
-    const stored = getStoredItem<string>('active_shop_id', '');
-    if (stored === 'shop_shree_ganesh' || !stored) {
-      return INITIAL_SHOPS[0]?.id || '';
-    }
-    return stored;
-  });
-
-  const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || INITIAL_SHOPS[0] || {
-    id: 'shop_default',
-    name: 'Counter Print Shop',
-    slug: 'counter-print-shop',
-    ownerId: 'usr_default',
-    ownerName: 'Counter Owner',
-    ownerEmail: 'counter@printflow.io',
-    ownerPhone: '9999999999',
-    status: 'ACTIVE' as const,
-    planId: 'plan_free',
-    planName: 'Free Starter',
-    address: 'Counter 1',
-    city: 'City',
-    businessHours: '9:00 AM - 9:00 PM',
-    minimumOrder: 5,
-    primaryColor: '#2563EB',
-    createdAt: new Date().toISOString()
-  };
+  const activeShop = shops.find((s) => s.id === activeShopId) || shops[0] || EMPTY_SHOP;
 
   const setActiveShopId = (id: string) => {
     setActiveShopIdState(id);
@@ -382,9 +455,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Pricing Rules
-  const [pricingRules, setPricingRules] = useState<PricingRule[]>(() =>
-    getStoredItem('pricing_rules', INITIAL_PRICING_RULES)
-  );
+  const [pricingRules, setPricingRules] = useState<PricingRule[]>([]);
 
   // Authentication: Register Shop
   const registerShop = async (data: {
@@ -405,7 +476,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Determine chosen SaaS Plan (defaults to Free Starter or selected plan)
-    const selectedPlan = plans.find((p) => p.id === data.planId) || plans[0] || INITIAL_SAAS_PLANS[0];
+    const selectedPlan = plans.find((p) => p.id === data.planId) || plans[0] || null;
 
     // Server registration is authoritative: persist to Neon PostgreSQL
     let serverShop: Shop;
@@ -423,7 +494,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           phone: data.phone.trim(),
           city: data.city.trim(),
           password: data.password,
-          planId: selectedPlan?.id || 'plan_starter'
+          planId: selectedPlan?.id || data.planId || 'plan_starter'
         })
       });
 
@@ -470,72 +541,83 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Authentication: Shop Owner Login
-  const login = (email: string, password: string) => {
+  const login = async (email: string, password: string): Promise<{ success: boolean; message?: string }> => {
     const trimmedEmail = email.trim().toLowerCase();
-    let user = users.find(
-      (u) =>
-        (u.email.toLowerCase() === trimmedEmail ||
-          shops.some((s) => s.id === u.shopId && s.ownerEmail.toLowerCase() === trimmedEmail)) &&
-        verifyPassword(password, u.password || '')
-    );
-
-    if (!user) {
-      return { success: false, message: 'Invalid email or password. Please verify your credentials.' };
-    }
-
-    setCurrentUser(user);
-    if (user.shopId) {
-      setActiveShopId(user.shopId);
-    }
-
-    // Establish HttpOnly server cookie session asynchronously
     try {
-      fetch(apiUrl('/api/auth/login'), {
+      const response = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ email: trimmedEmail, password })
-      }).catch(() => {});
-    } catch (e) {}
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        return { success: false, message: data.error || 'Invalid email or password. Please verify your credentials.' };
+      }
 
-    showToast('Signed In Successfully', `Welcome back, ${user.fullName}!`, 'success', 3000);
+      const serverUser: UserProfile = {
+        id: data.user.id,
+        email: data.user.email,
+        fullName: data.user.fullName,
+        role: data.user.role,
+        shopId: data.user.shopId,
+        createdAt: new Date().toISOString()
+      };
 
-    if (user.role === 'ADMIN') {
-      navigate('/admin/dashboard');
-    } else {
-      navigate('/shop/dashboard');
+      setCurrentUser(serverUser);
+      if (serverUser.shopId) {
+        setActiveShopId(serverUser.shopId);
+      }
+
+      showToast('Signed In Successfully', `Welcome back, ${serverUser.fullName}!`, 'success', 3000);
+
+      if (serverUser.role === 'ADMIN') {
+        navigate('/admin/dashboard');
+      } else {
+        navigate('/shop/dashboard');
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, message: 'Could not connect to authentication service. Please check your connection.' };
     }
-
-    return { success: true };
   };
 
   // Authentication: Admin Dedicated Login (/admin/login)
-  const adminLogin = (email: string, password: string) => {
+  const adminLogin = async (email: string, password: string): Promise<{ success: boolean; message?: string }> => {
     const trimmedEmail = email.trim().toLowerCase();
-    const adminUser = users.find(
-      (u) =>
-        u.role === 'ADMIN' &&
-        u.email.toLowerCase() === trimmedEmail &&
-        verifyPassword(password, u.password || '')
-    );
-
-    if (!adminUser) {
-      return { success: false, message: 'Invalid administrator credentials. Access restricted.' };
-    }
-
-    setCurrentUser(adminUser);
-
-    // Establish HttpOnly server cookie session asynchronously
     try {
-      fetch(apiUrl('/api/auth/login'), {
+      const response = await fetch(apiUrl('/api/auth/login'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
         body: JSON.stringify({ email: trimmedEmail, password })
-      }).catch(() => {});
-    } catch (e) {}
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        return { success: false, message: data.error || 'Invalid administrator credentials. Access restricted.' };
+      }
 
-    showToast('Admin Access Granted', `Logged in as Platform Super Admin`, 'success', 3000);
-    navigate('/admin/dashboard');
-    return { success: true };
+      if (data.user.role !== 'ADMIN') {
+        return { success: false, message: 'Access denied. Account does not have administrator privileges.' };
+      }
+
+      const adminUser: UserProfile = {
+        id: data.user.id,
+        email: data.user.email,
+        fullName: data.user.fullName,
+        role: 'ADMIN',
+        shopId: data.user.shopId,
+        createdAt: new Date().toISOString()
+      };
+
+      setCurrentUser(adminUser);
+      showToast('Admin Access Granted', `Logged in as Platform Super Admin`, 'success', 3000);
+      navigate('/admin/dashboard');
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, message: 'Could not connect to authentication service. Please check your connection.' };
+    }
   };
 
   // Authentication: Forgot Password Reset
@@ -641,16 +723,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     navigate('/');
   };
 
-  // Switch role convenience for instant testing/evaluation
+  // Role navigation helper
   const switchRole = (role: Role) => {
     if (role === 'ADMIN') {
-      const admin = users.find((u) => u.role === 'ADMIN') || INITIAL_USERS[0];
-      setCurrentUser(admin);
       navigate('/admin/dashboard');
     } else {
-      const owner = users.find((u) => u.role === 'SHOP_OWNER') || INITIAL_USERS[1];
-      setCurrentUser(owner);
-      if (owner.shopId) setActiveShopId(owner.shopId);
       navigate('/shop/dashboard');
     }
   };
@@ -688,15 +765,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Razorpay Settings
-  const [adminRazorpay, setAdminRazorpay] = useState<AdminRazorpaySettings>(() => {
-    const loaded = getStoredItem<AdminRazorpaySettings>('admin_razorpay', INITIAL_ADMIN_RAZORPAY_SETTINGS);
-    return {
-      ...loaded,
-      keySecret: '', // Never retain plaintext secret in state/storage
-      isTestMode: loaded.isTestMode ?? false,
-      enabled: loaded.enabled ?? true
-    };
-  });
+  const [adminRazorpay, setAdminRazorpay] = useState<AdminRazorpaySettings>(() => ({
+    ...DEFAULT_ADMIN_RAZORPAY_SETTINGS,
+    keySecret: ''
+  }));
 
   // Synchronize payment configuration with authoritative server state on load
   useEffect(() => {
@@ -799,13 +871,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Plans & SaaS
-  const [plans, setPlans] = useState<SaasPlan[]>(() => getStoredItem('saas_plans', INITIAL_SAAS_PLANS));
-  const [subscriptions, setSubscriptions] = useState<Subscription[]>(() =>
-    getStoredItem('saas_subscriptions', INITIAL_SUBSCRIPTIONS)
-  );
-  const [platformPolicies, setPlatformPolicies] = useState<PlatformPolicies>(() =>
-    getStoredItem('platform_policies', INITIAL_PLATFORM_POLICIES)
-  );
+  const [plans, setPlans] = useState<SaasPlan[]>([]);
+  const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
+  const [platformPolicies, setPlatformPolicies] = useState<PlatformPolicies>(DEFAULT_PLATFORM_POLICIES);
 
   const createPlan = (planData: Omit<SaasPlan, 'id' | 'createdAt' | 'updatedAt'>): SaasPlan => {
     const now = new Date().toISOString();
@@ -1142,13 +1210,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Printers
-  const [printers, setPrinters] = useState<PrinterDevice[]>(() => {
-    const loaded = getStoredItem<PrinterDevice[]>('printers', INITIAL_PRINTERS);
-    if (!loaded || loaded.length === 0) {
-      return INITIAL_PRINTERS;
-    }
-    return loaded;
-  });
+  const [printers, setPrinters] = useState<PrinterDevice[]>([]);
 
   const updatePrinter = (printerId: string, updates: Partial<PrinterDevice>) => {
     const targetPrinter = printers.find((p) => p.id === printerId);
@@ -1176,7 +1238,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     const targetShop = shops.find((s) => s.id === printerData.shopId) || activeShop;
-    const currentPlan = plans.find((p) => p.id === targetShop?.planId) || plans[0] || INITIAL_SAAS_PLANS[0];
+    const currentPlan = plans.find((p) => p.id === targetShop?.planId) || plans[0] || { id: 'plan_starter', name: 'Starter', printerLimit: 2 };
     const shopPrinters = printers.filter((p) => p.shopId === printerData.shopId);
     const maxAllowed = currentPlan.printerLimit ?? 1;
 
@@ -1225,26 +1287,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Agents
-  const [agents, setAgents] = useState<ElectronAgent[]>(() => {
-    const loaded = getStoredItem<ElectronAgent[]>('agents', INITIAL_AGENTS);
-    const sanitized = (loaded?.length ? loaded : INITIAL_AGENTS).map(
-      (agent) => {
-        const defaultTok = getDeterministicAgentToken(agent.shopId);
-        const token = agent.authToken || agent.apiToken || defaultTok;
-        return {
-          ...agent,
-          authToken: token,
-          apiToken: token,
-          status: 'OFFLINE' as const,
-          lastSeen: 'Not connected',
-          connectedPrintersCount: agent.connectedPrintersCount || 0,
-          printerCount: agent.printerCount || 0
-        };
-      }
-    );
-    setStoredItem('agents', sanitized);
-    return sanitized;
-  });
+  const [agents, setAgents] = useState<ElectronAgent[]>([]);
 
   const regenerateAgentToken = async (agentId: string) => {
     try {
@@ -1254,9 +1297,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         credentials: 'same-origin',
         headers: {
           'Content-Type': 'application/json',
-          'x-user-role': currentUser?.role || 'SHOP_OWNER',
-          'x-shop-id': activeShop.id,
-          ...(currentUser?.role === 'ADMIN' ? { Authorization: 'Bearer admin_token_active' } : {})
+          'x-shop-id': activeShop.id
         },
         body: JSON.stringify({
           agentId,
@@ -1846,7 +1887,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Support Settings & Tickets
   const [supportSettings, setSupportSettings] = useState<SupportSettings>(() =>
-    getStoredItem('support_settings', INITIAL_SUPPORT_SETTINGS)
+    getStoredItem('support_settings', DEFAULT_SUPPORT_SETTINGS)
   );
 
   const updateSupportSettings = (updates: Partial<SupportSettings>) => {
@@ -1861,7 +1902,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const [supportTickets, setSupportTickets] = useState<SupportTicket[]>(() => {
     const stored = getStoredItem<SupportTicket[]>('support_tickets', []);
-    return stored && stored.length > 0 ? stored : INITIAL_SUPPORT_TICKETS;
+    return stored && stored.length > 0 ? stored : [];
   });
 
   const createSupportTicket = (

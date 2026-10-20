@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '../../lib/store';
-import { PaperSize, FilePrintConfig, PrintJob, PagesPerSheet } from '../../types/index';
+import { PaperSize, FilePrintConfig, PrintJob, PagesPerSheet, Shop, PricingRule } from '../../types/index';
 import { resolveUnitPrice } from '../../lib/utils/pricing';
 import {
   Upload,
@@ -72,17 +72,72 @@ const fileToBase64 = async (file: File): Promise<string> => {
 export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }) => {
   const { shops, pricingRules, createPrintJob, updateShopRazorpay, navigate, showToast } = useApp();
 
-  const shop = shops.find((s) => s.slug === shopSlug) || shops[0];
+  const [remoteShop, setRemoteShop] = useState<Shop | null>(null);
+  const [remotePricingRules, setRemotePricingRules] = useState<PricingRule[] | null>(null);
+  const [isLoadingPublicShop, setIsLoadingPublicShop] = useState<boolean>(false);
+  const [publicShopError, setPublicShopError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPublicShopData() {
+      if (!shopSlug) return;
+      setIsLoadingPublicShop(true);
+      setPublicShopError(null);
+      try {
+        const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(shopSlug)}`));
+        const data = await res.json();
+        if (!res.ok || !data.success || !data.shop) {
+          throw new Error(data.error || 'Shop not found in database.');
+        }
+        if (cancelled) return;
+        const fetchedShop = data.shop as Shop;
+        setRemoteShop(fetchedShop);
+
+        // Fetch pricing rules for this shop directly from Neon
+        const rulesRes = await fetch(apiUrl(`/api/shops/${encodeURIComponent(fetchedShop.id)}/pricing`));
+        const rulesData = await rulesRes.json();
+        if (rulesRes.ok && rulesData.success && Array.isArray(rulesData.rules)) {
+          if (!cancelled) {
+            setRemotePricingRules(rulesData.rules.map((r: any) => ({
+              id: r.id,
+              shopId: fetchedShop.id,
+              paperSize: r.paperSize,
+              color: r.colorMode,
+              sides: r.sides,
+              pricePerPage: r.pricePerPageMinor / 100,
+              currency: 'INR',
+              isActive: r.isActive
+            })));
+          }
+        }
+      } catch (err: any) {
+        if (!cancelled) {
+          console.warn('[CustomerPrintFlow] Public shop lookup notice:', err?.message);
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingPublicShop(false);
+        }
+      }
+    }
+    loadPublicShopData();
+    return () => { cancelled = true; };
+  }, [shopSlug]);
+
+  const shop = remoteShop || shops.find((s) => s.slug === shopSlug) || shops[0];
+  const effectivePricingRules = remotePricingRules || pricingRules;
 
   // Dynamically derive active paper sizes configured for this shop
   const activeShopSizes = React.useMemo(() => {
-    const shopActiveRules = pricingRules.filter((r) => r.shopId === shop.id && (r.isActive ?? true));
+    const shopActiveRules = effectivePricingRules.filter(
+      (r) => (r.shopId === shop.id || (remoteShop && r.shopId === remoteShop.id)) && (r.isActive ?? true)
+    );
     const sizeSet = new Set<string>();
     shopActiveRules.forEach((r) => sizeSet.add(r.paperSize));
     // Always ensure A4 is in the list
     sizeSet.add('A4');
     return Array.from(sizeSet);
-  }, [pricingRules, shop.id]);
+  }, [effectivePricingRules, shop.id, remoteShop]);
 
   // 3-step state: 1. Upload, 2. Review, 3. Pay, 4. Tracking
   const [currentStep, setCurrentStep] = useState<number>(1);
@@ -209,7 +264,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   };
 
   const calculateUnitPrice = (size: PaperSize, color: 'BW' | 'COLOR', sides: 'SINGLE' | 'DOUBLE') => {
-    return resolveUnitPrice(pricingRules, shop.id, size, color, sides);
+    return resolveUnitPrice(effectivePricingRules, shop.id, size, color, sides);
   };
 
   const countPages = (config: Partial<FilePrintConfig>) => {

@@ -36,7 +36,6 @@ import {
   validateSsrfUrl,
   safeSsrfFetch
 } from './src/lib/security';
-import { INITIAL_USERS } from './src/data/mockData';
 import {
   initializePaymentTables,
   issuePrintAgentToken,
@@ -64,7 +63,8 @@ import {
   saveShopPaymentIntegration,
   deleteShopPaymentIntegration,
   getPersistedUsers,
-  persistNewShopAndUser
+  persistNewShopAndUser,
+  requirePostgresPool
 } from './src/db/paymentStorage';
 import {
   maskKeyId,
@@ -224,14 +224,6 @@ const handleHealthCheck = async (_req: Request, res: Response) => {
 app.get('/health', handleHealthCheck);
 app.get('/api/health', handleHealthCheck);
 
-// Server user store initialized with initial users (passwords verified safely)
-const serverUsers = new Map<string, any>();
-INITIAL_USERS.forEach((u) => {
-  serverUsers.set(u.email.toLowerCase(), {
-    ...u,
-    password: u.password.startsWith('$pbkdf2-') ? u.password : hashPassword(u.password)
-  });
-});
 
 // ============================================================================
 // 2. RATE LIMITING & BRUTE FORCE PROTECTION (TOKEN BUCKET / SLIDING WINDOW)
@@ -339,32 +331,19 @@ function authenticateUserSession(req: Request, _res: Response, next: NextFunctio
   // 2. Try Bearer JWT Access Token (API & Mobile / Automation Flow)
   if (!verifiedUser && authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.slice(7).trim();
-    if (token === 'admin_token_active') {
+    const jwtResult = verifyJwtAccessToken(token, JWT_SECRET);
+    if (jwtResult.valid && jwtResult.payload) {
       verifiedUser = {
-        sessionId: 'synthetic_admin',
-        userId: 'usr_admin',
-        email: 'admin@printflow.io',
-        role: 'ADMIN',
-        fullName: 'Platform Super Admin',
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 86400000,
+        sessionId: jwtResult.payload.jti,
+        userId: jwtResult.payload.sub,
+        email: jwtResult.payload.email || '',
+        role: jwtResult.payload.role as any,
+        shopId: jwtResult.payload.shopId,
+        fullName: 'Authenticated User',
+        createdAt: jwtResult.payload.iat * 1000,
+        expiresAt: jwtResult.payload.exp * 1000,
         lastActiveAt: Date.now()
       };
-    } else {
-      const jwtResult = verifyJwtAccessToken(token, JWT_SECRET);
-      if (jwtResult.valid && jwtResult.payload) {
-        verifiedUser = {
-          sessionId: jwtResult.payload.jti,
-          userId: jwtResult.payload.sub,
-          email: jwtResult.payload.email || '',
-          role: jwtResult.payload.role as any,
-          shopId: jwtResult.payload.shopId,
-          fullName: 'Authenticated User',
-          createdAt: jwtResult.payload.iat * 1000,
-          expiresAt: jwtResult.payload.exp * 1000,
-          lastActiveAt: Date.now()
-        };
-      }
     }
   }
 
@@ -376,47 +355,12 @@ app.use(authenticateUserSession);
 
 /**
  * Enforces Platform Super Admin role on the server.
- * Supports HttpOnly session cookies, Admin Bearer tokens, and secure preview sessions.
+ * Requires authenticated HttpOnly session cookie or valid verified JWT.
  */
 function requireAdminRole(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).authenticatedUser as ServerSession | undefined;
 
   if (user && user.role === 'ADMIN') {
-    return next();
-  }
-
-  const authHeader = req.headers.authorization;
-  const adminHeader = req.headers['x-admin-token'] || req.headers['x-user-role'];
-  if (
-    authHeader === 'Bearer admin_token_active' ||
-    adminHeader === 'ADMIN' ||
-    adminHeader === 'admin_token_active'
-  ) {
-    (req as any).authenticatedUser = {
-      sessionId: 'admin_bearer_session',
-      userId: 'usr_admin',
-      email: 'admin@printflow.io',
-      role: 'ADMIN',
-      fullName: 'Platform Super Admin',
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 86400000,
-      lastActiveAt: Date.now()
-    };
-    return next();
-  }
-
-  // Development & preview support for dashboard actions
-  if (process.env.NODE_ENV !== 'production') {
-    (req as any).authenticatedUser = {
-      sessionId: 'dev_admin_session',
-      userId: 'usr_admin',
-      email: 'admin@printflow.io',
-      role: 'ADMIN',
-      fullName: 'Platform Super Admin',
-      createdAt: Date.now(),
-      expiresAt: Date.now() + 86400000,
-      lastActiveAt: Date.now()
-    };
     return next();
   }
 
@@ -433,33 +377,6 @@ function requireShopOwnerRole(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).authenticatedUser as ServerSession | undefined;
 
   if (user && (user.role === 'SHOP_OWNER' || user.role === 'ADMIN')) {
-    return next();
-  }
-
-  const authHeader = req.headers.authorization;
-  const roleHeader = req.headers['x-user-role'];
-  if (
-    authHeader === 'Bearer admin_token_active' ||
-    roleHeader === 'SHOP_OWNER' ||
-    roleHeader === 'ADMIN'
-  ) {
-    if (!user) {
-      (req as any).authenticatedUser = {
-        sessionId: 'header_session',
-        userId: 'usr_header',
-        email: 'user@printflow.io',
-        role: roleHeader === 'ADMIN' || authHeader === 'Bearer admin_token_active' ? 'ADMIN' : 'SHOP_OWNER',
-        shopId: (req.headers['x-shop-id'] as string) || undefined,
-        fullName: 'Authenticated User',
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 86400000,
-        lastActiveAt: Date.now()
-      };
-    }
-    return next();
-  }
-
-  if (process.env.NODE_ENV !== 'production') {
     return next();
   }
 
@@ -524,11 +441,9 @@ async function resolveAppStateScope(req: Request, res: Response): Promise<{
   canonicalShopId: string;
 } | null> {
   const user = (req as any).authenticatedUser as ServerSession | undefined;
-  const role = user?.role ||
-    (req.headers.authorization === 'Bearer admin_token_active' ? 'ADMIN' : (req.headers['x-user-role'] === 'ADMIN' ? 'ADMIN' : req.headers['x-user-role'] === 'SHOP_OWNER' ? 'SHOP_OWNER' : undefined)) ||
-    (process.env.NODE_ENV !== 'production' ? req.headers['x-user-role'] as string : undefined);
+  const role = user?.role;
   if (role !== 'ADMIN' && role !== 'SHOP_OWNER') {
-    res.status(401).json({ success: false, error: 'Sign in to sync PrintFlow data with Neon.' });
+    res.status(401).json({ success: false, error: 'Sign in to access PrintFlow data.' });
     return null;
   }
   if (role === 'ADMIN') {
@@ -569,6 +484,29 @@ app.get('/api/app-data', requireShopOwnerRole, async (req: Request, res: Respons
         records[key] = sanitizeAppStateValue(stored[key], context.legacyShopId, context.canonicalShopId);
       }
     }
+
+    // Enrich with live relational Neon data when available
+    if (isNeonDatabaseConfigured() && context.canonicalShopId) {
+      try {
+        const repo = getBusinessRepository();
+        const activeDbRules = await repo.getActivePricingRules(context.canonicalShopId);
+        if (activeDbRules.length > 0) {
+          records.pricing_rules = activeDbRules.map((r) => ({
+            id: r.id,
+            shopId: context.legacyShopId || context.canonicalShopId,
+            paperSize: r.paperSize,
+            color: r.colorMode,
+            sides: r.sides,
+            pricePerPage: r.pricePerPageMinor / 100,
+            currency: 'INR',
+            isActive: r.isActive
+          }));
+        }
+      } catch (enrichErr) {
+        // Fall back to state_data if relational query has non-fatal issue
+      }
+    }
+
     return res.json({
       success: true,
       records,
@@ -609,6 +547,72 @@ app.put('/api/app-data/:key', requireShopOwnerRole, async (req: Request, res: Re
       return res.status(413).json({ success: false, error: 'This data update is empty or exceeds the 2 MB limit.' });
     }
     await savePrintFlowAppState(context.scopeId, key, value);
+
+    // Relational table synchronization to guarantee Neon PostgreSQL is authoritative
+    if (isNeonDatabaseConfigured()) {
+      try {
+        const pool = requirePostgresPool();
+        const effectiveShopUuid = await resolvePrintFlowShopId(context.canonicalShopId || context.scopeId);
+
+        if (key === 'pricing_rules' && Array.isArray(value)) {
+          const VALID_PAPER_SIZES = new Set(['A4', 'A3', 'A5', 'Letter', 'Legal']);
+          for (const item of value) {
+            if (!item || typeof item !== 'object') continue;
+            const r = item as Record<string, unknown>;
+            const pSize = String(r.paperSize || 'A4');
+            if (!VALID_PAPER_SIZES.has(pSize)) continue;
+            const cMode = String(r.color || r.colorMode || 'BW');
+            const sides = String(r.sides || 'SINGLE');
+            const price = Number(r.pricePerPage || (Number(r.pricePerPageMinor) / 100) || 2.0);
+            const isActive = r.isActive !== false;
+
+            await pool.query(`
+              INSERT INTO public.pricing_rules (shop_id, paper_size, color_mode, sides, price_per_page, is_active, updated_at)
+              VALUES ($1, $2, $3, $4, $5, $6, NOW())
+              ON CONFLICT (shop_id, paper_size, color_mode, sides)
+              DO UPDATE SET price_per_page = EXCLUDED.price_per_page, is_active = EXCLUDED.is_active, updated_at = NOW()
+            `, [effectiveShopUuid, pSize, cMode, sides, price, isActive]);
+          }
+        } else if (key === 'shops' && Array.isArray(value) && value.length > 0) {
+          const shopObj = value[0] as Record<string, unknown>;
+          if (shopObj && typeof shopObj === 'object') {
+            await pool.query(`
+              UPDATE public.shops SET
+                name = COALESCE($2, name),
+                address = COALESCE($3, address),
+                phone = COALESCE($4, phone),
+                email = COALESCE($5, email),
+                is_open = COALESCE($6, is_open),
+                business_hours = COALESCE($7, business_hours),
+                logo_url = COALESCE($8, logo_url),
+                primary_color = COALESCE($9, primary_color),
+                min_order_amount = COALESCE($10, min_order_amount),
+                auto_accept = COALESCE($11, auto_accept),
+                updated_at = NOW()
+              WHERE id = $1
+            `, [
+              effectiveShopUuid,
+              shopObj.name as string || null,
+              shopObj.address as string || null,
+              shopObj.ownerPhone as string || shopObj.phone as string || null,
+              shopObj.ownerEmail as string || shopObj.email as string || null,
+              shopObj.isOpen !== undefined ? Boolean(shopObj.isOpen) : null,
+              shopObj.businessHours as string || null,
+              shopObj.logoUrl as string || null,
+              shopObj.primaryColor as string || null,
+              shopObj.minimumOrder !== undefined ? Number(shopObj.minimumOrder) : null,
+              shopObj.autoAccept !== undefined ? Boolean(shopObj.autoAccept) : null
+            ]);
+          }
+        }
+      } catch (syncErr) {
+        logger.warn('Non-fatal error while syncing app-data to relational Neon tables', {
+          key,
+          error: deepRedact(syncErr)
+        });
+      }
+    }
+
     return res.json({ success: true, key, updatedAt: new Date().toISOString() });
   } catch (error) {
     logger.error('Neon app state write failed', { scopeId: context.scopeId, key, error: deepRedact(error) });
@@ -620,7 +624,7 @@ app.put('/api/app-data/:key', requireShopOwnerRole, async (req: Request, res: Re
 // 4.1. BROWSER AUTHENTICATION & SECURE HTTPONLY COOKIE SESSION APIS
 // ============================================================================
 
-// POST /api/auth/register: Registers new shop & user, saves to Neon DB, issues secure HttpOnly cookie
+// POST /api/auth/register: Registers new shop & user, saves to Supabase DB, issues secure HttpOnly cookie
 app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: Response) => {
   const { shopName, ownerName, email, phone, city, password, planId } = req.body || {};
   if (!shopName || !ownerName || !email || !password) {
@@ -628,11 +632,14 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
   }
 
   const cleanEmail = String(email).trim().toLowerCase();
-  if (serverUsers.has(cleanEmail)) {
-    return res.status(400).json({ success: false, error: 'An account with this email is already registered. Please sign in.' });
-  }
 
   try {
+    const pool = requirePostgresPool();
+    const existing = await pool.query('SELECT id FROM public.printflow_users WHERE LOWER(email) = $1 LIMIT 1', [cleanEmail]);
+    if (existing.rowCount && existing.rowCount > 0) {
+      return res.status(400).json({ success: false, error: 'An account with this email is already registered. Please sign in.' });
+    }
+
     let baseSlug = String(shopName)
       .toLowerCase()
       .trim()
@@ -696,8 +703,6 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
       shop: newShop
     });
 
-    serverUsers.set(cleanEmail, newUser);
-
     const { signedCookie, session, cookieOptions } = createSecureSession({
       id: newUser.id,
       email: newUser.email,
@@ -726,14 +731,32 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
 });
 
 // POST /api/auth/login: Issues HttpOnly cookie and returns profile without credentials
-app.post('/api/auth/login', createRateLimiter(10), (req: Request, res: Response) => {
+app.post('/api/auth/login', createRateLimiter(10), async (req: Request, res: Response) => {
   const { email, password } = req.body;
   if (!email || !password) {
     return res.status(400).json({ success: false, error: 'Email and password are required' });
   }
 
   const cleanEmail = String(email).trim().toLowerCase();
-  const user = serverUsers.get(cleanEmail);
+  let user: any = null;
+
+  try {
+    const pool = requirePostgresPool();
+    const dbUserRes = await pool.query(
+      `SELECT id, email, password_hash AS password, full_name AS "fullName",
+              phone, role, shop_id AS "shopId"
+       FROM public.printflow_users
+       WHERE LOWER(email) = $1
+       LIMIT 1`,
+      [cleanEmail]
+    );
+    if (dbUserRes.rowCount === 1) {
+      user = dbUserRes.rows[0];
+    }
+  } catch (dbErr) {
+    logger.error('Failed to query user from database during login', { email: cleanEmail, error: deepRedact(dbErr) });
+    return res.status(503).json({ success: false, error: 'Database service is temporarily unavailable.' });
+  }
 
   if (!user || !verifyPassword(String(password), user.password)) {
     return res.status(401).json({ success: false, error: 'Invalid email or password' });
@@ -759,6 +782,43 @@ app.post('/api/auth/login', createRateLimiter(10), (req: Request, res: Response)
       fullName: session.fullName
     }
   });
+});
+
+// GET /api/public/plans: Public catalog of active SaaS plans from Supabase PostgreSQL
+app.get('/api/public/plans', async (_req: Request, res: Response) => {
+  try {
+    const pool = requirePostgresPool();
+    const result = await pool.query(`
+      SELECT id, name, tagline, price_monthly::float as "priceMonthly",
+             price_yearly::float as "priceYearly", print_limit as "printLimit",
+             printer_limit as "printerLimit", storage_limit_gb as "storageLimitGb",
+             features, is_active as "isActive", is_popular as "isPopular"
+      FROM public.plans
+      WHERE is_active = true
+      ORDER BY price_monthly ASC
+    `);
+    const formattedPlans = result.rows.map((row: any) => ({
+      id: row.id,
+      name: row.name,
+      tagline: row.tagline || '',
+      priceMonthly: Number(row.priceMonthly),
+      priceYearly: Number(row.priceYearly),
+      printLimit: Number(row.printLimit),
+      printerLimit: Number(row.printerLimit),
+      storageLimitGb: Number(row.storageLimitGb),
+      features: Array.isArray(row.features) ? row.features : (typeof row.features === 'string' ? JSON.parse(row.features) : []),
+      isActive: Boolean(row.isActive),
+      isPopular: Boolean(row.isPopular),
+      status: 'ACTIVE' as const,
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    }));
+    return res.json({ success: true, plans: formattedPlans });
+  } catch (err) {
+    logger.error('Failed to query public plans', { error: deepRedact(err) });
+    return res.status(503).json({ success: false, error: 'Database service is temporarily unavailable.' });
+  }
 });
 
 // GET /api/auth/session: Inspects HttpOnly cookie and validates session
@@ -3015,6 +3075,7 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
     if (isSharedPoolConfigured()) {
       try {
         const pool = requireSharedPool();
+        const effectiveShopUuid = await resolvePrintFlowShopId(shopId);
         await pool.query(
           `INSERT INTO public.print_jobs
              (order_code, tracking_token, shop_id, customer_name, customer_phone, files,
@@ -3024,7 +3085,7 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
           [
             id,
             job.trackingToken,
-            shopId,
+            effectiveShopUuid,
             job.customerName,
             job.customerPhone,
             JSON.stringify(job.files),
@@ -3032,8 +3093,12 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
             paymentId
           ]
         );
-      } catch {
-        // Non-critical mirror write
+      } catch (mirrorErr) {
+        logger.warn('Failed to mirror print job to public.print_jobs in Neon', {
+          jobId: id,
+          shopId,
+          error: deepRedact(mirrorErr)
+        });
       }
     }
     const created = storedJob.id === id;
@@ -3721,14 +3786,15 @@ app.get('/api/shops', requireAdminRole, requireNeonPool, async (req: Request, re
 app.get('/api/shops/:shopId', requireShopOwnerRole, requireNeonPool, async (req: Request, res: Response) => {
   try {
     const { shopId } = req.params;
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
     // Enforce tenant isolation: shop owners can only read their own shop
-    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId) {
+    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId && user.shopId !== effectiveShopId) {
       return res.status(403).json({ success: false, error: 'You cannot read another shop record.' });
     }
 
-    const shop = await getBusinessRepository().findShopById(shopId);
+    const shop = await getBusinessRepository().findShopById(effectiveShopId);
     if (!shop) return res.status(404).json({ success: false, error: 'Shop not found.' });
 
     // Strip Razorpay credentials — never expose those through this route
@@ -3737,6 +3803,35 @@ app.get('/api/shops/:shopId', requireShopOwnerRole, requireNeonPool, async (req:
   } catch (error) {
     logger.error('Failed to get shop from Neon', { shopId: req.params.shopId, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Shop data is temporarily unavailable.' });
+  }
+});
+
+/**
+ * GET /api/public/shops
+ * Public-facing active shops directory for customer portal.
+ */
+app.get('/api/public/shops', requireNeonPool, async (req: Request, res: Response) => {
+  try {
+    const shops = await getBusinessRepository().listAllShops('ACTIVE');
+    return res.json({
+      success: true,
+      shops: shops.map((s) => ({
+        id: s.id,
+        slug: s.slug,
+        name: s.name,
+        tagline: s.tagline,
+        isOpen: s.isOpen,
+        businessHours: s.businessHours,
+        primaryColor: s.primaryColor,
+        logoUrl: s.logoUrl,
+        minOrderAmount: s.minOrderAmount,
+        autoAccept: s.autoAccept
+      })),
+      total: shops.length
+    });
+  } catch (error) {
+    logger.error('Failed to list public shops from Neon', { error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Shop directory is temporarily unavailable.' });
   }
 });
 
@@ -3780,13 +3875,14 @@ app.get('/api/public/shops/:slug', requireNeonPool, async (req: Request, res: Re
 app.patch('/api/shops/:shopId/status', requireAdminRole, requireNeonPool, async (req: Request, res: Response) => {
   try {
     const { shopId } = req.params;
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
     const { status } = req.body;
     if (!['ACTIVE', 'SUSPENDED'].includes(status)) {
       return res.status(400).json({ success: false, error: 'status must be ACTIVE or SUSPENDED.' });
     }
-    await getBusinessRepository().updateShopStatus(shopId, status);
-    logger.info('Shop status updated', { shopId, status });
-    return res.json({ success: true, shopId, status, updatedAt: new Date().toISOString() });
+    await getBusinessRepository().updateShopStatus(effectiveShopId, status);
+    logger.info('Shop status updated', { shopId: effectiveShopId, status });
+    return res.json({ success: true, shopId: effectiveShopId, status, updatedAt: new Date().toISOString() });
   } catch (error) {
     logger.error('Failed to update shop status', { shopId: req.params.shopId, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Could not update shop status.' });
@@ -3800,15 +3896,16 @@ app.patch('/api/shops/:shopId/status', requireAdminRole, requireNeonPool, async 
 app.patch('/api/shops/:shopId/open', requireShopOwnerRole, requireNeonPool, async (req: Request, res: Response) => {
   try {
     const { shopId } = req.params;
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
-    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId) {
+    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId && user.shopId !== effectiveShopId) {
       return res.status(403).json({ success: false, error: 'You cannot modify another shop.' });
     }
 
     const isOpen = Boolean(req.body?.isOpen);
-    await getBusinessRepository().updateShopIsOpen(shopId, isOpen);
-    return res.json({ success: true, shopId, isOpen, updatedAt: new Date().toISOString() });
+    await getBusinessRepository().updateShopIsOpen(effectiveShopId, isOpen);
+    return res.json({ success: true, shopId: effectiveShopId, isOpen, updatedAt: new Date().toISOString() });
   } catch (error) {
     logger.error('Failed to update shop isOpen', { shopId: req.params.shopId, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Could not update shop status.' });
@@ -3825,12 +3922,12 @@ app.patch('/api/shops/:shopId/open', requireShopOwnerRole, requireNeonPool, asyn
 app.get('/api/shops/:shopId/pricing', requireNeonPool, async (req: Request, res: Response) => {
   try {
     const { shopId } = req.params;
-    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
 
     // Public endpoint for customer-facing price preview — no auth required for reads.
     // Reject cross-shop writes elsewhere; reads are informational.
-    const rules = await getBusinessRepository().getActivePricingRules(shopId);
-    return res.json({ success: true, shopId, rules, total: rules.length });
+    const rules = await getBusinessRepository().getActivePricingRules(effectiveShopId);
+    return res.json({ success: true, shopId: effectiveShopId, rules, total: rules.length });
   } catch (error) {
     logger.error('Failed to get pricing rules from Neon', { shopId: req.params.shopId, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Pricing data is temporarily unavailable.' });
@@ -3845,15 +3942,16 @@ app.get('/api/shops/:shopId/pricing', requireNeonPool, async (req: Request, res:
 app.put('/api/shops/:shopId/pricing', requireShopOwnerRole, requireNeonPool, async (req: Request, res: Response) => {
   try {
     const { shopId } = req.params;
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
-    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId) {
+    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId && user.shopId !== effectiveShopId) {
       return res.status(403).json({ success: false, error: 'You cannot modify pricing for another shop.' });
     }
 
     const { paperSize, colorMode, sides, pricePerPageMinor } = req.body;
     const rule = await getBusinessRepository().upsertPricingRule({
-      shopId,
+      shopId: effectiveShopId,
       paperSize,
       colorMode,
       sides,
@@ -3876,14 +3974,15 @@ app.put('/api/shops/:shopId/pricing', requireShopOwnerRole, requireNeonPool, asy
 app.delete('/api/shops/:shopId/pricing/:ruleId', requireShopOwnerRole, requireNeonPool, async (req: Request, res: Response) => {
   try {
     const { shopId, ruleId } = req.params;
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
-    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId) {
+    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId && user.shopId !== effectiveShopId) {
       return res.status(403).json({ success: false, error: 'You cannot modify pricing for another shop.' });
     }
 
-    await getBusinessRepository().softDeletePricingRule(ruleId, shopId);
-    return res.json({ success: true, ruleId, shopId, deletedAt: new Date().toISOString() });
+    await getBusinessRepository().softDeletePricingRule(ruleId, effectiveShopId);
+    return res.json({ success: true, ruleId, shopId: effectiveShopId, deletedAt: new Date().toISOString() });
   } catch (error) {
     logger.error('Failed to soft-delete pricing rule', { error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Could not delete pricing rule.' });
@@ -3900,16 +3999,17 @@ app.delete('/api/shops/:shopId/pricing/:ruleId', requireShopOwnerRole, requireNe
 app.get('/api/shops/:shopId/print-jobs', requireShopOwnerRole, requireNeonPool, async (req: Request, res: Response) => {
   try {
     const { shopId } = req.params;
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
-    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId) {
+    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId && user.shopId !== effectiveShopId) {
       return res.status(403).json({ success: false, error: 'You cannot view print jobs for another shop.' });
     }
 
     const limit = Math.min(Math.max(1, parseInt(req.query.limit as string, 10) || 50), 200);
     const offset = Math.max(0, parseInt(req.query.offset as string, 10) || 0);
 
-    const jobs = await getBusinessRepository().listPrintJobsByShop(shopId, { limit, offset });
+    const jobs = await getBusinessRepository().listPrintJobsByShop(effectiveShopId, { limit, offset });
     return res.json({ success: true, shopId, jobs, total: jobs.length, limit, offset });
   } catch (error) {
     logger.error('Failed to list print jobs from Neon', { shopId: req.params.shopId, error: deepRedact(error) });
@@ -4405,13 +4505,7 @@ app.all('/api/payment/confirm-upi', handleDeprecatedUpi);
 async function startServer() {
   try {
     await initializePaymentTables();
-    const persisted = await getPersistedUsers();
-    persisted.forEach((u) => {
-      serverUsers.set(u.email.toLowerCase(), u);
-    });
-    if (persisted.length > 0) {
-      logger.info(`[Server] Loaded ${persisted.length} registered users from Neon database.`);
-    }
+    logger.info('[Server] Supabase PostgreSQL database tables initialized.');
   } catch (err) {
     console.warn('[Server] Initial database table check deferred (non-fatal):', err);
   }

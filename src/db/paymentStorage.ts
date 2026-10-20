@@ -4,7 +4,6 @@ import crypto from 'crypto';
 import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import { encryptSecret, decryptSecret, maskKeyId } from '../lib/crypto/credentialCrypto';
-import { INITIAL_SAAS_PLANS, INITIAL_SHOPS } from '../data/mockData';
 
 dotenv.config();
 
@@ -280,43 +279,118 @@ export async function initializePaymentTables(): Promise<void> {
         END $$;
       `);
 
-      const defaultTok = 'agt_tok_royal_cyber_counter_master_2026';
-      await client.query(`
-        INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
-        VALUES ('agent_rcx_1', 'shop_royal_cyber', 'ROYAL-CYBE-PC01', $1, false, 'OFFLINE', NULL, NOW())
-        ON CONFLICT (agent_id) DO NOTHING
-      `, [hashAgentToken(defaultTok)]);
-
-      const legacyShopId = process.env.PRINTFLOW_LEGACY_SHOP_ID;
-      const neonShopId = process.env.PRINTFLOW_NEON_SHOP_ID;
-      if (legacyShopId && neonShopId) {
-        try {
-          const tableCheck = await client.query(
-            "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'shops'"
-          );
-          if (tableCheck.rowCount && tableCheck.rowCount > 0) {
-            const targetShop = await client.query('SELECT id FROM shops WHERE id::text = $1 OR slug = $2', [neonShopId, neonShopId.replace(/^shp_/, '').replace(/^shop_/, '').replace(/_/g, '-')]);
-            if (targetShop.rowCount === 1) {
-              await client.query(
-                `INSERT INTO printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
-                 VALUES ($1, $2, NOW())
-                 ON CONFLICT (client_shop_id)
-                 DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id, updated_at = NOW()`,
-                [legacyShopId, neonShopId]
-              );
-            }
-          }
-        } catch (mapErr) {
-          console.warn('[PaymentStorage] Optional shop mapping skipped:', mapErr);
-        }
-      }
-      console.log('[PaymentStorage] PostgreSQL payment and PrintFlow Agent tables verified successfully.');
+      console.log('[PaymentStorage] Supabase PostgreSQL payment and PrintFlow Agent tables verified successfully.');
     } finally {
       client.release();
     }
 
   } catch (err) {
     console.warn('[PaymentStorage] Could not run database migrations on Neon pool (non-fatal):', err);
+  }
+}
+
+export async function syncNeonRelationalTables(clientOrPool?: { query: Function }): Promise<void> {
+  const executor = clientOrPool || requirePostgresPool();
+  try {
+    const tableCheck = await executor.query(
+      "SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'pricing_rules'"
+    );
+    if (!tableCheck.rowCount) return;
+
+    const stateRes = await executor.query(`
+      SELECT scope_id, state_data, payload 
+      FROM public.printflow_app_state 
+      WHERE data_key = 'shops'
+    `);
+
+    const VALID_PAPER_SIZES = new Set(['A4', 'A3', 'A5', 'Letter', 'Legal']);
+
+    for (const row of stateRes.rows) {
+      const scopeId = row.scope_id;
+      const data = row.state_data || row.payload;
+      const shops = Array.isArray(data) ? data : [];
+      if (shops.length === 0) continue;
+      const shop = shops[0];
+      const slug = shop.slug || scopeId.replace(/^shop_/, '').replace(/_/g, '-');
+
+      const mapRes = await executor.query(
+        'SELECT neon_shop_id FROM public.printflow_shop_mappings WHERE client_shop_id = $1',
+        [scopeId]
+      );
+      let neonId = mapRes.rows[0]?.neon_shop_id;
+
+      if (!neonId) {
+        const slugRes = await executor.query(
+          'SELECT id FROM public.shops WHERE slug = $1',
+          [slug]
+        );
+        if (slugRes.rows.length > 0) {
+          neonId = slugRes.rows[0].id;
+        } else {
+          const insertShop = await executor.query(`
+            INSERT INTO public.shops (
+              name, slug, tagline, address, phone, email, status, is_open,
+              business_hours, logo_url, primary_color, min_order_amount, auto_accept,
+              file_retention_days, razorpay_enabled, razorpay_test_mode, created_at, updated_at
+            ) VALUES (
+              $1, $2, $3, $4, $5, $6, 'ACTIVE', $7,
+              $8, $9, $10, $11, $12,
+              7, true, false, NOW(), NOW()
+            )
+            ON CONFLICT (slug) DO UPDATE SET
+              name = EXCLUDED.name,
+              updated_at = NOW()
+            RETURNING id
+          `, [
+            shop.name || 'Counter Shop',
+            slug,
+            shop.tagline || '',
+            shop.address || 'Local Counter',
+            shop.ownerPhone || shop.phone || '9876543210',
+            shop.ownerEmail || shop.email || 'shop@printflow.in',
+            shop.isOpen !== false,
+            shop.businessHours || '9:00 AM - 9:00 PM',
+            shop.logoUrl || null,
+            shop.primaryColor || '#2563EB',
+            shop.minimumOrder || 2.00,
+            shop.autoAccept !== false
+          ]);
+          neonId = insertShop.rows[0].id;
+        }
+
+        await executor.query(`
+          INSERT INTO public.printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
+          VALUES ($1, $2, NOW())
+          ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id
+        `, [scopeId, neonId]);
+      }
+
+      // Sync pricing rules
+      const rulesStateRes = await executor.query(`
+        SELECT COALESCE(state_data, payload) AS data FROM public.printflow_app_state 
+        WHERE scope_id = $1 AND data_key = 'pricing_rules'
+      `, [scopeId]);
+
+      const stateRules = rulesStateRes.rows[0]?.data || [];
+      const rulesToInsert = Array.isArray(stateRules) ? stateRules : [];
+
+      for (const r of rulesToInsert) {
+        const colorMode = r.color || r.colorMode || 'BW';
+        const sides = r.sides || 'SINGLE';
+        const paperSize = r.paperSize || 'A4';
+        if (!VALID_PAPER_SIZES.has(paperSize)) continue;
+        const price = Number(r.pricePerPage || (r.pricePerPageMinor ? r.pricePerPageMinor / 100 : 2.0));
+
+        await executor.query(`
+          INSERT INTO public.pricing_rules (shop_id, paper_size, color_mode, sides, price_per_page, is_active, updated_at)
+          VALUES ($1, $2, $3, $4, $5, true, NOW())
+          ON CONFLICT (shop_id, paper_size, color_mode, sides)
+          DO UPDATE SET price_per_page = EXCLUDED.price_per_page, is_active = true, updated_at = NOW()
+        `, [neonId, paperSize, colorMode, sides, price]);
+      }
+    }
+  } catch (err) {
+    console.warn('[PaymentStorage] Warning during relational table synchronization:', err);
   }
 }
 
@@ -549,18 +623,42 @@ export async function resolvePrintFlowShopId(shopId: string): Promise<string> {
       return String(result.rows[0].neon_shop_id);
     }
 
+    const normalizedSlug = cleanId.replace(/^shp_/, '').replace(/^shop_/, '').replace(/_/g, '-');
     const slugRes = await pool.query(
-      `SELECT id::text FROM public.shops WHERE slug = $1 LIMIT 1`,
-      [cleanId]
+      `SELECT id::text FROM public.shops WHERE slug = $1 OR slug = $2 OR slug LIKE $3 LIMIT 1`,
+      [cleanId, normalizedSlug, `%${normalizedSlug}%`]
     );
     if (slugRes.rowCount && slugRes.rows[0].id) {
       const foundId = String(slugRes.rows[0].id);
       await pool.query(
         `INSERT INTO printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
-         VALUES ($1, $2, NOW()) ON CONFLICT (client_shop_id) DO NOTHING`,
+         VALUES ($1, $2, NOW()) ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id`,
         [cleanId, foundId]
       ).catch(() => {});
       return foundId;
+    }
+
+    // Check if shop was registered in printflow_app_state
+    const appStateRes = await pool.query(
+      `SELECT COALESCE(state_data, payload) AS data FROM public.printflow_app_state WHERE scope_id = $1 AND data_key = 'shops'`,
+      [cleanId]
+    );
+    if (appStateRes.rowCount && Array.isArray(appStateRes.rows[0].data) && appStateRes.rows[0].data.length > 0) {
+      const shopObj = appStateRes.rows[0].data[0];
+      const targetSlug = shopObj.slug || normalizedSlug;
+      const findRes = await pool.query(
+        `SELECT id::text FROM public.shops WHERE slug = $1 LIMIT 1`,
+        [targetSlug]
+      );
+      if (findRes.rowCount && findRes.rows[0].id) {
+        const foundId = String(findRes.rows[0].id);
+        await pool.query(
+          `INSERT INTO printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
+           VALUES ($1, $2, NOW()) ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id`,
+          [cleanId, foundId]
+        ).catch(() => {});
+        return foundId;
+      }
     }
 
     const defaultRes = await pool.query(
@@ -773,20 +871,25 @@ export async function getShopPrinterEntitlements(shopId: string): Promise<{ prin
       [canonicalShopId, normalizedSlug]
     );
     if (result.rowCount !== 1) {
-      const mockShop = INITIAL_SHOPS.find((item) => item.id === shopId || item.id === canonicalShopId);
-      const fallbackPlan = INITIAL_SAAS_PLANS.find((item) => item.id === mockShop?.planId) ||
-                           INITIAL_SAAS_PLANS.find((p) => p.name === 'Pro') ||
-                           INITIAL_SAAS_PLANS[0];
-      return { printerLimit: fallbackPlan.isUnlimitedPrinters ? Number.MAX_SAFE_INTEGER : fallbackPlan.printerLimit, planName: fallbackPlan.name };
+      const defaultPlanRes = await pgPool.query(
+        `SELECT name, printer_limit FROM public.plans WHERE is_active = true ORDER BY price_monthly ASC LIMIT 1`
+      );
+      if (defaultPlanRes.rowCount === 1) {
+        const row = defaultPlanRes.rows[0];
+        return { printerLimit: Number(row.printer_limit), planName: String(row.name) };
+      }
+      throw new Error(`Shop "${shopId}" does not have an active subscription or default plan in Neon.`);
     }
     const planName = String(result.rows[0].plan_name);
-    const plan = INITIAL_SAAS_PLANS.find((item) =>
-      item.name.toLowerCase() === planName.toLowerCase() ||
-      item.id.toLowerCase() === planName.toLowerCase() ||
-      item.id.replace(/^plan_/, '').toLowerCase() === planName.toLowerCase()
+    const planRes = await pgPool.query(
+      `SELECT name, printer_limit FROM public.plans WHERE LOWER(name) = LOWER($1) LIMIT 1`,
+      [planName]
     );
-    if (!plan) throw new Error(`Printer limit is not configured for the Neon subscription plan "${planName}".`);
-    return { printerLimit: plan.isUnlimitedPrinters ? Number.MAX_SAFE_INTEGER : plan.printerLimit, planName: plan.name };
+    if (planRes.rowCount === 1) {
+      const row = planRes.rows[0];
+      return { printerLimit: Number(row.printer_limit), planName: String(row.name) };
+    }
+    throw new Error(`Printer limit is not configured in Neon for subscription plan "${planName}".`);
   }
 
   throw new Error('DATABASE_URL is required to verify shop printer plan limits in Neon.');
@@ -1161,7 +1264,7 @@ export async function persistNewShopAndUser(input: PersistShopUserInput): Promis
       const shopUuid = isUuid.test(shop.id) ? shop.id : crypto.randomUUID();
       const userUuid = isUuid.test(user.id) ? user.id : crypto.randomUUID();
 
-      await client.query(`
+      const shopInsertRes = await client.query(`
         INSERT INTO public.shops (
           id, name, slug, address, phone, email, status, is_open, business_hours,
           min_order_amount, auto_accept, file_retention_days, razorpay_enabled,
@@ -1169,22 +1272,58 @@ export async function persistNewShopAndUser(input: PersistShopUserInput): Promis
         ) VALUES (
           $1, $2, $3, $4, $5, $6, 'ACTIVE', true, '9:00 AM - 9:00 PM',
           5.00, true, 7, true, false, NOW(), NOW()
-        ) ON CONFLICT (id) DO NOTHING
+        )
+        ON CONFLICT (slug) DO UPDATE SET
+          name = EXCLUDED.name,
+          address = EXCLUDED.address,
+          phone = EXCLUDED.phone,
+          email = EXCLUDED.email,
+          updated_at = NOW()
+        RETURNING id::text
       `, [shopUuid, shop.name, shop.slug, shop.address || 'Counter Shop', user.phone || '9876543210', user.email]);
+
+      const effectiveShopUuid = shopInsertRes.rows[0]?.id || shopUuid;
 
       await client.query(`
         INSERT INTO public.profiles (id, email, full_name, phone, role, created_at, updated_at)
         VALUES ($1, $2, $3, $4, 'SHOP_OWNER', NOW(), NOW())
-        ON CONFLICT (id) DO NOTHING
+        ON CONFLICT (email) DO UPDATE SET
+          full_name = EXCLUDED.full_name,
+          phone = EXCLUDED.phone,
+          updated_at = NOW()
       `, [userUuid, user.email.toLowerCase(), user.fullName, user.phone || '']);
 
       await client.query(`
         INSERT INTO public.printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
         VALUES ($1, $2, NOW())
         ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id
-      `, [shop.id, shopUuid]);
+      `, [shop.id, effectiveShopUuid]);
+
+      // 5. Also insert pricing rules into public.pricing_rules
+      const VALID_PAPER_SIZES = new Set(['A4', 'A3', 'A5', 'Letter', 'Legal']);
+      for (const rule of (defaultRules as any[])) {
+        const pSize = rule.paperSize || 'A4';
+        if (!VALID_PAPER_SIZES.has(pSize)) continue;
+        const cMode = rule.color || (rule as any).colorMode || 'BW';
+        const sides = rule.sides || 'SINGLE';
+        const price = Number(rule.pricePerPage || 2.0);
+
+        await client.query(`
+          INSERT INTO public.pricing_rules (shop_id, paper_size, color_mode, sides, price_per_page, is_active, updated_at)
+          VALUES ($1, $2, $3, $4, $5, true, NOW())
+          ON CONFLICT (shop_id, paper_size, color_mode, sides)
+          DO UPDATE SET price_per_page = EXCLUDED.price_per_page, is_active = true, updated_at = NOW()
+        `, [effectiveShopUuid, pSize, cMode, sides, price]);
+      }
+
+      // 6. Ensure default subscription exists in public.subscriptions
+      await client.query(`
+        INSERT INTO public.subscriptions (shop_id, plan_id, status, billing_period, current_period_start, current_period_end, amount_paid, auto_renew, created_at)
+        VALUES ($1, (SELECT id FROM public.plans WHERE name = 'Free' LIMIT 1), 'ACTIVE', 'MONTHLY', NOW(), NOW() + INTERVAL '30 days', 0, true, NOW())
+        ON CONFLICT DO NOTHING
+      `, [effectiveShopUuid]);
     } catch (tableErr) {
-      // Optional tables skipped safely
+      console.warn('[PaymentStorage] Warning while registering shop in relational tables:', tableErr);
     }
 
     await client.query('COMMIT');

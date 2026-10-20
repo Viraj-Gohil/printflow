@@ -45,7 +45,7 @@ export const AdminLogin: React.FC = () => {
   const emailError = touched.email ? validateEmail(email).error : undefined;
   const passwordError = touched.password ? (!password.trim() ? 'Password is required.' : undefined) : undefined;
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setTouched({ email: true, password: true });
@@ -61,13 +61,16 @@ export const AdminLogin: React.FC = () => {
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      const res = adminLogin(email, password);
+    try {
+      const res = await adminLogin(email, password);
       setIsSubmitting(false);
       if (!res.success) {
         setError(res.message || 'Invalid administrator credentials.');
       }
-    }, 400);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      setError(err?.message || 'Login failed. Please try again.');
+    }
   };
 
   return (

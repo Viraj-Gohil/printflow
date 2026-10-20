@@ -144,13 +144,18 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) =
     }
 
     setIsSubmitting(true);
-    setTimeout(() => {
-      const res = login(loginEmail, loginPassword);
-      setIsSubmitting(false);
-      if (!res.success) {
-        setErrorMessage(res.message || 'Invalid email or password.');
+    setTimeout(async () => {
+      try {
+        const res = await login(loginEmail, loginPassword);
+        setIsSubmitting(false);
+        if (!res.success) {
+          setErrorMessage(res.message || 'Invalid email or password.');
+        }
+      } catch (err: any) {
+        setIsSubmitting(false);
+        setErrorMessage(err?.message || 'Login failed.');
       }
-    }, 400);
+    }, 100);
   };
 
   // Handle Register Submission

@@ -60,7 +60,16 @@ export const AdminShops: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
-              {filteredShops.map((shop) => (
+              {filteredShops.length === 0 ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-500">
+                    <Store className="w-10 h-10 mx-auto text-slate-300 mb-2" />
+                    <p className="text-sm font-semibold text-slate-700">No shops added yet</p>
+                    <p className="text-xs text-slate-400 mt-1">New xerox counters and print shops will appear here once registered.</p>
+                  </td>
+                </tr>
+              ) : (
+                filteredShops.map((shop) => (
                 <tr key={shop.id} className="hover:bg-slate-50/50">
                   <td className="py-3.5 px-4">
                     <span className="font-bold text-slate-900 block">{shop.name}</span>
@@ -120,7 +129,7 @@ export const AdminShops: React.FC = () => {
                     </div>
                   </td>
                 </tr>
-              ))}
+              )))}
             </tbody>
           </table>
         </div>
