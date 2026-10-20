@@ -133,7 +133,7 @@ interface AppContextType {
     password: string;
     planId?: string;
   }) => Promise<{ success: boolean; message?: string }> | { success: boolean; message?: string };
-  login: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
+  login: (email: string, password: string) => Promise<{ success: boolean; message?: string; user?: UserProfile }>;
   adminLogin: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
   forgotPassword: (email: string, newPassword?: string) => { success: boolean; message?: string };
   logout: () => void;
@@ -548,7 +548,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   // Authentication: Shop Owner Login
-  const login = async (email: string, password: string): Promise<{ success: boolean; message?: string }> => {
+  const login = async (email: string, password: string): Promise<{ success: boolean; message?: string; user?: UserProfile }> => {
     const trimmedEmail = email.trim().toLowerCase();
     try {
       const response = await fetch(apiUrl('/api/auth/login'), {
@@ -578,6 +578,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createdAt: new Date().toISOString()
       };
 
+      console.log('[Supabase Auth Debug] Server authentication response payload:', data);
+
       setCurrentUser(serverUser);
       if (serverUser.shopId) {
         setActiveShopId(serverUser.shopId);
@@ -591,7 +593,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         navigate('/shop/dashboard');
       }
 
-      return { success: true };
+      return { success: true, user: serverUser };
     } catch (err: any) {
       return { success: false, message: 'Could not connect to authentication service. Please check your connection.' };
     }

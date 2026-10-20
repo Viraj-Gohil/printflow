@@ -146,12 +146,25 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) =
     setIsSubmitting(true);
     setTimeout(async () => {
       try {
+        console.log('[AuthPages Debug] Submitting Supabase login request for email:', loginEmail.trim().toLowerCase());
         const res = await login(loginEmail, loginPassword);
+        console.log('[AuthPages Debug] Received Supabase authentication response:', res);
+
         setIsSubmitting(false);
+
         if (!res.success) {
+          console.warn('[AuthPages Debug] Supabase authentication failed:', res.message);
           setErrorMessage(res.message || 'Invalid email or password.');
+        } else {
+          console.log('[AuthPages Debug] Supabase authentication succeeded! Verifying user session...');
+          if (res.user || currentUser) {
+            console.log('[AuthPages Debug] Verified user session. Navigating to dashboard...');
+          } else {
+            console.log('[AuthPages Debug] Session verified. Routing to dashboard...');
+          }
         }
       } catch (err: any) {
+        console.error('[AuthPages Debug] Supabase authentication exception:', err);
         setIsSubmitting(false);
         setErrorMessage(err?.message || 'Login failed.');
       }
