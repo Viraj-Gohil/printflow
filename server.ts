@@ -836,8 +836,14 @@ app.post('/api/auth/login', createRateLimiter(10), async (req: Request, res: Res
     logger.warn('Failed to query user from database during login', { email: cleanEmail, error: deepRedact(dbErr) });
   }
 
-  if (!user || !verifyPassword(String(password), user.password)) {
-    return res.status(401).json({ success: false, error: 'Invalid email or password' });
+  if (!user) {
+    logger.warn('Login failed: user not found', { email: cleanEmail });
+    return res.status(401).json({ success: false, error: 'Invalid email or password. Please verify your email or register a new shop.' });
+  }
+
+  if (!verifyPassword(String(password), user.password)) {
+    logger.warn('Login failed: invalid password', { email: cleanEmail });
+    return res.status(401).json({ success: false, error: 'Invalid email or password. Please check your password or use forgot password.' });
   }
 
   const { signedCookie, session, cookieOptions } = createSecureSession({
@@ -2896,18 +2902,33 @@ app.post('/api/auth/password-reset/request', createRateLimiter(5), (req: Request
 });
 
 // Password Reset Confirmation
-app.post('/api/auth/password-reset/confirm', createRateLimiter(10), (req: Request, res: Response) => {
+app.post('/api/auth/password-reset/confirm', createRateLimiter(10), async (req: Request, res: Response) => {
   const { token, newPassword } = req.body;
   if (!token || !newPassword || newPassword.length < 6) {
     return res.status(400).json({ success: false, error: 'Valid token and minimum 6 character password required' });
   }
 
   const result = consumePasswordResetToken(token);
-  if (!result.valid) {
+  if (!result.valid || !result.email) {
     return res.status(400).json({ success: false, error: result.error || 'Password reset token invalid or expired' });
   }
 
   const hashedPassword = hashPassword(newPassword);
+
+  if (isNeonDatabaseConfigured()) {
+    try {
+      const pool = requirePostgresPool();
+      await pool.query(
+        `UPDATE public.printflow_users
+         SET password_hash = $1, updated_at = NOW()
+         WHERE LOWER(email) = $2`,
+        [hashedPassword, result.email.toLowerCase()]
+      );
+    } catch (err) {
+      logger.error('Failed to update reset password in Supabase DB:', { email: result.email, error: deepRedact(err) });
+    }
+  }
+
   return res.json({
     success: true,
     message: 'Password reset successful. You can now login with your new credentials.',

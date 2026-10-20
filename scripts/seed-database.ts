@@ -152,6 +152,7 @@ export async function seedDatabase(targetPool: Pool = pool) {
       INSERT INTO public.printflow_users (id, email, password_hash, full_name, phone, role, shop_id, created_at, updated_at)
       VALUES ('usr_admin', 'admin@printflow.io', $1, 'Platform Super Admin', '9876543200', 'ADMIN', 'platform_admin', NOW(), NOW())
       ON CONFLICT (email) DO UPDATE SET
+        password_hash = EXCLUDED.password_hash,
         role = 'ADMIN',
         shop_id = 'platform_admin',
         updated_at = NOW()
