@@ -498,7 +498,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         })
       });
 
-      const resData = await response.json();
+      const responseText = await response.text();
+      let resData: any = {};
+      try {
+        resData = JSON.parse(responseText);
+      } catch {
+        return { success: false, message: response.ok ? 'Unexpected response format from server.' : `Server returned error (${response.status}). Please try again.` };
+      }
+
       if (!response.ok || !resData.success) {
         return { success: false, message: resData.error || 'Registration failed. Database is currently unavailable.' };
       }
@@ -550,7 +557,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         credentials: 'same-origin',
         body: JSON.stringify({ email: trimmedEmail, password })
       });
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        return { success: false, message: response.ok ? 'Unexpected response format from server.' : `Server returned error (${response.status}). Please try again.` };
+      }
+
       if (!response.ok || !data.success) {
         return { success: false, message: data.error || 'Invalid email or password. Please verify your credentials.' };
       }
@@ -593,7 +607,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         credentials: 'same-origin',
         body: JSON.stringify({ email: trimmedEmail, password })
       });
-      const data = await response.json();
+      const responseText = await response.text();
+      let data: any = {};
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        return { success: false, message: response.ok ? 'Unexpected response format from server.' : `Server returned error (${response.status}). Access restricted.` };
+      }
       if (!response.ok || !data.success) {
         return { success: false, message: data.error || 'Invalid administrator credentials. Access restricted.' };
       }
@@ -1422,59 +1442,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             'x-shop-id': activeShop.id
           }
         });
-        const data = (await response.json()) as {
-          success?: boolean;
-          error?: string;
-          printers?: Array<{
-            agentId: string;
-            deviceName: string;
-            printer: {
-              name: string;
-              displayName?: string;
-              driverName?: string;
-              status: 'READY' | 'PRINTING' | 'OFFLINE' | 'BUSY' | 'ERROR';
-              isOnline: boolean;
-              isDefault: boolean;
-              capabilities: {
-                paperSizes: PrinterDevice['capabilities']['paperSizes'];
-                supportsColor: boolean | null;
-                supportsDuplex: boolean | null;
-              };
-            };
-          }>;
-          jobs?: Array<{
-            id: string;
-            orderCode: string;
-            trackingToken: string;
-            shopId: string;
-            customerName: string;
-            customerPhone?: string;
-            files: Array<{
-              id: string;
-              fileName: string;
-              pageCount: number;
-              copies: number;
-              colorMode: 'BW' | 'COLOR';
-              paperSize: 'A4' | 'A3' | 'A5' | 'Letter' | 'Legal';
-              duplex: boolean;
-              pagesToPrint?: string;
-            }>;
-            totalAmount: number;
-            paymentStatus: 'SUCCESS';
-            printStatus: 'QUEUED' | 'ASSIGNED' | 'DOWNLOADING' | 'PRINTING' | 'COMPLETED' | 'FAILED' | 'REQUIRES_ATTENTION';
-            printerName?: string;
-            createdAt: string;
-            updatedAt: string;
-            errorMessage?: string;
-            pagesPrinted?: number;
-          }>;
-        };
+        const responseText = await response.text();
+        let data: any = {};
+        try {
+          data = JSON.parse(responseText);
+        } catch {
+          if (!cancelled) console.warn(`Shop live sync received invalid non-JSON response from server (HTTP ${response.status}).`);
+          return;
+        }
+
         if (!response.ok || !data.success) {
-          throw new Error(data.error || `Shop live sync failed (HTTP ${response.status}).`);
+          if (!cancelled) console.warn(data.error || `Shop live sync returned status ${response.status}.`);
+          return;
         }
         if (cancelled) return;
 
-        const syncedPrinters: PrinterDevice[] = (data.printers || []).map(({ agentId, printer }) => ({
+        const syncedPrinters: PrinterDevice[] = (data.printers || []).map(({ agentId, printer }: any) => ({
           id: `agent:${agentId}:${printer.name}`,
           shopId: activeShop.id,
           agentManaged: true,
@@ -1514,7 +1497,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return next;
         });
 
-        const backendJobs = (data.jobs || []).map((job): PrintJob => {
+        const backendJobs = (data.jobs || []).map((job: any): PrintJob => {
           return {
             id: job.id,
             orderCode: job.orderCode,
@@ -1523,7 +1506,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             shopName: activeShop.name,
             customerName: job.customerName,
             customerPhone: job.customerPhone,
-            files: job.files.map((file) => ({
+            files: (job.files || []).map((file: any) => ({
               id: file.id,
               fileName: file.fileName,
               fileSize: 0,
@@ -1552,13 +1535,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           };
         });
         setPrintJobs((previous) => {
-          const updates = new Map(backendJobs.map((job) => [job.id, job]));
+          const updates = new Map(backendJobs.map((job: PrintJob) => [job.id, job]));
           const next = previous.map((job) => {
             const update = updates.get(job.id);
             return update ? { ...job, ...update, files: job.files } : job;
           });
           const existingIds = new Set(previous.map((job) => job.id));
-          next.push(...backendJobs.filter((job) => !existingIds.has(job.id)));
+          next.push(...backendJobs.filter((job: PrintJob) => !existingIds.has(job.id)));
           if (JSON.stringify(previous) === JSON.stringify(next)) return previous;
           setStoredItem('print_jobs', next);
           return next;
@@ -2288,7 +2271,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           headers: requestHeaders,
           body: JSON.stringify({ value: cloudSafeValue(value) })
         });
-        const result = await response.json() as { success?: boolean; error?: string };
+        const text = await response.text();
+        let result: { success?: boolean; error?: string } = {};
+        try {
+          result = JSON.parse(text);
+        } catch {
+          result = { success: false, error: `Invalid response format from server (HTTP ${response.status}).` };
+        }
         if (!response.ok || !result.success) {
           throw new Error(result.error || `Could not sync ${key} to Neon (HTTP ${response.status}).`);
         }
@@ -2317,7 +2306,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             credentials: 'same-origin',
             headers: requestHeaders
           });
-          result = await response.json() as typeof result;
+          const text = await response.text();
+          try {
+            result = JSON.parse(text);
+          } catch {
+            result = { success: false, error: `Invalid response format from server (HTTP ${response.status}).` };
+          }
           if (response.ok || response.status !== 401) break;
           await new Promise((resolve) => window.setTimeout(resolve, 500));
         }

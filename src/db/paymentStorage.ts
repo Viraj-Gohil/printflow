@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { Pool } from 'pg';
 import { encryptSecret, decryptSecret, maskKeyId } from '../lib/crypto/credentialCrypto';
 
-dotenv.config();
+dotenv.config({ override: true });
 
 export interface ShopPaymentIntegrationRecord {
   id: string;
@@ -102,11 +102,50 @@ export interface PrintAgentJobFile {
   buffer: Buffer;
 }
 
-// PostgreSQL Connection Pool (Neon PostgreSQL when DATABASE_URL is configured)
+export function isValidDatabaseUrl(rawUrl?: string): boolean {
+  if (!rawUrl) return false;
+  const url = rawUrl.replace(/^['"]|['"]$/g, '').trim();
+  if (!url) return false;
+
+  if (
+    url.includes('@HOST/') ||
+    url.includes('@HOST:') ||
+    url.endsWith('@HOST') ||
+    url.includes('USER:PASSWORD') ||
+    url.includes('YOUR_DATABASE_URL') ||
+    url.includes('your-database-url') ||
+    url.includes('placeholder')
+  ) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (
+      !host ||
+      host === 'host' ||
+      host === 'user' ||
+      host === 'password' ||
+      host === 'dbname' ||
+      host === 'your_host' ||
+      host === 'your-host'
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // PostgreSQL Connection Pool (Neon PostgreSQL when DATABASE_URL is configured)
 let pgPool: Pool | null = null;
 const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
-const DATABASE_URL = rawDatabaseUrl ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : undefined;
+const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl!.replace(/^['"]|['"]$/g, '').trim() : undefined;
 export const isNeonDatabaseConfigured = (): boolean => pgPool !== null;
 
 if (DATABASE_URL && DATABASE_URL.length > 0) {
@@ -921,6 +960,28 @@ export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAg
 // PLATFORM ADMIN CONFIGURATION
 // ----------------------------------------------------------------------------
 
+let inMemoryPlatformConfig: {
+  keyId: string;
+  keySecret: string;
+  mode: 'test' | 'live';
+  webhookSecret?: string;
+  isActive: boolean;
+  isConfigured: boolean;
+  updatedAt: string;
+} | null = null;
+
+const inMemoryShopIntegrations = new Map<string, {
+  id: string;
+  shopId: string;
+  provider: string;
+  keyId: string;
+  keySecret: string;
+  mode: 'test' | 'live';
+  isActive: boolean;
+  isConfigured: boolean;
+  updatedAt: string;
+}>();
+
 export async function getPlatformPaymentConfig(): Promise<{
   keyId: string;
   keySecret: string;
@@ -930,26 +991,36 @@ export async function getPlatformPaymentConfig(): Promise<{
   isConfigured: boolean;
   updatedAt: string;
 } | null> {
-  const pool = requirePostgresPool();
-  const res = await pool.query(
-    `SELECT * FROM platform_payment_configs WHERE id = 'platform_master' LIMIT 1`
-  );
-  if (res.rows.length > 0) {
-    const row = res.rows[0];
+  if (isNeonDatabaseConfigured()) {
     try {
-      const secret = decryptSecret(row.encrypted_key_secret);
-      return {
-        keyId: row.key_id,
-        keySecret: secret,
-        mode: row.mode as 'test' | 'live',
-        webhookSecret: row.webhook_secret,
-        isActive: Boolean(row.is_active),
-        isConfigured: true,
-        updatedAt: new Date(row.updated_at).toISOString()
-      };
-    } catch (decryptErr) {
-      console.error('[PaymentStorage] Platform secret decryption failed:', decryptErr);
+      const pool = requirePostgresPool();
+      const res = await pool.query(
+        `SELECT * FROM platform_payment_configs WHERE id = 'platform_master' LIMIT 1`
+      );
+      if (res.rows.length > 0) {
+        const row = res.rows[0];
+        try {
+          const secret = decryptSecret(row.encrypted_key_secret);
+          return {
+            keyId: row.key_id,
+            keySecret: secret,
+            mode: row.mode as 'test' | 'live',
+            webhookSecret: row.webhook_secret,
+            isActive: Boolean(row.is_active),
+            isConfigured: true,
+            updatedAt: new Date(row.updated_at).toISOString()
+          };
+        } catch (decryptErr) {
+          console.error('[PaymentStorage] Platform secret decryption failed:', decryptErr);
+        }
+      }
+    } catch (dbErr) {
+      console.warn('[PaymentStorage] Failed to query platform_payment_configs from DB:', dbErr);
     }
+  }
+
+  if (inMemoryPlatformConfig) {
+    return inMemoryPlatformConfig;
   }
 
   // Fallback to server-side environment variables if not yet set in database
@@ -990,19 +1061,35 @@ export async function savePlatformPaymentConfig(params: {
   const now = new Date().toISOString();
   const isActive = params.isActive !== undefined ? params.isActive : true;
 
-  const pool = requirePostgresPool();
-  await pool.query(
-    `INSERT INTO platform_payment_configs (id, provider, key_id, encrypted_key_secret, mode, webhook_secret, is_active, updated_at)
-     VALUES ('platform_master', 'razorpay', $1, $2, $3, $4, $5, $6)
-     ON CONFLICT (id) DO UPDATE SET
-       key_id = EXCLUDED.key_id,
-       encrypted_key_secret = EXCLUDED.encrypted_key_secret,
-       mode = EXCLUDED.mode,
-       webhook_secret = EXCLUDED.webhook_secret,
-       is_active = EXCLUDED.is_active,
-       updated_at = EXCLUDED.updated_at`,
-    [params.keyId.trim(), encryptedSecret, params.mode, params.webhookSecret || null, isActive, now]
-  );
+  if (isNeonDatabaseConfigured()) {
+    try {
+      const pool = requirePostgresPool();
+      await pool.query(
+        `INSERT INTO platform_payment_configs (id, provider, key_id, encrypted_key_secret, mode, webhook_secret, is_active, updated_at)
+         VALUES ('platform_master', 'razorpay', $1, $2, $3, $4, $5, $6)
+         ON CONFLICT (id) DO UPDATE SET
+           key_id = EXCLUDED.key_id,
+           encrypted_key_secret = EXCLUDED.encrypted_key_secret,
+           mode = EXCLUDED.mode,
+           webhook_secret = EXCLUDED.webhook_secret,
+           is_active = EXCLUDED.is_active,
+           updated_at = EXCLUDED.updated_at`,
+        [params.keyId.trim(), encryptedSecret, params.mode, params.webhookSecret || null, isActive, now]
+      );
+    } catch (err) {
+      console.warn('[PaymentStorage] Failed to save platform payment config to DB, updating in-memory store:', err);
+    }
+  }
+
+  inMemoryPlatformConfig = {
+    keyId: params.keyId.trim(),
+    keySecret: secretToEncrypt,
+    mode: params.mode,
+    webhookSecret: params.webhookSecret,
+    isActive,
+    isConfigured: true,
+    updatedAt: now
+  };
 
   return {
     provider: 'razorpay',
@@ -1033,29 +1120,40 @@ export async function getShopPaymentIntegration(shopId: string): Promise<{
 } | null> {
   if (!shopId) return null;
 
-  const pool = requirePostgresPool();
-  const res = await pool.query(
-    `SELECT * FROM shop_payment_integrations WHERE shop_id = $1 AND is_active = true LIMIT 1`,
-    [shopId]
-  );
-  if (res.rows.length > 0) {
-    const row = res.rows[0];
+  if (isNeonDatabaseConfigured()) {
     try {
-      const secret = decryptSecret(row.encrypted_key_secret);
-      return {
-        id: row.id,
-        shopId: row.shop_id,
-        provider: row.provider,
-        keyId: row.key_id,
-        keySecret: secret,
-        mode: row.mode as 'test' | 'live',
-        isActive: Boolean(row.is_active),
-        isConfigured: true,
-        updatedAt: new Date(row.updated_at).toISOString()
-      };
-    } catch (decryptErr) {
-      console.error(`[PaymentStorage] Shop ${shopId} secret decryption failed:`, decryptErr);
+      const pool = requirePostgresPool();
+      const res = await pool.query(
+        `SELECT * FROM shop_payment_integrations WHERE shop_id = $1 AND is_active = true LIMIT 1`,
+        [shopId]
+      );
+      if (res.rows.length > 0) {
+        const row = res.rows[0];
+        try {
+          const secret = decryptSecret(row.encrypted_key_secret);
+          return {
+            id: row.id,
+            shopId: row.shop_id,
+            provider: row.provider,
+            keyId: row.key_id,
+            keySecret: secret,
+            mode: row.mode as 'test' | 'live',
+            isActive: Boolean(row.is_active),
+            isConfigured: true,
+            updatedAt: new Date(row.updated_at).toISOString()
+          };
+        } catch (decryptErr) {
+          console.error(`[PaymentStorage] Shop ${shopId} secret decryption failed:`, decryptErr);
+        }
+      }
+    } catch (err) {
+      console.warn(`[PaymentStorage] Failed to query shop_payment_integrations for shop ${shopId}:`, err);
     }
+  }
+
+  const inMem = inMemoryShopIntegrations.get(shopId);
+  if (inMem && inMem.isActive) {
+    return inMem;
   }
 
   return null;
@@ -1085,18 +1183,36 @@ export async function saveShopPaymentIntegration(params: {
   const isActive = params.isActive !== undefined ? params.isActive : true;
   const integrationId = existing?.id || `spi_${shopId}_${Date.now()}`;
 
-  const pool = requirePostgresPool();
-  await pool.query(
-    `INSERT INTO shop_payment_integrations (id, shop_id, provider, key_id, encrypted_key_secret, mode, is_active, updated_at)
-     VALUES ($1, $2, 'razorpay', $3, $4, $5, $6, $7)
-     ON CONFLICT (id) DO UPDATE SET
-       key_id = EXCLUDED.key_id,
-       encrypted_key_secret = EXCLUDED.encrypted_key_secret,
-       mode = EXCLUDED.mode,
-       is_active = EXCLUDED.is_active,
-       updated_at = EXCLUDED.updated_at`,
-    [integrationId, shopId, keyId.trim(), encryptedSecret, mode, isActive, now]
-  );
+  if (isNeonDatabaseConfigured()) {
+    try {
+      const pool = requirePostgresPool();
+      await pool.query(
+        `INSERT INTO shop_payment_integrations (id, shop_id, provider, key_id, encrypted_key_secret, mode, is_active, updated_at)
+         VALUES ($1, $2, 'razorpay', $3, $4, $5, $6, $7)
+         ON CONFLICT (id) DO UPDATE SET
+           key_id = EXCLUDED.key_id,
+           encrypted_key_secret = EXCLUDED.encrypted_key_secret,
+           mode = EXCLUDED.mode,
+           is_active = EXCLUDED.is_active,
+           updated_at = EXCLUDED.updated_at`,
+        [integrationId, shopId, keyId.trim(), encryptedSecret, mode, isActive, now]
+      );
+    } catch (err) {
+      console.warn(`[PaymentStorage] Failed to save shop payment integration to DB, updating in-memory store:`, err);
+    }
+  }
+
+  inMemoryShopIntegrations.set(shopId, {
+    id: integrationId,
+    shopId,
+    provider: 'razorpay',
+    keyId: keyId.trim(),
+    keySecret: secretToEncrypt,
+    mode,
+    isActive,
+    isConfigured: true,
+    updatedAt: now
+  });
 
   return {
     provider: 'razorpay',
@@ -1111,8 +1227,15 @@ export async function saveShopPaymentIntegration(params: {
 }
 
 export async function deleteShopPaymentIntegration(shopId: string): Promise<boolean> {
-  const pool = requirePostgresPool();
-  await pool.query(`DELETE FROM shop_payment_integrations WHERE shop_id = $1`, [shopId]);
+  inMemoryShopIntegrations.delete(shopId);
+  if (isNeonDatabaseConfigured()) {
+    try {
+      const pool = requirePostgresPool();
+      await pool.query(`DELETE FROM shop_payment_integrations WHERE shop_id = $1`, [shopId]);
+    } catch (err) {
+      console.warn(`[PaymentStorage] Failed to delete shop_payment_integrations from DB:`, err);
+    }
+  }
   return true;
 }
 
@@ -1161,8 +1284,9 @@ export interface PersistShopUserInput {
 }
 
 export async function getPersistedUsers(): Promise<PersistedUserRecord[]> {
-  const pool = requirePostgresPool();
+  if (!isNeonDatabaseConfigured()) return [];
   try {
+    const pool = requirePostgresPool();
     const result = await pool.query<PersistedUserRecord>(`
       SELECT id, email, password_hash AS password, full_name AS "fullName",
              phone, role, shop_id AS "shopId", created_at::text AS "createdAt"
@@ -1176,6 +1300,7 @@ export async function getPersistedUsers(): Promise<PersistedUserRecord[]> {
 }
 
 export async function persistNewShopAndUser(input: PersistShopUserInput): Promise<void> {
+  if (!isNeonDatabaseConfigured()) return;
   const { user, shop } = input;
   const token = getDeterministicAgentToken(shop.id);
   const now = new Date().toISOString();

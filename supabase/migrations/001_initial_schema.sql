@@ -6,7 +6,7 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 1. Profiles (RBAC for Admin, Shop Owner, Customer)
 CREATE TABLE IF NOT EXISTS public.profiles (
-  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  id UUID PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,
   full_name TEXT NOT NULL,
   phone TEXT,
@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS public.profiles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+ALTER TABLE public.profiles DROP CONSTRAINT IF EXISTS profiles_id_fkey;
 
 -- 2. Organizations
 CREATE TABLE IF NOT EXISTS public.organizations (
@@ -36,8 +37,10 @@ CREATE TABLE IF NOT EXISTS public.plans (
   features JSONB NOT NULL DEFAULT '[]'::jsonb,
   is_active BOOLEAN NOT NULL DEFAULT true,
   is_popular BOOLEAN NOT NULL DEFAULT false,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
+  created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now())
 );
+ALTER TABLE public.plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
 
 -- 4. Shops (Tenants)
 CREATE TABLE IF NOT EXISTS public.shops (
@@ -254,16 +257,20 @@ RETURNS BOOLEAN AS $$
 $$ LANGUAGE sql SECURITY DEFINER;
 
 -- Policy: Shops can be read by public if active (for /s/[shopSlug])
+DROP POLICY IF EXISTS "Public shops viewable by everyone" ON public.shops;
 CREATE POLICY "Public shops viewable by everyone" ON public.shops
   FOR SELECT USING (status = 'ACTIVE');
 
 -- Policy: Shop Owners can manage their own shop
+DROP POLICY IF EXISTS "Shop owners manage their shop" ON public.shops;
 CREATE POLICY "Shop owners manage their shop" ON public.shops
   FOR ALL USING (is_admin() OR is_shop_owner(id));
 
 -- Policy: Print Jobs - Shop owners can see jobs for their shop only
+DROP POLICY IF EXISTS "Shop owners view their jobs" ON public.print_jobs;
 CREATE POLICY "Shop owners view their jobs" ON public.print_jobs
   FOR SELECT USING (is_admin() OR is_shop_owner(shop_id));
 
+DROP POLICY IF EXISTS "Customers view their own jobs" ON public.print_jobs;
 CREATE POLICY "Customers view their own jobs" ON public.print_jobs
   FOR SELECT USING (customer_id = auth.uid());

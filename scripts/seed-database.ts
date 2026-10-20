@@ -141,6 +141,8 @@ export async function seedDatabase(targetPool: Pool = pool) {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       );
+      ALTER TABLE public.plans ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+      ALTER TABLE public.plans DROP CONSTRAINT IF EXISTS plans_name_key;
     `);
 
     // 2. Ensure Platform Admin is seeded (Only One Predefined Admin Login)
@@ -209,7 +211,7 @@ export async function seedDatabase(targetPool: Pool = pool) {
   }
 }
 
-if (import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
+if (process.argv[1] && import.meta.url === `file:///${process.argv[1].replace(/\\/g, '/')}`) {
   seedDatabase().then(() => pool.end()).catch(() => {
     pool.end();
     process.exit(1);

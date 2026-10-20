@@ -15,10 +15,50 @@ import { DurableCheckoutRepository } from './durableCheckoutRepository';
 import { DurableGuestCheckoutRepository } from './guestCheckoutRepository';
 import { DurablePaymentRepository } from './durablePaymentRepository';
 
-dotenv.config();
+export function isValidDatabaseUrl(rawUrl?: string): boolean {
+  if (!rawUrl) return false;
+  const url = rawUrl.replace(/^['"]|['"]$/g, '').trim();
+  if (!url) return false;
+
+  if (
+    url.includes('@HOST/') ||
+    url.includes('@HOST:') ||
+    url.endsWith('@HOST') ||
+    url.includes('USER:PASSWORD') ||
+    url.includes('YOUR_DATABASE_URL') ||
+    url.includes('your-database-url') ||
+    url.includes('placeholder')
+  ) {
+    return false;
+  }
+
+  try {
+    const parsed = new URL(url);
+    if (!['postgres:', 'postgresql:'].includes(parsed.protocol)) {
+      return false;
+    }
+    const host = parsed.hostname.toLowerCase();
+    if (
+      !host ||
+      host === 'host' ||
+      host === 'user' ||
+      host === 'password' ||
+      host === 'dbname' ||
+      host === 'your_host' ||
+      host === 'your-host'
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+dotenv.config({ override: true });
 
 const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
-const DATABASE_URL = rawDatabaseUrl ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : undefined;
+const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl!.replace(/^['"]|['"]$/g, '').trim() : undefined;
 
 let _sharedPool: Pool | null = null;
 let _overridePoolConfigured: boolean | null = null;

@@ -365,6 +365,19 @@ export function isOriginAllowed(originHeader: string | undefined, hostHeader: st
       return true;
     }
 
+    // Allow custom production domain printflow.devpixel.space and preview subdomains
+    if (
+      originUrl.hostname === 'printflow.devpixel.space' ||
+      originUrl.hostname.endsWith('.devpixel.space') ||
+      originUrl.hostname.endsWith('.run.app') ||
+      originUrl.hostname.endsWith('.aistudio.google') ||
+      originUrl.hostname.endsWith('.googleusercontent.com') ||
+      originUrl.hostname === 'localhost' ||
+      originUrl.hostname === '127.0.0.1'
+    ) {
+      return true;
+    }
+
     return allowedOrigins.some((trusted) => {
       if (trusted === '*') return false; // Never wildcard with credentials
       if (trusted.startsWith('*.')) {
