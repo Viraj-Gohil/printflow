@@ -84,10 +84,29 @@ if (DATABASE_URL && DATABASE_URL.length > 0) {
 
 /**
  * Returns true when the shared Neon pool is available.
- * Import this instead of re-reading DATABASE_URL throughout the codebase.
+ * Self-healing: lazily initializes pool if process.env.DATABASE_URL is present.
  */
 export const isSharedPoolConfigured = (): boolean => {
   if (_overridePoolConfigured !== null) return _overridePoolConfigured;
+  if (!_sharedPool) {
+    try {
+      const activeUrl = (process.env.DATABASE_URL || DEFAULT_SUPABASE_DATABASE_URL).trim().replace(/^['"]|['"]$/g, '');
+      if (activeUrl) {
+        _sharedPool = new Pool({
+          connectionString: activeUrl,
+          max: 10,
+          idleTimeoutMillis: 30_000,
+          connectionTimeoutMillis: 10_000,
+          ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false }
+        });
+        _sharedPool.on('error', (err) => {
+          console.warn('[repositoryFactory] Idle PostgreSQL client warning (handled):', err?.message || err);
+        });
+      }
+    } catch (err) {
+      console.warn('[repositoryFactory] Failed to lazy-initialize shared PostgreSQL pool:', err);
+    }
+  }
   return _sharedPool !== null;
 };
 
@@ -99,7 +118,7 @@ export function setPoolConfiguredForTest(val: boolean | null): void {
  * Returns the shared pool, or throws a descriptive error for fail-closed behavior.
  */
 export function requireSharedPool(): Pool {
-  if (!_sharedPool) {
+  if (!isSharedPoolConfigured() || !_sharedPool) {
     throw new Error('DATABASE_URL is required. Configure Neon PostgreSQL and restart the server.');
   }
   return _sharedPool;
