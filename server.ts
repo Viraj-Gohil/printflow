@@ -264,6 +264,72 @@ setInterval(() => {
   }
 }, 300000);
 
+/**
+ * Computes milliseconds until the next 12:00 AM midnight India Standard Time (Asia/Kolkata).
+ * IST is UTC+5:30.
+ */
+function getMsUntilNextMidnightIST(): number {
+  const now = new Date();
+  const istOffsetMs = (5 * 60 + 30) * 60 * 1000;
+  const nowIst = new Date(now.getTime() + istOffsetMs);
+  
+  const nextMidnightIst = new Date(Date.UTC(
+    nowIst.getUTCFullYear(),
+    nowIst.getUTCMonth(),
+    nowIst.getUTCDate() + 1,
+    0, 0, 0, 0
+  ));
+
+  const targetEpochMs = nextMidnightIst.getTime() - istOffsetMs;
+  return Math.max(1000, targetEpochMs - now.getTime());
+}
+
+async function runMidnightIstStorageCleanupJob() {
+  logger.info('Executing scheduled midnight IST (Asia/Kolkata) storage cleanup job...');
+  try {
+    const storageProvider = getStorageProvider();
+    if (!storageProvider.isConfigured()) {
+      logger.info('Supabase Storage provider not configured; skipping storage cleanup.');
+    } else if (isNeonDatabaseConfigured() && isSharedPoolConfigured()) {
+      const pool = requireSharedPool();
+      const res = await pool.query(
+        `SELECT id, object_path FROM public.uploaded_files
+         WHERE upload_state != 'DELETED' AND (retention_expires_at <= NOW() OR created_at < NOW() - INTERVAL '24 hours')
+         LIMIT 500`
+      );
+      const expiredFiles = res.rows;
+      if (expiredFiles.length > 0) {
+        const objectPaths = expiredFiles.map((f: any) => f.object_path);
+        try {
+          await storageProvider.delete(objectPaths);
+        } catch (delErr) {
+          logger.warn('Failed to delete some storage objects from Supabase bucket during cron cleanup:', { error: deepRedact(delErr) });
+        }
+
+        const fileIds = expiredFiles.map((f: any) => f.id);
+        await pool.query(
+          `UPDATE public.uploaded_files
+           SET upload_state = 'DELETED'
+           WHERE id = ANY($1::uuid[])`,
+          [fileIds]
+        );
+        logger.info(`Successfully deleted ${expiredFiles.length} expired customer print files from Supabase Storage bucket at midnight IST.`);
+      } else {
+        logger.info('No expired customer print files found for midnight IST cleanup.');
+      }
+    }
+  } catch (err) {
+    logger.error('Error during scheduled midnight IST storage cleanup:', { error: deepRedact(err) });
+  }
+
+  // Schedule next midnight IST execution
+  const nextDelay = getMsUntilNextMidnightIST();
+  setTimeout(runMidnightIstStorageCleanupJob, nextDelay);
+}
+
+// Initialize midnight IST cleanup scheduler on server boot
+setTimeout(runMidnightIstStorageCleanupJob, getMsUntilNextMidnightIST());
+
 // ============================================================================
 // 3. CSRF & ORIGIN INTEGRITY VERIFICATION
 // ============================================================================
@@ -3302,15 +3368,43 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
       }))
     );
     if (!storedJob) return res.status(503).json({ success: false, error: 'Print job could not be stored.' });
+
+    // Upload customer documents to Supabase Object Storage bucket
+    const storageProvider = getStorageProvider();
+    if (storageProvider.isConfigured()) {
+      for (const file of preparedFiles) {
+        try {
+          const ext = path.extname(file.sanitizedFilename) || '.pdf';
+          const objectPath = buildObjectPath(shopId, id, file.id, ext);
+          await storageProvider.upload({
+            shopId,
+            jobId: id,
+            fileId: file.id,
+            extension: ext,
+            buffer: file.buffer,
+            contentType: file.mime
+          });
+          logger.info('Stored customer file in Supabase Object Storage', { jobId: id, fileId: file.id, objectPath });
+        } catch (uploadErr) {
+          logger.warn('Supabase Object Storage upload skipped/failed (BYTEA preserved):', {
+            jobId: id,
+            fileId: file.id,
+            error: deepRedact(uploadErr)
+          });
+        }
+      }
+    }
+
     if (isSharedPoolConfigured()) {
       try {
         const pool = requireSharedPool();
         const effectiveShopUuid = await resolvePrintFlowShopId(shopId);
+        const expiresAtIso = new Date(Date.now() + 24 * 3600000).toISOString();
         await pool.query(
           `INSERT INTO public.print_jobs
              (order_code, tracking_token, shop_id, customer_name, customer_phone, files,
-              total_amount, file_status, payment_status, print_status, payment_method, payment_id)
-           VALUES ($1, $2, $3::uuid, $4, $5, $6::jsonb, $7, 'VERIFIED', 'SUCCESS', 'QUEUED', 'RAZORPAY', $8)
+              total_amount, file_status, payment_status, print_status, payment_method, payment_id, expires_at)
+           VALUES ($1, $2, $3::uuid, $4, $5, $6::jsonb, $7, 'VERIFIED', 'SUCCESS', 'QUEUED', 'RAZORPAY', $8, $9::timestamptz)
            ON CONFLICT (order_code) DO NOTHING`,
           [
             id,
@@ -3320,7 +3414,8 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
             job.customerPhone,
             JSON.stringify(job.files),
             totalAmount,
-            paymentId
+            paymentId,
+            expiresAtIso
           ]
         );
       } catch (mirrorErr) {
@@ -3820,20 +3915,21 @@ app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
   let storedFile: { mime: string; filename: string; buffer: Buffer } | undefined | null;
   try {
     job = (await getPrintAgentJob(req.params.id)) as BackendPrintJob | null;
-    if (job && isSharedPoolConfigured() && getStorageProvider().isConfigured()) {
+    if (job && getStorageProvider().isConfigured()) {
       const requestedFileId = typeof req.query.fileId === 'string' ? req.query.fileId : '';
-      const targetFileId = requestedFileId || (job.files.length === 1 ? job.files[0]?.id : '');
-      if (targetFileId) {
+      const targetFile = requestedFileId
+        ? job.files.find((item) => item.id === requestedFileId)
+        : job.files.length === 1 ? job.files[0] : undefined;
+      if (targetFile) {
         try {
-          const dbFile = await getGuestCheckoutRepository().getUploadedFileById(job.id, targetFileId);
-          if (dbFile && dbFile.uploadState !== 'DELETED') {
-            const buffer = await getStorageProvider().download(dbFile.objectPath);
-            storedFile = {
-              mime: dbFile.mimeType,
-              filename: dbFile.originalFilename,
-              buffer
-            };
-          }
+          const ext = path.extname(targetFile.fileName) || '.pdf';
+          const objectPath = buildObjectPath(job.shopId, job.id, targetFile.id, ext);
+          const buffer = await getStorageProvider().download(objectPath);
+          storedFile = {
+            mime: (targetFile as any).mime || 'application/pdf',
+            filename: targetFile.fileName,
+            buffer
+          };
         } catch {
           // Fall through to BYTEA lookup
         }
@@ -4513,7 +4609,37 @@ app.post('/api/admin/storage/cleanup', requireAdminRole, async (req: Request, re
   try {
     const olderThanHours = parseInt(req.body?.olderThanHours, 10) || 24;
     logger.info('Running storage cleanup routine', { olderThanHours });
-    return res.json({ success: true, purgedCount: 0, olderThanHours });
+
+    let purgedCount = 0;
+    const storageProvider = getStorageProvider();
+    if (storageProvider.isConfigured() && isNeonDatabaseConfigured() && isSharedPoolConfigured()) {
+      const pool = requireSharedPool();
+      const resQuery = await pool.query(
+        `SELECT id, object_path FROM public.uploaded_files
+         WHERE upload_state != 'DELETED' AND (retention_expires_at <= NOW() OR created_at < NOW() - INTERVAL '1 hour' * $1)
+         LIMIT 500`,
+        [olderThanHours]
+      );
+      const expiredFiles = resQuery.rows;
+      if (expiredFiles.length > 0) {
+        const objectPaths = expiredFiles.map((f: any) => f.object_path);
+        try {
+          await storageProvider.delete(objectPaths);
+        } catch (delErr) {
+          logger.warn('Failed to delete some storage objects during manual cleanup:', { error: deepRedact(delErr) });
+        }
+        const fileIds = expiredFiles.map((f: any) => f.id);
+        await pool.query(
+          `UPDATE public.uploaded_files
+           SET upload_state = 'DELETED'
+           WHERE id = ANY($1::uuid[])`,
+          [fileIds]
+        );
+        purgedCount = expiredFiles.length;
+      }
+    }
+
+    return res.json({ success: true, purgedCount, olderThanHours });
   } catch (error: any) {
     logger.error('Storage cleanup failed', { error: deepRedact(error) });
     return res.status(500).json({ success: false, error: 'Storage cleanup failed.' });

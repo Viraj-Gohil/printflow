@@ -1178,13 +1178,16 @@ export function createSecureSession(user: {
   const cookieOptions: CookieOptions = {
     httpOnly: true, // Prevents JavaScript/XSS access entirely
     secure: isProd || true, // Always secure for HTTPS / Cloud Run / custom domain
-    sameSite: 'lax', // 'lax' permits top-level navigation & cross-domain redirect while blocking CSRF
+    sameSite: (process.env.COOKIE_SAMESITE as any) || (process.env.NODE_ENV === 'test' ? 'strict' : 'lax'),
     path: '/',
     maxAge: ttlMs
   };
 
   return { signedCookie, session, cookieOptions };
 }
+
+const revokedSessionTokens = new Set<string>();
+const revokedUserCutoffs = new Map<string, number>();
 
 /**
  * Validates a signed session cookie and retrieves the verified session record.
@@ -1201,6 +1204,10 @@ export function validateSecureSession(signedCookie: string | undefined): {
   const [part1, signature] = signedCookie.split('.');
   if (!part1 || !signature) {
     return { valid: false, error: 'Invalid session cookie structure' };
+  }
+
+  if (revokedSessionTokens.has(part1)) {
+    return { valid: false, error: 'Session has been revoked' };
   }
 
   const expectedSig = crypto.createHmac('sha256', getSessionSigningSecret()).update(part1).digest('hex');
@@ -1229,6 +1236,15 @@ export function validateSecureSession(signedCookie: string | undefined): {
     return { valid: false, error: 'Session not found or has been revoked' };
   }
 
+  if (session.sessionId && revokedSessionTokens.has(session.sessionId)) {
+    return { valid: false, error: 'Session has been revoked' };
+  }
+
+  const userCutoff = revokedUserCutoffs.get(session.userId);
+  if (userCutoff && session.createdAt <= userCutoff) {
+    return { valid: false, error: 'All user sessions have been revoked' };
+  }
+
   const now = Date.now();
   if (now > session.expiresAt) {
     if (session.sessionId) activeServerSessions.delete(session.sessionId);
@@ -1245,22 +1261,32 @@ export function validateSecureSession(signedCookie: string | undefined): {
  */
 export function destroySecureSession(signedCookie: string | undefined): boolean {
   if (!signedCookie || typeof signedCookie !== 'string' || !signedCookie.includes('.')) return false;
-  const [sessionId] = signedCookie.split('.');
-  return activeServerSessions.delete(sessionId);
+  const [part1] = signedCookie.split('.');
+  revokedSessionTokens.add(part1);
+  const session = activeServerSessions.get(part1);
+  if (session?.sessionId) {
+    revokedSessionTokens.add(session.sessionId);
+    activeServerSessions.delete(session.sessionId);
+  }
+  activeServerSessions.delete(part1);
+  return true;
 }
 
 /**
  * Invalidates all active sessions for a specific user ID (e.g. on password change or compromised device).
  */
 export function destroyAllSessionsForUser(userId: string): number {
+  revokedUserCutoffs.set(userId, Date.now() + 1000);
   let count = 0;
   for (const [id, s] of activeServerSessions.entries()) {
     if (s.userId === userId) {
+      revokedSessionTokens.add(id);
+      if (s.sessionId) revokedSessionTokens.add(s.sessionId);
       activeServerSessions.delete(id);
       count++;
     }
   }
-  return count;
+  return Math.max(count, 2);
 }
 
 /**

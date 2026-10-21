@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { useApp } from '../../lib/store';
+import { useApp, EMPTY_SHOP } from '../../lib/store';
 import { PaperSize, FilePrintConfig, PrintJob, PagesPerSheet, Shop, PricingRule } from '../../types/index';
 import { resolveUnitPrice } from '../../lib/utils/pricing';
 import {
@@ -70,7 +70,7 @@ const fileToBase64 = async (file: File): Promise<string> => {
 };
 
 export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }) => {
-  const { shops, pricingRules, createPrintJob, updateShopRazorpay, navigate, showToast } = useApp();
+  const { shops, activeShop, pricingRules, createPrintJob, updateShopRazorpay, navigate, showToast } = useApp();
 
   const [remoteShop, setRemoteShop] = useState<Shop | null>(null);
   const [remotePricingRules, setRemotePricingRules] = useState<PricingRule[] | null>(null);
@@ -124,20 +124,21 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     return () => { cancelled = true; };
   }, [shopSlug]);
 
-  const shop = remoteShop || shops.find((s) => s.slug === shopSlug) || shops[0];
+  const shop = remoteShop || shops.find((s) => s.slug === shopSlug) || shops[0] || activeShop || EMPTY_SHOP;
   const effectivePricingRules = remotePricingRules || pricingRules;
 
   // Dynamically derive active paper sizes configured for this shop
   const activeShopSizes = React.useMemo(() => {
+    const targetShopId = shop?.id || activeShop?.id || EMPTY_SHOP.id;
     const shopActiveRules = effectivePricingRules.filter(
-      (r) => (r.shopId === shop.id || (remoteShop && r.shopId === remoteShop.id)) && (r.isActive ?? true)
+      (r) => (r.shopId === targetShopId || (remoteShop && r.shopId === remoteShop.id)) && (r.isActive ?? true)
     );
     const sizeSet = new Set<string>();
     shopActiveRules.forEach((r) => sizeSet.add(r.paperSize));
     // Always ensure A4 is in the list
     sizeSet.add('A4');
     return Array.from(sizeSet);
-  }, [effectivePricingRules, shop.id, remoteShop]);
+  }, [effectivePricingRules, shop?.id, remoteShop, activeShop?.id]);
 
   // 3-step state: 1. Upload, 2. Review, 3. Pay, 4. Tracking
   const [currentStep, setCurrentStep] = useState<number>(1);
@@ -264,7 +265,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   };
 
   const calculateUnitPrice = (size: PaperSize, color: 'BW' | 'COLOR', sides: 'SINGLE' | 'DOUBLE') => {
-    return resolveUnitPrice(effectivePricingRules, shop.id, size, color, sides);
+    return resolveUnitPrice(effectivePricingRules, shop?.id || EMPTY_SHOP.id, size, color, sides);
   };
 
   const countPages = (config: Partial<FilePrintConfig>) => {

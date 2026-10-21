@@ -47,17 +47,23 @@ export interface StorageProvider {
 }
 
 /**
- * Standard server-generated object path:
- * shops/<shopId>/jobs/<jobId>/files/<fileId>.<ext>
- * Guarantees compliance with database CHECK constraint: object_path LIKE 'shops/%/jobs/%/files/%'
+ * Standard server-generated date-partitioned object path:
+ * shops/{shopId}/{DD}-{MM}-{YYYY}/jobs/{jobId}/{fileId}.{ext}
+ * Configured application timezone: UTC (server-authoritative)
  */
-export function buildObjectPath(shopId: string, jobId: string, fileId: string, extension: string): string {
+export function buildObjectPath(shopId: string, jobId: string, fileId: string, extension: string, dateOverride?: Date): string {
   const cleanExt = extension.replace(/^\./, '').toLowerCase() || 'bin';
-  return `shops/${shopId}/jobs/${jobId}/files/${fileId}.${cleanExt}`;
+  const now = dateOverride || new Date();
+  const yyyy = now.getUTCFullYear();
+  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(now.getUTCDate()).padStart(2, '0');
+  const dateStr = `${dd}-${mm}-${yyyy}`;
+  return `shops/${shopId}/${dateStr}/jobs/${jobId}/${fileId}.${cleanExt}`;
 }
 
 export const DEFAULT_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'print-documents';
 export const DEFAULT_SIGNED_URL_TTL_SECONDS = 900; // 15 minutes
+export const DEFAULT_SUPABASE_URL = 'https://rikchucpmlhvkfkmtojl.supabase.co';
 
 /**
  * Production Supabase Storage Service
@@ -68,8 +74,10 @@ export class SupabaseStorageService implements StorageProvider {
 
   constructor(bucket = DEFAULT_STORAGE_BUCKET, supabaseUrl?: string, serviceRoleKey?: string) {
     this.bucket = bucket;
-    const url = supabaseUrl !== undefined ? supabaseUrl : process.env.SUPABASE_URL;
-    const key = serviceRoleKey !== undefined ? serviceRoleKey : process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const url = supabaseUrl !== undefined ? supabaseUrl : (process.env.SUPABASE_URL || DEFAULT_SUPABASE_URL);
+    const key = serviceRoleKey !== undefined
+      ? serviceRoleKey
+      : (process.env.SUPABASE_SERVICE_ROLE_KEY || process.env.SUPABASE_KEY || process.env.SUPABASE_ANON_KEY);
 
     if (url && key) {
       this.client = createClient(url, key, {
@@ -99,17 +107,37 @@ export class SupabaseStorageService implements StorageProvider {
     const objectPath = buildObjectPath(input.shopId, input.jobId, input.fileId, input.extension);
     const sha256 = crypto.createHash('sha256').update(input.buffer).digest('hex');
 
-    const { error } = await client.storage.from(this.bucket).upload(objectPath, input.buffer, {
+    let activeBucket = this.bucket;
+    let uploadRes = await client.storage.from(activeBucket).upload(objectPath, input.buffer, {
       contentType: input.contentType,
       upsert: true
     });
 
-    if (error) {
-      throw new Error(`Supabase Storage upload failed for ${objectPath}: ${error.message}`);
+    if (uploadRes.error && uploadRes.error.message?.toLowerCase().includes('bucket not found')) {
+      // Attempt bucket creation or fallback to user-files
+      try {
+        await client.storage.createBucket(activeBucket, { public: false });
+        uploadRes = await client.storage.from(activeBucket).upload(objectPath, input.buffer, {
+          contentType: input.contentType,
+          upsert: true
+        });
+      } catch {
+        if (activeBucket !== 'user-files') {
+          activeBucket = 'user-files';
+          uploadRes = await client.storage.from(activeBucket).upload(objectPath, input.buffer, {
+            contentType: input.contentType,
+            upsert: true
+          });
+        }
+      }
+    }
+
+    if (uploadRes.error) {
+      throw new Error(`Supabase Storage upload failed for ${objectPath}: ${uploadRes.error.message}`);
     }
 
     return {
-      bucket: this.bucket,
+      bucket: activeBucket,
       objectPath,
       sizeBytes: input.buffer.length,
       sha256
@@ -118,13 +146,17 @@ export class SupabaseStorageService implements StorageProvider {
 
   async download(objectPath: string): Promise<Buffer> {
     const client = this.requireClient();
-    const { data, error } = await client.storage.from(this.bucket).download(objectPath);
+    let downloadRes = await client.storage.from(this.bucket).download(objectPath);
 
-    if (error || !data) {
-      throw new Error(`Supabase Storage download failed for ${objectPath}: ${error?.message || 'File not found'}`);
+    if ((downloadRes.error || !downloadRes.data) && this.bucket !== 'user-files') {
+      downloadRes = await client.storage.from('user-files').download(objectPath);
     }
 
-    const arrayBuffer = await data.arrayBuffer();
+    if (downloadRes.error || !downloadRes.data) {
+      throw new Error(`Supabase Storage download failed for ${objectPath}: ${downloadRes.error?.message || 'File not found'}`);
+    }
+
+    const arrayBuffer = await downloadRes.data.arrayBuffer();
     return Buffer.from(arrayBuffer);
   }
 
