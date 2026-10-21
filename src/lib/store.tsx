@@ -1408,9 +1408,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // Print Jobs: starts clean for real production orders!
   const [printJobs, setPrintJobs] = useState<PrintJob[]>(() => {
     const loaded = getStoredItem<PrintJob[]>('print_jobs', []);
-    return Array.isArray(loaded)
+    const filtered = Array.isArray(loaded)
       ? loaded.filter((j) => !j.id?.startsWith('pj_88') && !j.orderCode?.startsWith('ORD-88'))
       : [];
+    return Array.from(new Map(filtered.map(j => [j.id, j])).values());
   });
 
   // Sync print jobs & transactions across tabs in real time
@@ -1551,9 +1552,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           });
           const existingIds = new Set(previous.map((job) => job.id));
           next.push(...backendJobs.filter((job: PrintJob) => !existingIds.has(job.id)));
-          if (JSON.stringify(previous) === JSON.stringify(next)) return previous;
-          setStoredItem('print_jobs', next);
-          return next;
+          const uniqueNext = Array.from(new Map(next.map(j => [j.id, j])).values());
+          if (JSON.stringify(previous) === JSON.stringify(uniqueNext)) return previous;
+          setStoredItem('print_jobs', uniqueNext);
+          return uniqueNext;
         });
       } catch (error) {
         if (!cancelled) console.error('PrintFlow live shop sync failed:', error);
