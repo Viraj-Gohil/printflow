@@ -788,10 +788,19 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
       fullName: newUser.fullName
     });
 
+    const accessToken = createJwtAccessToken({
+      userId: session.userId,
+      email: session.email,
+      role: session.role,
+      shopId: session.shopId,
+      secret: JWT_SECRET
+    });
+
     res.cookie('printflow_session', signedCookie, cookieOptions);
 
     return res.status(201).json({
       success: true,
+      accessToken,
       user: {
         id: session.userId,
         email: session.email,
@@ -854,10 +863,19 @@ app.post('/api/auth/login', createRateLimiter(10), async (req: Request, res: Res
     fullName: user.fullName
   });
 
+  const accessToken = createJwtAccessToken({
+    userId: session.userId,
+    email: session.email,
+    role: session.role,
+    shopId: session.shopId,
+    secret: JWT_SECRET
+  });
+
   res.cookie('printflow_session', signedCookie, cookieOptions);
 
   return res.json({
     success: true,
+    accessToken,
     user: {
       id: session.userId,
       email: session.email,

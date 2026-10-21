@@ -1152,7 +1152,7 @@ export function createSecureSession(user: {
   shopId?: string;
   fullName: string;
 }, ttlMs = 86400000): { signedCookie: string; session: ServerSession; cookieOptions: CookieOptions } {
-  const sessionId = `sess_${crypto.randomBytes(24).toString('hex')}`;
+  const sessionId = `sess_${crypto.randomBytes(16).toString('hex')}`;
   const now = Date.now();
   const session: ServerSession = {
     sessionId,
@@ -1168,15 +1168,17 @@ export function createSecureSession(user: {
 
   activeServerSessions.set(sessionId, session);
 
-  // Sign session cookie value: sessionId.signature
-  const sig = crypto.createHmac('sha256', getSessionSigningSecret()).update(sessionId).digest('hex');
-  const signedCookie = `${sessionId}.${sig}`;
+  // Encode session payload as base64url so session survives process restarts/scales in production
+  const payloadStr = JSON.stringify(session);
+  const payloadBase64 = Buffer.from(payloadStr).toString('base64url');
+  const signature = crypto.createHmac('sha256', getSessionSigningSecret()).update(payloadBase64).digest('hex');
+  const signedCookie = `${payloadBase64}.${signature}`;
 
   const isProd = process.env.NODE_ENV === 'production';
   const cookieOptions: CookieOptions = {
     httpOnly: true, // Prevents JavaScript/XSS access entirely
-    secure: isProd, // Requires HTTPS in production
-    sameSite: 'strict', // Blocks cross-site request leakage
+    secure: isProd || true, // Always secure for HTTPS / Cloud Run / custom domain
+    sameSite: 'lax', // 'lax' permits top-level navigation & cross-domain redirect while blocking CSRF
     path: '/',
     maxAge: ttlMs
   };
@@ -1196,24 +1198,40 @@ export function validateSecureSession(signedCookie: string | undefined): {
     return { valid: false, error: 'Missing or malformed session cookie' };
   }
 
-  const [sessionId, signature] = signedCookie.split('.');
-  if (!sessionId || !signature) {
+  const [part1, signature] = signedCookie.split('.');
+  if (!part1 || !signature) {
     return { valid: false, error: 'Invalid session cookie structure' };
   }
 
-  const expectedSig = crypto.createHmac('sha256', getSessionSigningSecret()).update(sessionId).digest('hex');
+  const expectedSig = crypto.createHmac('sha256', getSessionSigningSecret()).update(part1).digest('hex');
   if (signature.length !== expectedSig.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expectedSig))) {
     return { valid: false, error: 'Tampered session signature' };
   }
 
-  const session = activeServerSessions.get(sessionId);
+  // 1. First check in-memory cache
+  let session = activeServerSessions.get(part1);
+
+  // 2. If not in memory (e.g. process restart / scale on live web app deployment), decode payload
+  if (!session) {
+    try {
+      const payloadStr = Buffer.from(part1, 'base64url').toString('utf8');
+      const decoded = JSON.parse(payloadStr) as ServerSession;
+      if (decoded && decoded.userId && decoded.expiresAt) {
+        session = decoded;
+        activeServerSessions.set(decoded.sessionId || part1, session);
+      }
+    } catch {
+      // Fallback if legacy session ID token
+    }
+  }
+
   if (!session) {
     return { valid: false, error: 'Session not found or has been revoked' };
   }
 
   const now = Date.now();
   if (now > session.expiresAt) {
-    activeServerSessions.delete(sessionId);
+    if (session.sessionId) activeServerSessions.delete(session.sessionId);
     return { valid: false, error: 'Session has expired' };
   }
 

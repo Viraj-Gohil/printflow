@@ -509,6 +509,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (!response.ok || !resData.success) {
         return { success: false, message: resData.error || 'Registration failed. Database is currently unavailable.' };
       }
+      if (resData.accessToken) {
+        localStorage.setItem('printflow_access_token', resData.accessToken);
+      }
       serverShop = resData.shop;
       serverUser = {
         id: resData.user.id,
@@ -567,6 +570,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (!response.ok || !data.success) {
         return { success: false, message: data.error || 'Invalid email or password. Please verify your credentials.' };
+      }
+
+      if (data.accessToken) {
+        localStorage.setItem('printflow_access_token', data.accessToken);
       }
 
       const serverUser: UserProfile = {
@@ -2257,10 +2264,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     let cancelled = false;
     let cloudReady = false;
     const pendingWrites = new Map<string, Promise<void>>();
-    const requestHeaders = {
+    const accessToken = typeof window !== 'undefined' ? localStorage.getItem('printflow_access_token') : null;
+    const requestHeaders: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-user-role': currentUser.role,
-      'x-shop-id': activeShop.id
+      'x-shop-id': activeShop.id,
+      ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {})
     };
 
     const writeCloudState = (key: string, value: unknown) => {
