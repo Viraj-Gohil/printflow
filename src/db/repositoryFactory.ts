@@ -57,8 +57,9 @@ export function isValidDatabaseUrl(rawUrl?: string): boolean {
 
 dotenv.config({ override: true });
 
-const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
-const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl!.replace(/^['"]|['"]$/g, '').trim() : undefined;
+const DEFAULT_SUPABASE_DATABASE_URL = 'postgresql://postgres:wAz7k6AQBmfQ0QjG@db.rikchucpmlhvkfkmtojl.supabase.co:5432/postgres';
+const rawDatabaseUrl = (process.env.DATABASE_URL || DEFAULT_SUPABASE_DATABASE_URL).trim();
+const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : DEFAULT_SUPABASE_DATABASE_URL;
 
 let _sharedPool: Pool | null = null;
 let _overridePoolConfigured: boolean | null = null;

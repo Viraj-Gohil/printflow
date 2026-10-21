@@ -142,10 +142,11 @@ export function isValidDatabaseUrl(rawUrl?: string): boolean {
   }
 }
 
-// PostgreSQL Connection Pool (Neon PostgreSQL when DATABASE_URL is configured)
+// PostgreSQL Connection Pool (Supabase / Neon PostgreSQL when DATABASE_URL is configured)
+const DEFAULT_SUPABASE_DATABASE_URL = 'postgresql://postgres:wAz7k6AQBmfQ0QjG@db.rikchucpmlhvkfkmtojl.supabase.co:5432/postgres';
 let pgPool: Pool | null = null;
-const rawDatabaseUrl = process.env.DATABASE_URL?.trim();
-const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl!.replace(/^['"]|['"]$/g, '').trim() : undefined;
+const rawDatabaseUrl = (process.env.DATABASE_URL || DEFAULT_SUPABASE_DATABASE_URL).trim();
+const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : DEFAULT_SUPABASE_DATABASE_URL;
 export const isNeonDatabaseConfigured = (): boolean => pgPool !== null;
 
 if (DATABASE_URL && DATABASE_URL.length > 0) {
@@ -161,7 +162,7 @@ if (DATABASE_URL && DATABASE_URL.length > 0) {
       console.warn('[PaymentStorage] Idle PostgreSQL client warning (handled):', err?.message || err);
     });
   } catch (err) {
-    console.warn('[PaymentStorage] Failed to initialize Neon PostgreSQL connection pool:', err);
+    console.warn('[PaymentStorage] Failed to initialize PostgreSQL connection pool:', err);
     pgPool = null;
   }
 }
