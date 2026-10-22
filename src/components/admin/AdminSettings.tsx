@@ -15,14 +15,16 @@ import {
   ExternalLink,
   ShieldCheck,
   Server,
-  Lock
+  Lock,
+  ChevronRight,
+  Loader2
 } from 'lucide-react';
-import { AdminRazorpaySettings } from '../../types';
-import { RazorpayCheckoutModal } from '../payment/RazorpayCheckoutModal';
 import { apiUrl } from '../../lib/apiConfig';
+import { Button } from '../ui/Button';
+import { Chip } from '../ui/Chip';
 
 export const AdminSettings: React.FC = () => {
-  const { adminRazorpay, updateAdminRazorpay, showToast } = useApp();
+  const { adminRazorpay, updateAdminRazorpay, showToast, navigate } = useApp();
 
   // Platform server-persisted metadata
   const [platformMeta, setPlatformMeta] = useState<{
@@ -51,7 +53,8 @@ export const AdminSettings: React.FC = () => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [webhookCopied, setWebhookCopied] = useState(false);
-  const [showCheckoutModal, setShowCheckoutModal] = useState(false);
+
+  const webhookEndpoint = typeof window !== 'undefined' ? `${window.location.origin}/api/webhooks/razorpay` : 'https://api.printflow.in/api/webhooks/razorpay';
 
   // Load authoritative platform config from backend on mount
   useEffect(() => {
@@ -80,24 +83,15 @@ export const AdminSettings: React.FC = () => {
       .catch((err) => console.warn('Could not load platform payment config:', err));
   }, []);
 
-  // Platform General settings
-  const [generalSettings, setGeneralSettings] = useState({
-    platformName: 'PrintFlow SaaS Platform',
-    supportEmail: 'support@printflow.in',
-    fileRetentionDays: 7,
-    allowShopCustomGateways: true
-  });
-  const [generalSaved, setGeneralSaved] = useState(false);
-
-  const webhookEndpoint = 'https://api.printflow.in/api/webhooks/razorpay';
-
   const copyWebhookUrl = () => {
     navigator.clipboard.writeText(webhookEndpoint);
     setWebhookCopied(true);
+    showToast('Webhook Copied', 'Razorpay webhook endpoint copied to clipboard.', 'info');
     setTimeout(() => setWebhookCopied(false), 2000);
   };
 
   const handleTestConnection = async () => {
+    if (testingConnection) return;
     setTestingConnection(true);
     setTestResult(null);
 
@@ -129,11 +123,13 @@ export const AdminSettings: React.FC = () => {
         message: data.message || data.error || (res.ok ? 'Gateway handshake successful' : 'Connection handshake failed.'),
         latencyMs: data.latencyMs
       });
+      showToast('Gateway Handshake', data.message || 'Connection verified successfully', res.ok && data.success ? 'success' : 'error');
     } catch (err: any) {
       setTestResult({
         success: false,
         message: err.message || 'Network error verifying gateway'
       });
+      showToast('Gateway Handshake Failed', err.message, 'error');
     } finally {
       setTestingConnection(false);
     }
@@ -141,6 +137,7 @@ export const AdminSettings: React.FC = () => {
 
   const handleSaveRazorpay = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSaving) return;
     setIsSaving(true);
     setSaveError(null);
     setSaveSuccess(false);
@@ -182,7 +179,6 @@ export const AdminSettings: React.FC = () => {
       setSaveSuccess(true);
       showToast('Configuration Saved', 'Master Razorpay credentials encrypted and verified.', 'success', 4000);
 
-      // Update store state without exposing secrets
       updateAdminRazorpay({
         enabled: isActive,
         isTestMode: mode === 'test',
@@ -197,35 +193,58 @@ export const AdminSettings: React.FC = () => {
       setTimeout(() => setSaveSuccess(false), 4000);
     } catch (err: any) {
       setSaveError(err.message || 'Network error saving configuration.');
+      showToast('Save Failed', err.message, 'error');
     } finally {
       setIsSaving(false);
     }
   };
 
-  const handleSaveGeneral = (e: React.FormEvent) => {
-    e.preventDefault();
-    setGeneralSaved(true);
-    setTimeout(() => setGeneralSaved(false), 3000);
-  };
-
   return (
-    <div className="max-w-4xl space-y-8">
-      {/* SECTION 1: PLATFORM ADMIN RAZORPAY SETTINGS (FOR SAAS PLANS) */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-purple-50/40">
+    <div className="max-w-4xl mx-auto space-y-6 pb-12">
+      {/* 1. COMPACT PAGE HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+        <div>
+          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+            <span>Platform</span>
+            <ChevronRight className="w-3 h-3 text-slate-400" />
+            <span>Billing</span>
+            <ChevronRight className="w-3 h-3 text-slate-400" />
+            <span className="font-semibold text-purple-700">Master Razorpay Settings</span>
+          </div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+            Platform SaaS Razorpay Gateway
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5 leading-relaxed">
+            Master Razorpay API keys used to collect monthly and yearly software subscription fees from xerox shop tenants.
+          </p>
+        </div>
+
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => navigate('/admin/platform-settings')}
+        >
+          <span>Global Platform Policies</span>
+          <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+        </Button>
+      </div>
+
+      {/* 2. RAZORPAY CONFIGURATION FORM */}
+      <form onSubmit={handleSaveRazorpay} className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+        <div className="p-5 sm:p-6 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-purple-50/30">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-700 flex items-center justify-center font-bold">
               <CreditCard className="w-5 h-5" />
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900">Platform SaaS Razorpay Gateway</h2>
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-purple-100 text-purple-800">
+                <h2 className="text-sm sm:text-base font-bold text-slate-900">Razorpay Master Credentials</h2>
+                <Chip variant="special" size="sm">
                   SUBSCRIPTION BILLING
-                </span>
+                </Chip>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
-                Master Razorpay API keys used to collect monthly/yearly software fees from Xerox Shop Owners.
+                Encrypted at rest using AES-256-GCM via MASTER_ENCRYPTION_KEY.
               </p>
             </div>
           </div>
@@ -244,184 +263,75 @@ export const AdminSettings: React.FC = () => {
         </div>
 
         {/* Status Metadata Banner */}
-        <div className="bg-slate-50/80 px-6 py-3 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex items-center gap-4">
+        <div className="bg-slate-50/80 px-5 py-3 border-b border-slate-200/80 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-4 flex-wrap">
             <div>
-              <span className="text-slate-400">Provider:</span>{' '}
-              <span className="font-semibold text-slate-800">Razorpay Standard</span>
+              <span className="text-slate-400 font-medium">Provider:</span>{' '}
+              <strong className="text-slate-800 uppercase">{platformMeta?.provider || 'Razorpay'}</strong>
             </div>
             <div>
-              <span className="text-slate-400">Status:</span>{' '}
-              <span className={`font-semibold ${platformMeta?.isConfigured ? 'text-emerald-700' : 'text-slate-500'}`}>
-                {platformMeta?.isConfigured ? 'Configured & Active' : 'Unconfigured'}
+              <span className="text-slate-400 font-medium">Status:</span>{' '}
+              <span className={platformMeta?.isConfigured ? 'text-emerald-700 font-bold' : 'text-amber-700 font-bold'}>
+                {platformMeta?.isConfigured ? '● Configured & Active' : '○ Not Configured'}
               </span>
             </div>
             <div>
-              <span className="text-slate-400">Secret Vault:</span>{' '}
-              <span className="font-semibold text-purple-700">AES-256-GCM Encrypted</span>
+              <span className="text-slate-400 font-medium">Last Updated:</span>{' '}
+              <span className="font-mono text-slate-700">
+                {platformMeta?.lastUpdatedAt ? new Date(platformMeta.lastUpdatedAt).toLocaleString('en-IN') : 'Never'}
+              </span>
             </div>
           </div>
-          {platformMeta?.lastUpdatedAt && (
-            <div className="text-[11px] text-slate-500">
-              Last saved: {new Date(platformMeta.lastUpdatedAt).toLocaleString()}
-            </div>
-          )}
+
+          <div className="flex items-center gap-2">
+            <span className="text-[11px] text-slate-500">
+              {platformMeta?.hasSecret ? 'Secret Key Secured 🔒' : 'Secret Required'}
+            </span>
+          </div>
         </div>
 
-        <form onSubmit={handleSaveRazorpay} className="p-6 space-y-6">
+        <div className="p-5 sm:p-6 space-y-4">
           {saveSuccess && (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
+            <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 font-medium flex items-center gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Platform Razorpay API keys and subscription parameters saved and verified successfully.</span>
+              <span>Platform Razorpay configuration updated and securely saved to database.</span>
             </div>
           )}
 
           {saveError && (
-            <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              <div>
-                <p className="font-bold">Configuration Error</p>
-                <p className="mt-0.5">{saveError}</p>
-              </div>
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-medium flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
+              <span>{saveError}</span>
             </div>
           )}
 
-          {testResult && (
-            <div
-              className={`p-4 rounded-xl text-xs flex items-start gap-2.5 border ${
-                testResult.success
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                  : 'bg-red-50 border-red-200 text-red-800'
-              }`}
-            >
-              {testResult.success ? (
-                <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
-              ) : (
-                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              )}
-              <div>
-                <p className="font-semibold">{testResult.success ? 'Credentials Valid' : 'Handshake Failed'}</p>
-                <p className="mt-0.5">{testResult.message}</p>
-                {testResult.latencyMs !== undefined && (
-                  <span className="text-[10px] text-slate-500 block mt-1">
-                    API Response Latency: {testResult.latencyMs}ms
-                  </span>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Mode Switcher */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-4 bg-slate-50 border border-slate-200 rounded-xl">
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="adminMode"
-                checked={mode === 'test'}
-                onChange={() => setMode('test')}
-                className="text-purple-600 focus:ring-purple-500"
-              />
-              <div>
-                <span className="text-xs font-bold text-slate-900 block">Sandbox Test Mode</span>
-                <span className="text-[11px] text-slate-500">Test SaaS subscription checkouts with fake cards/UPI (rzp_test_...)</span>
-              </div>
-            </label>
-
-            <label className="flex items-center gap-3 cursor-pointer">
-              <input
-                type="radio"
-                name="adminMode"
-                checked={mode === 'live'}
-                onChange={() => setMode('live')}
-                className="text-purple-600 focus:ring-purple-500"
-              />
-              <div>
-                <span className="text-xs font-bold text-slate-900 block">Live Production Mode</span>
-                <span className="text-[11px] text-slate-500">Charge real money for Pro and Starter SaaS plans (rzp_live_...)</span>
-              </div>
-            </label>
-          </div>
-
-          {/* Key ID and Secret Inputs */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-            {/* Master Key ID */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Integration Mode */}
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                <span>Platform Master Razorpay Key ID *</span>
-                <span className="text-[11px] text-slate-400">e.g. {mode === 'live' ? 'rzp_live_...' : 'rzp_test_...'}</span>
+              <label htmlFor="integration-mode" className="block text-xs font-semibold text-slate-800">
+                Integration Mode
               </label>
-              <div className="relative">
-                <input
-                  type="text"
-                  required
-                  placeholder={mode === 'live' ? 'rzp_live_xxxxxxxxxxxxxx' : 'rzp_test_xxxxxxxxxxxxxx'}
-                  value={keyIdInput}
-                  onChange={(e) => setKeyIdInput(e.target.value)}
-                  className="w-full pl-3 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
-                <Key className="w-4 h-4 text-slate-400 absolute right-3 top-3" />
-              </div>
-              <p className="text-[11px] text-slate-500">
-                Master Razorpay account used for charging SaaS plan subscriptions
-              </p>
-            </div>
-
-            {/* Dedicated Replace Key Secret Field */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                <span>Platform Razorpay Key Secret</span>
-                <span className="text-[11px] text-slate-400">
-                  {platformMeta?.hasSecret ? 'Secret Saved in Vault' : 'Required for Initial Setup'}
-                </span>
-              </label>
-              <div className="relative">
-                <input
-                  type={showSecret ? 'text' : 'password'}
-                  placeholder={
-                    platformMeta?.hasSecret
-                      ? '•••••••••••• (Leave blank to keep existing stored secret)'
-                      : 'Enter Razorpay Key Secret'
-                  }
-                  value={replaceSecret}
-                  onChange={(e) => setReplaceSecret(e.target.value)}
-                  className="w-full pl-3 pr-10 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowSecret(!showSecret)}
-                  className="p-1 text-slate-400 hover:text-slate-600 absolute right-2.5 top-2.5 cursor-pointer"
-                >
-                  {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-500 flex items-center gap-1">
-                <Lock className="w-3 h-3 text-purple-600" />
-                <span>Encrypted at rest with AES-256-GCM. Never exposed in API responses or logs.</span>
-              </p>
-            </div>
-
-            {/* Webhook Secret */}
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-800">Platform Webhook Secret</label>
-              <input
-                type="text"
-                placeholder="whsec_admin_platform_live_events"
-                value={webhookSecret}
-                onChange={(e) => setWebhookSecret(e.target.value)}
-                className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
-              />
-              <p className="text-[11px] text-slate-500">
-                Validates signature header <code>X-Razorpay-Signature</code>
-              </p>
+              <select
+                id="integration-mode"
+                value={mode}
+                onChange={(e) => setMode(e.target.value as 'test' | 'live')}
+                className="w-full h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-600/20 focus:border-purple-600"
+              >
+                <option value="test">Sandbox Test Mode (rzp_test_...)</option>
+                <option value="live">Live Production (rzp_live_...)</option>
+              </select>
             </div>
 
             {/* Currency */}
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-800">Billing Currency</label>
+              <label htmlFor="currency-select" className="block text-xs font-semibold text-slate-800">
+                Billing Currency
+              </label>
               <select
+                id="currency-select"
                 value={currency}
                 onChange={(e) => setCurrency(e.target.value as 'INR' | 'USD')}
-                className="w-full px-3 py-2.5 bg-white border border-slate-300 rounded-xl text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                className="w-full h-10 px-3 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-semibold text-slate-800 focus:outline-none focus:ring-2 focus:ring-purple-600/20 focus:border-purple-600"
               >
                 <option value="INR">INR (₹ - Indian Rupee)</option>
                 <option value="USD">USD ($ - US Dollar)</option>
@@ -429,139 +339,129 @@ export const AdminSettings: React.FC = () => {
             </div>
           </div>
 
-          {/* Webhook Endpoint Info */}
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-            <span className="text-xs font-bold text-slate-800 block">Webhook Callback Endpoint URL</span>
-            <div className="flex items-center gap-2">
+          {/* Key ID */}
+          <div className="space-y-1.5">
+            <label htmlFor="razorpay-key-id" className="block text-xs font-semibold text-slate-800">
+              Razorpay Key ID <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="razorpay-key-id"
+              type="text"
+              placeholder="rzp_live_..."
+              value={keyIdInput}
+              onChange={(e) => setKeyIdInput(e.target.value)}
+              className="w-full h-10 px-3.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600/20 focus:border-purple-600"
+            />
+            <p className="text-[11px] text-slate-500">Public identifier safe for client-side checkout embedding.</p>
+          </div>
+
+          {/* Key Secret */}
+          <div className="space-y-1.5">
+            <label htmlFor="razorpay-key-secret" className="block text-xs font-semibold text-slate-800">
+              Razorpay Key Secret (Replacement)
+            </label>
+            <div className="relative">
               <input
-                type="text"
-                readOnly
-                value={webhookEndpoint}
-                className="flex-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-xs font-mono text-slate-700"
+                id="razorpay-key-secret"
+                type={showSecret ? 'text' : 'password'}
+                placeholder={platformMeta?.hasSecret ? '•••••••••••••••• (Stored Securely)' : 'Enter new secret key'}
+                value={replaceSecret}
+                onChange={(e) => setReplaceSecret(e.target.value)}
+                className="w-full h-10 pl-3.5 pr-10 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600/20 focus:border-purple-600"
               />
               <button
                 type="button"
-                onClick={copyWebhookUrl}
-                className="px-3 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-800 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                onClick={() => setShowSecret(!showSecret)}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-1"
+                aria-label={showSecret ? 'Hide secret' : 'Show secret'}
               >
-                {webhookCopied ? <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-                <span>{webhookCopied ? 'Copied' : 'Copy'}</span>
+                {showSecret ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
               </button>
             </div>
-            <p className="text-[11px] text-slate-500">
-              Configure this URL in your Razorpay Dashboard Webhooks with events: <code>subscription.charged</code>, <code>payment.captured</code>, <code>refund.processed</code>.
-            </p>
+            <p className="text-[11px] text-slate-500">Leave empty to keep the existing stored master secret unchanged.</p>
           </div>
 
-          {/* Action buttons */}
-          <div className="pt-4 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
-              <button
+          {/* Webhook Secret */}
+          <div className="space-y-1.5">
+            <label htmlFor="webhook-secret" className="block text-xs font-semibold text-slate-800">
+              Webhook Signing Secret
+            </label>
+            <input
+              id="webhook-secret"
+              type="text"
+              placeholder="whsec_..."
+              value={webhookSecret}
+              onChange={(e) => setWebhookSecret(e.target.value)}
+              className="w-full h-10 px-3.5 bg-white border border-slate-200 rounded-xl text-xs sm:text-sm font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-600/20 focus:border-purple-600"
+            />
+          </div>
+
+          {/* Gateway Actions */}
+          <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2 w-full sm:w-auto">
+              <Button
                 type="button"
+                variant="outline"
+                size="sm"
                 disabled={testingConnection}
                 onClick={handleTestConnection}
-                className="w-full sm:w-auto px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-slate-200 transition-colors cursor-pointer"
+                className="w-full sm:w-auto"
               >
-                <RotateCw className={`w-3.5 h-3.5 ${testingConnection ? 'animate-spin' : ''}`} />
-                <span>{testingConnection ? 'Verifying with Razorpay...' : 'Test Gateway Connection'}</span>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => setShowCheckoutModal(true)}
-                className="w-full sm:w-auto px-4 py-2 bg-purple-50 hover:bg-purple-100 text-purple-700 font-semibold text-xs rounded-xl flex items-center justify-center gap-1.5 border border-purple-200 transition-colors cursor-pointer"
-              >
-                <CreditCard className="w-3.5 h-3.5 text-purple-600" />
-                <span>Test Standard Web Checkout</span>
-              </button>
+                {testingConnection ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RotateCw className="w-3.5 h-3.5" />}
+                <span>{testingConnection ? 'Testing Connection...' : 'Test Gateway Connection'}</span>
+              </Button>
             </div>
 
-            <button
+            <Button
               type="submit"
-              className="w-full sm:w-auto px-6 py-2.5 bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 transition-colors cursor-pointer"
+              variant="solid"
+              size="sm"
+              disabled={isSaving}
+              className="w-full sm:w-auto bg-purple-600 hover:bg-purple-700 focus-visible:ring-purple-500"
             >
-              <Save className="w-4 h-4" />
-              <span>Save Platform Razorpay Keys</span>
-            </button>
+              {isSaving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+              <span>{isSaving ? 'Encrypting & Saving...' : 'Save Gateway Configuration'}</span>
+            </Button>
           </div>
-        </form>
-      </div>
 
-      {/* SECTION 2: PLATFORM GENERAL SETTINGS */}
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="p-6 border-b border-slate-100 flex items-center gap-3 bg-slate-50/50">
-          <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-700 flex items-center justify-center font-bold">
-            <Server className="w-5 h-5" />
-          </div>
-          <div>
-            <h2 className="text-base font-bold text-slate-900">Platform General Configurations</h2>
-            <p className="text-xs text-slate-500">
-              Default system parameters for file storage retention and multi-tenancy.
-            </p>
-          </div>
-        </div>
-
-        <form onSubmit={handleSaveGeneral} className="p-6 space-y-4">
-          {generalSaved && (
-            <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
-              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-              <span>Platform general configuration updated!</span>
+          {/* Test Result Banner */}
+          {testResult && (
+            <div className={`p-3.5 rounded-xl border text-xs flex items-start gap-2.5 ${
+              testResult.success ? 'bg-emerald-50 border-emerald-200 text-emerald-900' : 'bg-red-50 border-red-200 text-red-900'
+            }`}>
+              {testResult.success ? <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />}
+              <div>
+                <p className="font-semibold">{testResult.success ? 'Gateway Connection Verified' : 'Gateway Handshake Failed'}</p>
+                <p className="text-[11px] mt-0.5 opacity-90">{testResult.message} {testResult.latencyMs ? `(${testResult.latencyMs}ms)` : ''}</p>
+              </div>
             </div>
           )}
+        </div>
+      </form>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-800">Platform Public Name</label>
-              <input
-                type="text"
-                value={generalSettings.platformName}
-                onChange={(e) => setGeneralSettings({ ...generalSettings, platformName: e.target.value })}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-800">Super Admin Contact Email</label>
-              <input
-                type="email"
-                value={generalSettings.supportEmail}
-                onChange={(e) => setGeneralSettings({ ...generalSettings, supportEmail: e.target.value })}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-xs font-bold text-slate-800">File Retention Days (Auto Cleanup)</label>
-              <input
-                type="number"
-                min={1}
-                max={30}
-                value={generalSettings.fileRetentionDays}
-                onChange={(e) => setGeneralSettings({ ...generalSettings, fileRetentionDays: Number(e.target.value) })}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-purple-500"
-              />
-              <p className="text-[11px] text-slate-500">Customer files automatically deleted after this time</p>
-            </div>
+      {/* 3. PLATFORM WEBHOOK ENDPOINT CARD */}
+      <div className="bg-white p-5 sm:p-6 rounded-xl border border-slate-200/90 shadow-2xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-slate-900">Razorpay Webhook Endpoint</h3>
+            <p className="text-xs text-slate-500 mt-0.5">Register this URL in your Razorpay dashboard for automated subscription invoices.</p>
           </div>
-
-          <div className="pt-4 border-t border-slate-100 flex justify-end">
-            <button
-              type="submit"
-              className="px-6 py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
-            >
-              Save General Settings
-            </button>
-          </div>
-        </form>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={copyWebhookUrl}
+          >
+            <Copy className="w-3.5 h-3.5 text-slate-500" />
+            <span>{webhookCopied ? 'Copied' : 'Copy URL'}</span>
+          </Button>
+        </div>
+        <input
+          type="text"
+          readOnly
+          value={webhookEndpoint}
+          className="w-full h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono text-slate-700 select-all"
+        />
       </div>
-
-      {/* Test Razorpay Standard Web Checkout Modal */}
-      <RazorpayCheckoutModal
-        isOpen={showCheckoutModal}
-        onClose={() => setShowCheckoutModal(false)}
-        defaultAmountInRupees={499}
-        orderDescription="PrintFlow Admin Test Transaction"
-      />
     </div>
   );
 };

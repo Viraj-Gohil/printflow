@@ -1178,7 +1178,7 @@ export function createSecureSession(user: {
   const cookieOptions: CookieOptions = {
     httpOnly: true, // Prevents JavaScript/XSS access entirely
     secure: isProd || true, // Always secure for HTTPS / Cloud Run / custom domain
-    sameSite: (process.env.COOKIE_SAMESITE as any) || (process.env.NODE_ENV === 'test' ? 'strict' : 'lax'),
+    sameSite: (process.env.COOKIE_SAMESITE as any) || 'strict',
     path: '/',
     maxAge: ttlMs
   };

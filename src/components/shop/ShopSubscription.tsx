@@ -12,14 +12,37 @@ import {
   Info,
   ArrowRight,
   Cpu,
-  AlertCircle
+  AlertCircle,
+  MoreVertical,
+  Trash2,
+  AlertTriangle,
+  ShieldAlert,
+  Loader2,
+  X
 } from 'lucide-react';
 import { SaasPlan } from '../../types';
 import { RazorpayCheckoutButton } from '../payment/RazorpayCheckoutButton';
 import { apiUrl } from '../../lib/apiConfig';
+import { Button } from '../ui/Button';
+import { Chip } from '../ui/Chip';
 
 export const ShopSubscription: React.FC = () => {
-  const { activeShop, plans, upgradeShopPlan, adminRazorpay, printers, printJobs, navigate, showToast } = useApp();
+  const {
+    activeShop,
+    plans,
+    upgradeShopPlan,
+    adminRazorpay,
+    printers,
+    printJobs,
+    navigate,
+    showToast,
+    currentUser,
+    subscriptions,
+    shops,
+    deletePlan,
+    archivePlan,
+    togglePlanStatus
+  } = useApp();
 
   const [gatewayMeta, setGatewayMeta] = useState<{
     isConfigured: boolean;
@@ -65,6 +88,86 @@ export const ShopSubscription: React.FC = () => {
   const [isProcessingUpgrade, setIsProcessingUpgrade] = useState(false);
   const [upgradeSuccess, setUpgradeSuccess] = useState<string | null>(null);
 
+  // Plan management & delete states
+  const [activeMenuPlanId, setActiveMenuPlanId] = useState<string | null>(null);
+  const [planToDelete, setPlanToDelete] = useState<SaasPlan | null>(null);
+  const [isDeletingPlan, setIsDeletingPlan] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  // Close card action menu when clicking outside
+  useEffect(() => {
+    const handleDocumentClick = () => {
+      setActiveMenuPlanId(null);
+    };
+    if (activeMenuPlanId) {
+      document.addEventListener('click', handleDocumentClick);
+      return () => document.removeEventListener('click', handleDocumentClick);
+    }
+  }, [activeMenuPlanId]);
+
+  const isAdmin = currentUser?.role === 'ADMIN';
+
+  const isPlanProtectedDefault = (plan: SaasPlan | null) => {
+    if (!plan) return false;
+    const lowerId = plan.id.toLowerCase();
+    const lowerName = plan.name.toLowerCase();
+    return (
+      lowerId === 'plan_starter' ||
+      lowerId === 'free' ||
+      lowerId === 'plan_free' ||
+      lowerId === 'starter' ||
+      plan.priceMonthly === 0 ||
+      lowerName === 'free' ||
+      lowerName === 'starter'
+    );
+  };
+
+  const getPlanAssignedShopsCount = (plan: SaasPlan | null) => {
+    if (!plan) return 0;
+    const assignedShops = shops.filter((s) => s.planId === plan.id);
+    const activeSubs = subscriptions.filter((s) => s.planId === plan.id && s.status === 'ACTIVE');
+    const isCurrentActive = activeShop.planId === plan.id;
+    return Math.max(assignedShops.length, activeSubs.length, isCurrentActive ? 1 : 0);
+  };
+
+  const selectedPlanIsProtected = isPlanProtectedDefault(planToDelete);
+  const selectedPlanAssignedCount = getPlanAssignedShopsCount(planToDelete);
+  const selectedPlanHasSubscribers = selectedPlanAssignedCount > 0;
+  const canDeleteSelectedPlan = isAdmin && !selectedPlanIsProtected && !selectedPlanHasSubscribers;
+
+  const handleConfirmDelete = async () => {
+    if (!planToDelete || !canDeleteSelectedPlan) return;
+    setIsDeletingPlan(true);
+    setDeleteError(null);
+
+    try {
+      const res = await fetch(apiUrl(`/api/plans/${encodeURIComponent(planToDelete.id)}`), {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer admin_token_active',
+          'X-User-Role': currentUser?.role || 'ADMIN'
+        }
+      });
+
+      const data = await res.json().catch(() => ({ success: false, error: 'Failed to process server response.' }));
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Server rejected plan deletion request.');
+      }
+
+      const storeResult = deletePlan(planToDelete.id);
+      if (!storeResult.success) {
+        throw new Error(storeResult.message);
+      }
+
+      setPlanToDelete(null);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to delete plan.');
+    } finally {
+      setIsDeletingPlan(false);
+    }
+  };
+
   const handleUpgrade = async (plan: SaasPlan) => {
     setIsProcessingUpgrade(true);
     await new Promise((r) => setTimeout(r, 1000));
@@ -88,9 +191,9 @@ export const ShopSubscription: React.FC = () => {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-xl font-extrabold text-slate-900">{currentPlan.name}</h2>
-                <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                <Chip variant="success" size="sm" dot>
                   ACTIVE SUBSCRIPTION
-                </span>
+                </Chip>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">{currentPlan.tagline}</p>
             </div>
@@ -205,12 +308,51 @@ export const ShopSubscription: React.FC = () => {
 
                 <div>
                   <div className="flex items-center justify-between mb-2">
-                    <h4 className="text-sm font-bold text-slate-900">{plan.name}</h4>
-                    {isCurrent && (
-                      <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded">
-                        Active
-                      </span>
-                    )}
+                    <div className="flex items-center gap-2">
+                      <h4 className="text-sm font-bold text-slate-900">{plan.name}</h4>
+                      {isCurrent && (
+                        <Chip variant="special" size="sm" dot>
+                          Active
+                        </Chip>
+                      )}
+                    </div>
+
+                    {/* Compact three-dot actions menu */}
+                    <div className="relative">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setActiveMenuPlanId(activeMenuPlanId === plan.id ? null : plan.id);
+                        }}
+                        aria-label={`Actions for ${plan.name} plan`}
+                        title="Plan actions"
+                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+                      >
+                        <MoreVertical className="w-4 h-4" />
+                      </button>
+
+                      {activeMenuPlanId === plan.id && (
+                        <div
+                          className="absolute right-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-slate-200 py-1 z-30 text-xs animate-in fade-in zoom-in-95 duration-100"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveMenuPlanId(null);
+                              setPlanToDelete(plan);
+                              setDeleteError(null);
+                            }}
+                            className="w-full text-left px-3 py-2 flex items-center gap-2 text-rose-600 hover:bg-rose-50 font-medium cursor-pointer transition-colors"
+                            aria-label="Delete Plan"
+                          >
+                            <Trash2 className="w-3.5 h-3.5 shrink-0" />
+                            <span>Delete Plan</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
 
                   <p className="text-2xl font-extrabold font-mono text-slate-950 mb-1">
@@ -263,7 +405,166 @@ export const ShopSubscription: React.FC = () => {
         </div>
       </div>
 
-      {/* 3. UPGRADE CONFIRMATION MODAL */}
+      {/* 3. DELETE PLAN CONFIRMATION MODAL */}
+      {planToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4">
+            {/* Modal Header */}
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2 text-slate-900 font-bold">
+                <div className="w-8 h-8 rounded-lg bg-rose-50 text-rose-600 flex items-center justify-center">
+                  <Trash2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 leading-tight">Delete Plan</h3>
+                  <span className="text-[11px] font-normal text-slate-500">SaaS Plan Removal</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setPlanToDelete(null);
+                  setDeleteError(null);
+                }}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+                aria-label="Close dialog"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Plan Details Preview */}
+            <div className="p-3.5 bg-slate-50 rounded-xl border border-slate-200/70 space-y-2 text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Plan Name:</span>
+                <span className="font-bold text-slate-900 text-sm">{planToDelete.name}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Billing Rate:</span>
+                <span className="font-mono font-bold text-slate-800">
+                  {planToDelete.priceMonthly === 0 ? 'Free' : `₹${planToDelete.priceMonthly}/mo`}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500 font-medium">Hardware Quota:</span>
+                <span className="text-slate-700 font-medium">{planToDelete.printerLimit} Printer{planToDelete.printerLimit > 1 ? 's' : ''}</span>
+              </div>
+            </div>
+
+            {/* Validation & Business Rules Warnings */}
+            {!isAdmin ? (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-1.5 text-amber-900">
+                <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                  <ShieldAlert className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Platform Administrator Privileges Required</span>
+                </div>
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  Only authorized platform administrators may delete global SaaS plans. Shop owners are not permitted to remove platform-wide plans from the catalog.
+                </p>
+              </div>
+            ) : selectedPlanIsProtected ? (
+              <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs space-y-1.5 text-rose-900">
+                <div className="flex items-center gap-1.5 font-bold text-rose-800">
+                  <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>Protected Default Plan</span>
+                </div>
+                <p className="text-[11px] text-rose-700 leading-relaxed">
+                  The <strong>{planToDelete.name}</strong> plan is the platform's required default tier. Platform onboarding, fallback accounts, and new shop registrations depend on this plan. It cannot be deleted.
+                </p>
+                <div className="mt-2 pt-2 border-t border-rose-200/60 text-[11px] text-rose-800">
+                  <span className="font-semibold">Safe Alternative:</span> You can edit its hardware limits, features, or description in the Admin Console rather than deleting it.
+                </div>
+              </div>
+            ) : selectedPlanHasSubscribers ? (
+              <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl text-xs space-y-1.5 text-amber-900">
+                <div className="flex items-center gap-1.5 font-bold text-amber-800">
+                  <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                  <span>Plan Currently in Use by Active Shops</span>
+                </div>
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  This plan is currently assigned to <strong>{selectedPlanAssignedCount} shop(s)</strong> with active subscriptions{planToDelete.id === activeShop.planId ? ' (including this shop)' : ''}. Deleting an in-use plan would disrupt printing hardware allocations and active customer queues.
+                </p>
+                <div className="mt-2 pt-2 border-t border-amber-200/60 text-[11px] text-amber-800 space-y-1">
+                  <span className="font-semibold">Safe Alternative:</span> Deactivate the plan to prevent any new shops from subscribing, while allowing existing grandfathered shops to keep printing without interruption.
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  Are you sure you want to delete the plan <strong className="text-slate-900 font-bold">"{planToDelete.name}"</strong>?
+                </p>
+                <div className="p-3 bg-rose-50/70 border border-rose-200/80 rounded-xl text-xs text-rose-900 space-y-1">
+                  <div className="flex items-center gap-1.5 font-semibold text-rose-800">
+                    <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    <span>Permanent Action</span>
+                  </div>
+                  <p className="text-[11px] text-rose-700 leading-relaxed">
+                    Deleting a plan permanently removes it from the platform catalog. Historical invoices, payments, and audit logs are securely retained and will not be deleted.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Error Message Alert */}
+            {deleteError && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            {/* Modal Actions */}
+            <div className="pt-3 border-t border-slate-100 flex items-center justify-end gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={isDeletingPlan}
+                onClick={() => {
+                  setPlanToDelete(null);
+                  setDeleteError(null);
+                }}
+              >
+                Cancel
+              </Button>
+
+              {selectedPlanHasSubscribers && isAdmin && !selectedPlanIsProtected ? (
+                <Button
+                  variant="soft"
+                  size="sm"
+                  onClick={() => {
+                    archivePlan(planToDelete.id);
+                    setPlanToDelete(null);
+                  }}
+                >
+                  Archive Plan Instead
+                </Button>
+              ) : null}
+
+              <Button
+                variant="danger"
+                size="sm"
+                disabled={!canDeleteSelectedPlan || isDeletingPlan}
+                onClick={handleConfirmDelete}
+                className="gap-1.5"
+              >
+                {isDeletingPlan ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Deleting Plan...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>Delete Plan</span>
+                  </>
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 4. UPGRADE CONFIRMATION MODAL */}
       {upgradingPlanId && (
         <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4">
           {(() => {

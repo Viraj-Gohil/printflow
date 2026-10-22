@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useApp } from '../../lib/store';
 import {
   Plus,
@@ -10,23 +10,23 @@ import {
   CheckCircle2,
   AlertCircle,
   FileText,
-  DollarSign,
   ExternalLink,
-  Info,
   X,
   RefreshCw,
   Calculator,
   Pencil,
   Power
 } from 'lucide-react';
-import { PaperSize, PrintColor, PrintSides, PricingRule } from '../../types';
+import { PrintColor, PrintSides, PricingRule } from '../../types';
 import {
   STANDARD_PAPER_SIZES,
-  COLOR_MODES,
-  PRINT_SIDES,
   resolveUnitPrice
 } from '../../lib/utils/pricing';
 import { validatePositivePrice } from '../../lib/validation';
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell } from '../ui/Table';
+import { Chip } from '../ui/Chip';
+import { Button } from '../ui/Button';
+import { Drawer } from '../ui/Drawer';
 
 export const ShopPricing: React.FC = () => {
   const {
@@ -45,9 +45,10 @@ export const ShopPricing: React.FC = () => {
   // Local draft state for batch edits
   const [draftRules, setDraftRules] = useState<PricingRule[]>(shopRules);
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState<boolean>(false);
+  const [isLoading, setIsLoading] = useState<boolean>(false);
 
   // Sync draft whenever shopRules change externally if not dirty
-  React.useEffect(() => {
+  useEffect(() => {
     if (!hasUnsavedChanges) {
       setDraftRules(shopRules);
     }
@@ -60,8 +61,9 @@ export const ShopPricing: React.FC = () => {
   const [filterSides, setFilterSides] = useState<string>('ALL');
   const [filterStatus, setFilterStatus] = useState<'ALL' | 'ACTIVE' | 'INACTIVE'>('ALL');
 
-  // UI Modals & Actions
+  // UI Modals & Drawers
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showSimulatorDrawer, setShowSimulatorDrawer] = useState(false);
   const [editingRule, setEditingRule] = useState<PricingRule | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -91,7 +93,7 @@ export const ShopPricing: React.FC = () => {
   const [editIsActive, setEditIsActive] = useState<boolean>(true);
   const [editModalError, setEditModalError] = useState<string | null>(null);
 
-  // Customer Price Simulation Sandbox (Live preview)
+  // Customer Price Simulation Sandbox (Live preview in Drawer)
   const [simPaperSize, setSimPaperSize] = useState<string>('A4');
   const [simColor, setSimColor] = useState<PrintColor>('BW');
   const [simSides, setSimSides] = useState<PrintSides>('SINGLE');
@@ -131,7 +133,7 @@ export const ShopPricing: React.FC = () => {
         target.isActive ? 'Rule Activated' : 'Rule Deactivated',
         `${target.paperSize} (${target.color === 'COLOR' ? 'Color' : 'B&W'}) is now ${
           target.isActive ? 'Active' : 'Inactive'
-        }. Click Publish to apply.`,
+        }. Publish changes to apply.`,
         'info'
       );
     }
@@ -246,7 +248,7 @@ export const ShopPricing: React.FC = () => {
     setDraftRules(updated);
     setHasUnsavedChanges(true);
     setEditingRule(null);
-    showToast('Rule Updated', `Updated ${finalPaperSize} rule in draft. Click Publish to persist.`, 'success');
+    showToast('Rule Updated', `Updated ${finalPaperSize} rule in draft. Click Publish to apply.`, 'success');
   };
 
   // Save all changes
@@ -262,6 +264,7 @@ export const ShopPricing: React.FC = () => {
       }
     }
 
+    setIsLoading(true);
     // Merge updated rules for this shop back into global state
     const otherShopRules = pricingRules.filter((r) => r.shopId !== activeShop.id);
     const updatedShopRules = draftRules.map((r) => ({
@@ -272,7 +275,8 @@ export const ShopPricing: React.FC = () => {
 
     savePricingRules(finalAllRules);
     setHasUnsavedChanges(false);
-    setSuccessBanner('Pricing rules published! All customer kiosk checkouts are now using these updated rates.');
+    setIsLoading(false);
+    setSuccessBanner('Pricing rules published. Mobile checkout is now using these updated rates.');
     showToast('Rates Saved', 'Customer order price calculator updated with new rates.', 'success');
     setTimeout(() => setSuccessBanner(null), 5000);
   };
@@ -374,7 +378,7 @@ export const ShopPricing: React.FC = () => {
     setCustomHeight('6');
     setNewPrice('2.50');
     setNewIsActive(true);
-    showToast('Rule Added', `Created ${finalPaperSize} rule at ₹${parseFloat(newPrice).toFixed(2)}/page. Remember to Save Changes.`, 'success');
+    showToast('Rule Added', `Created ${finalPaperSize} rule at ₹${parseFloat(newPrice).toFixed(2)}/page. Remember to publish changes.`, 'success');
   };
 
   // Delete rule
@@ -437,542 +441,588 @@ export const ShopPricing: React.FC = () => {
   }, [simPages, simCopies, simUnitPrice]);
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-12 font-normal text-slate-800">
-      {/* Top Banner / Actions Bar */}
-      <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/90 shadow-2xs flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+    <div className="space-y-4 max-w-7xl mx-auto pb-10 text-slate-800">
+      {/* 1. COMPACT PAGE HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
         <div>
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-700 flex items-center justify-center">
-              <DollarSign className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 className="text-base sm:text-lg font-semibold text-slate-900 tracking-tight">
-                Dynamic Print Pricing Management
-              </h2>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Define custom rates across multiple paper sizes, duplex modes, and color options.
-              </p>
-            </div>
-          </div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+            Pricing Rules
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5 leading-relaxed">
+            Manage per-page rates for paper sizes, color modes, and duplex printing.
+          </p>
         </div>
 
-        {/* Global Save / Discard / Add buttons */}
+        {/* Primary and Secondary Header Actions */}
         <div className="flex items-center gap-2 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setShowAddModal(true)}
-            className="px-4 py-2 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Add Pricing Rule</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={handleApplyDefaults}
-            className="px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-xl transition-colors cursor-pointer flex items-center gap-1.5"
-            title="Load standard Indian xerox market prices"
-          >
-            <RefreshCw className="w-3.5 h-3.5 text-slate-500" />
-            <span className="hidden sm:inline">Load Market Rates</span>
-          </button>
-
           {hasUnsavedChanges && (
             <>
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={handleDiscardChanges}
-                className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 transition-colors cursor-pointer flex items-center gap-1.5"
+                disabled={isLoading}
               >
-                <RotateCcw className="w-3.5 h-3.5" />
+                <RotateCcw className="w-3.5 h-3.5 text-slate-500" />
                 <span>Discard</span>
-              </button>
-
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="solid"
+                size="sm"
                 onClick={handleSaveAll}
-                className="px-5 py-2 text-xs font-medium bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+                disabled={isLoading}
+                className="bg-emerald-600 hover:bg-emerald-700"
               >
-                <Save className="w-4 h-4" />
+                <Save className="w-3.5 h-3.5" />
                 <span>Publish Rates ({draftRules.length})</span>
-              </button>
+              </Button>
             </>
           )}
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setShowSimulatorDrawer(true)}
+            title="Open customer order pricing preview"
+          >
+            <Calculator className="w-3.5 h-3.5 text-blue-600" />
+            <span>Preview Customer Pricing</span>
+          </Button>
+
+          <Button
+            variant="solid"
+            size="sm"
+            onClick={() => setShowAddModal(true)}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            <span>Add Pricing Rule</span>
+          </Button>
         </div>
       </div>
 
-      {/* Validation or Success alerts */}
+      {/* 2. ALERTS / FEEDBACK BANNERS */}
       {validationError && (
-        <div className="p-4 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-center gap-2.5">
-          <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-          <span className="font-normal">{validationError}</span>
+        <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{validationError}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setValidationError(null)}
+            className="text-red-400 hover:text-red-600 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
       {successBanner && (
-        <div className="p-4 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2.5">
-          <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-          <span className="font-normal">{successBanner}</span>
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center justify-between gap-2.5">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{successBanner}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setSuccessBanner(null)}
+            className="text-emerald-400 hover:text-emerald-600 p-1"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
 
-      {/* Two Column Section: Left = Pricing Rules Table (65%) | Right = Live Calculator & Quick Preview (35%) */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Column: Pricing Rules Management (8 cols on lg) */}
-        <div className="lg:col-span-8 space-y-4">
-          {/* Filter Bar */}
-          <div className="bg-white p-4 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              {/* Search */}
-              <div className="relative flex-1">
-                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  placeholder="Search by paper name or price (e.g. A4, 2.50)..."
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-8 pr-3 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-normal"
-                />
-                {searchQuery && (
-                  <button
-                    type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
-
-              {/* Status Tabs */}
-              <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl text-xs">
-                {(['ALL', 'ACTIVE', 'INACTIVE'] as const).map((st) => (
-                  <button
-                    key={st}
-                    type="button"
-                    onClick={() => setFilterStatus(st)}
-                    className={`px-3 py-1 rounded-lg font-medium transition-all cursor-pointer text-[11px] ${
-                      filterStatus === st
-                        ? 'bg-white text-slate-900 shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-900'
-                    }`}
-                  >
-                    {st === 'ALL' ? 'All Rules' : st === 'ACTIVE' ? 'Active' : 'Inactive'}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Sub-Filters: Paper Size, Color, Sides */}
-            <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-100 text-xs">
-              <span className="text-[11px] font-medium text-slate-400 uppercase tracking-wider">Filter:</span>
-
-              {/* Paper Size dropdown */}
-              <select
-                value={filterPaperSize}
-                onChange={(e) => setFilterPaperSize(e.target.value)}
-                className="px-2.5 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-normal cursor-pointer"
+      {/* 3. TOOLBAR: SEARCH & FILTERS */}
+      <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-2.5">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+          {/* Search Input */}
+          <div className="relative flex-1">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Search paper size or price (e.g. A4, 2.50)..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-7 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-lg focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 font-normal"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5 cursor-pointer"
+                aria-label="Clear search query"
               >
-                <option value="ALL">All Paper Sizes ({distinctShopSizes.length})</option>
+                <X className="w-3 h-3" />
+              </button>
+            )}
+          </div>
+
+          {/* Status Segmented Control */}
+          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg text-xs shrink-0">
+            {(['ALL', 'ACTIVE', 'INACTIVE'] as const).map((st) => (
+              <button
+                key={st}
+                type="button"
+                onClick={() => setFilterStatus(st)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-medium transition-colors cursor-pointer ${
+                  filterStatus === st
+                    ? 'bg-white text-slate-900 shadow-2xs font-semibold'
+                    : 'text-slate-500 hover:text-slate-900'
+                }`}
+              >
+                {st === 'ALL' ? 'All Rules' : st === 'ACTIVE' ? 'Active' : 'Inactive'}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Dropdown Filters Row */}
+        <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-slate-100 text-xs">
+          <span className="text-[11px] font-semibold text-slate-400 uppercase tracking-[0.08em] font-mono">
+            Filter:
+          </span>
+
+          {/* Paper Size filter */}
+          <select
+            value={filterPaperSize}
+            onChange={(e) => setFilterPaperSize(e.target.value)}
+            className="px-2.5 py-1 text-xs bg-slate-50 border border-slate-200 rounded-md text-slate-700 font-normal cursor-pointer focus:bg-white focus:outline-none"
+          >
+            <option value="ALL">All Paper Sizes ({distinctShopSizes.length})</option>
+            {distinctShopSizes.map((sz) => (
+              <option key={sz} value={sz}>
+                {sz}
+              </option>
+            ))}
+          </select>
+
+          {/* Color filter */}
+          <select
+            value={filterColor}
+            onChange={(e) => setFilterColor(e.target.value)}
+            className="px-2.5 py-1 text-xs bg-slate-50 border border-slate-200 rounded-md text-slate-700 font-normal cursor-pointer focus:bg-white focus:outline-none"
+          >
+            <option value="ALL">All Color Modes</option>
+            <option value="BW">Black & White</option>
+            <option value="COLOR">Color</option>
+          </select>
+
+          {/* Sides filter */}
+          <select
+            value={filterSides}
+            onChange={(e) => setFilterSides(e.target.value)}
+            className="px-2.5 py-1 text-xs bg-slate-50 border border-slate-200 rounded-md text-slate-700 font-normal cursor-pointer focus:bg-white focus:outline-none"
+          >
+            <option value="ALL">All Sides</option>
+            <option value="SINGLE">Single Sided</option>
+            <option value="DOUBLE">Duplex (Double Sided)</option>
+          </select>
+
+          {/* Reset Filters */}
+          {(filterPaperSize !== 'ALL' || filterColor !== 'ALL' || filterSides !== 'ALL' || searchQuery || filterStatus !== 'ALL') && (
+            <button
+              type="button"
+              onClick={() => {
+                setFilterPaperSize('ALL');
+                setFilterColor('ALL');
+                setFilterSides('ALL');
+                setFilterStatus('ALL');
+                setSearchQuery('');
+              }}
+              className="text-[11px] font-medium text-blue-600 hover:text-blue-800 ml-auto cursor-pointer"
+            >
+              Reset Filters
+            </button>
+          )}
+
+          <div className="ml-auto hidden sm:flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleApplyDefaults}
+              className="text-[11px] text-slate-500 hover:text-slate-800 flex items-center gap-1 cursor-pointer transition-colors"
+              title="Reset rates to standard Xerox market defaults"
+            >
+              <RefreshCw className="w-3 h-3 text-slate-400" />
+              <span>Load Market Rates</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* 4. PRICING RULES TABLE */}
+      <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Paper Size</TableHead>
+              <TableHead>Color Mode</TableHead>
+              <TableHead>Print Sides</TableHead>
+              <TableHead className="text-right">Price / Page</TableHead>
+              <TableHead className="text-center">Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filteredRules.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={6} className="py-12 text-center text-slate-400">
+                  <FileText className="w-8 h-8 mx-auto mb-2 text-slate-300" />
+                  <p className="font-semibold text-slate-700 text-sm">No pricing rules found</p>
+                  <p className="text-xs text-slate-400 mt-1 max-w-sm mx-auto">
+                    {searchQuery || filterPaperSize !== 'ALL' || filterColor !== 'ALL' || filterSides !== 'ALL' || filterStatus !== 'ALL'
+                      ? 'No rules match your active filters. Try clearing your search parameters.'
+                      : 'Configure your first per-page rate to start accepting customer print jobs.'}
+                  </p>
+                  <div className="mt-4 flex items-center justify-center gap-2">
+                    {(searchQuery || filterPaperSize !== 'ALL' || filterColor !== 'ALL' || filterSides !== 'ALL' || filterStatus !== 'ALL') ? (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setFilterPaperSize('ALL');
+                          setFilterColor('ALL');
+                          setFilterSides('ALL');
+                          setFilterStatus('ALL');
+                          setSearchQuery('');
+                        }}
+                      >
+                        Clear Filters
+                      </Button>
+                    ) : (
+                      <Button
+                        variant="solid"
+                        size="sm"
+                        onClick={() => setShowAddModal(true)}
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>Add Pricing Rule</span>
+                      </Button>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : (
+              filteredRules.map((rule) => {
+                const isActive = rule.isActive ?? true;
+                const check = validatePositivePrice(rule.pricePerPage, 0.5, 500);
+                const isInvalid = !check.isValid;
+
+                return (
+                  <TableRow
+                    key={rule.id}
+                    className={!isActive ? 'opacity-65 bg-slate-50/40' : undefined}
+                  >
+                    {/* Paper Size */}
+                    <TableCell>
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-slate-900 text-xs flex items-center gap-1.5">
+                          {rule.paperSize}
+                          {rule.customWidth && rule.customHeight && (
+                            <Chip variant="special" size="sm">
+                              {rule.customWidth}×{rule.customHeight} {rule.unit || 'in'}
+                            </Chip>
+                          )}
+                        </span>
+                        <span className="text-[10px] text-slate-400 font-mono mt-0.5">
+                          {STANDARD_PAPER_SIZES.find((s) => s.id === rule.paperSize)?.dimensions ||
+                            (rule.customWidth ? `${rule.customWidth} × ${rule.customHeight} ${rule.unit || 'in'}` : 'Custom Dimensions')}
+                        </span>
+                      </div>
+                    </TableCell>
+
+                    {/* Color Mode */}
+                    <TableCell>
+                      <Chip
+                        variant={rule.color === 'COLOR' ? 'warning' : 'default'}
+                        size="sm"
+                      >
+                        {rule.color === 'COLOR' ? 'Color' : 'Black & White'}
+                      </Chip>
+                    </TableCell>
+
+                    {/* Print Sides */}
+                    <TableCell>
+                      <Chip
+                        variant={rule.sides === 'DOUBLE' ? 'special' : 'default'}
+                        size="sm"
+                      >
+                        {rule.sides === 'DOUBLE' ? 'Duplex (2-Sided)' : 'Single Sided'}
+                      </Chip>
+                    </TableCell>
+
+                    {/* Price / Page */}
+                    <TableCell className="text-right">
+                      <div className="inline-flex flex-col items-end gap-0.5">
+                        <div className="inline-flex items-center gap-1 bg-white px-2 py-1 rounded-md border border-slate-200 shadow-2xs focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
+                          <span className="text-slate-400 text-xs font-mono">₹</span>
+                          <input
+                            type="number"
+                            step="0.25"
+                            min="0.5"
+                            max="500"
+                            value={rule.pricePerPage}
+                            onChange={(e) => handlePriceChange(rule.id, e.target.value)}
+                            className="w-16 text-right font-mono font-semibold text-slate-900 bg-transparent focus:outline-none text-xs tabular-nums"
+                            aria-label={`Price per page for ${rule.paperSize}`}
+                          />
+                        </div>
+                        {isInvalid && (
+                          <span className="text-[9px] text-red-600 font-normal">{check.error}</span>
+                        )}
+                      </div>
+                    </TableCell>
+
+                    {/* Status Toggle */}
+                    <TableCell className="text-center">
+                      <button
+                        type="button"
+                        onClick={() => handleToggleStatus(rule.id)}
+                        className="cursor-pointer transition-transform active:scale-95 inline-flex"
+                        title={isActive ? 'Click to deactivate rule' : 'Click to activate rule'}
+                        aria-label={`Toggle active status for ${rule.paperSize}`}
+                      >
+                        <Chip
+                          variant={isActive ? 'success' : 'muted'}
+                          size="sm"
+                          dot
+                        >
+                          {isActive ? 'Active' : 'Inactive'}
+                        </Chip>
+                      </button>
+                    </TableCell>
+
+                    {/* Actions */}
+                    <TableCell className="text-right">
+                      <div className="inline-flex items-center gap-1 justify-end">
+                        <button
+                          type="button"
+                          onClick={() => handleOpenEdit(rule)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                          title="Edit Rule Parameters"
+                          aria-label={`Edit ${rule.paperSize} rule`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDuplicateRule(rule)}
+                          className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
+                          title="Duplicate Rule"
+                          aria-label={`Duplicate ${rule.paperSize} rule`}
+                        >
+                          <Copy className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleStatus(rule.id)}
+                          className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
+                            isActive
+                              ? 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
+                              : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
+                          }`}
+                          title={isActive ? 'Deactivate rule' : 'Activate rule'}
+                          aria-label={`Power toggle for ${rule.paperSize}`}
+                        >
+                          <Power className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteConfirmId(rule.id)}
+                          className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                          title="Delete Rule"
+                          aria-label={`Delete ${rule.paperSize} rule`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })
+            )}
+          </TableBody>
+        </Table>
+
+        {/* Table Footer */}
+        <div className="p-3 bg-slate-50/80 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between text-xs text-slate-500 gap-2 font-mono">
+          <span>
+            Showing <strong className="text-slate-700 font-semibold">{filteredRules.length}</strong> of{' '}
+            <strong className="text-slate-700 font-semibold">{draftRules.length}</strong> configured rules
+          </span>
+          <div className="flex items-center gap-3">
+            <span>
+              Minimum Order:{' '}
+              <strong className="text-slate-700 font-semibold">₹{activeShop.minimumOrder || 5}</strong>
+            </span>
+            <span aria-hidden="true" className="text-slate-300">·</span>
+            <span>All amounts in INR (₹)</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 5. CUSTOMER PRICING SIMULATOR DRAWER */}
+      <Drawer
+        isOpen={showSimulatorDrawer}
+        onClose={() => setShowSimulatorDrawer(false)}
+        title="Customer Pricing Simulator"
+        description="Simulate how your active pricing rules calculate the order total for customers."
+        width="max-w-md"
+      >
+        <div className="space-y-4 text-xs">
+          {/* Controls */}
+          <div className="space-y-3 p-4 bg-slate-50 rounded-xl border border-slate-200">
+            {/* Paper Size */}
+            <div>
+              <label className="text-[11px] font-semibold text-slate-700 block mb-1 font-mono uppercase tracking-[0.06em]">
+                Paper Size
+              </label>
+              <select
+                value={simPaperSize}
+                onChange={(e) => setSimPaperSize(e.target.value)}
+                className="w-full px-3 py-2 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              >
                 {distinctShopSizes.map((sz) => (
                   <option key={sz} value={sz}>
                     {sz}
                   </option>
                 ))}
               </select>
-
-              {/* Color dropdown */}
-              <select
-                value={filterColor}
-                onChange={(e) => setFilterColor(e.target.value)}
-                className="px-2.5 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-normal cursor-pointer"
-              >
-                <option value="ALL">All Color Modes</option>
-                <option value="BW">Black & White</option>
-                <option value="COLOR">Color</option>
-              </select>
-
-              {/* Sides dropdown */}
-              <select
-                value={filterSides}
-                onChange={(e) => setFilterSides(e.target.value)}
-                className="px-2.5 py-1 text-xs bg-slate-50 border border-slate-200 rounded-lg text-slate-700 font-normal cursor-pointer"
-              >
-                <option value="ALL">All Sides</option>
-                <option value="SINGLE">Single Sided</option>
-                <option value="DOUBLE">Duplex (Double Sided)</option>
-              </select>
-
-              {(filterPaperSize !== 'ALL' || filterColor !== 'ALL' || filterSides !== 'ALL' || searchQuery) && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFilterPaperSize('ALL');
-                    setFilterColor('ALL');
-                    setFilterSides('ALL');
-                    setSearchQuery('');
-                  }}
-                  className="text-[11px] font-medium text-blue-600 hover:text-blue-800 ml-auto cursor-pointer"
-                >
-                  Clear Filters
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Pricing Rules Table Card */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50/80 text-slate-500 font-medium border-b border-slate-200">
-                  <tr>
-                    <th className="py-3 px-4">Paper Size</th>
-                    <th className="py-3 px-3">Color Mode</th>
-                    <th className="py-3 px-3">Print Sides</th>
-                    <th className="py-3 px-3 text-right">Price / Page</th>
-                    <th className="py-3 px-3 text-center">Status</th>
-                    <th className="py-3 px-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {filteredRules.length === 0 ? (
-                    <tr>
-                      <td colSpan={6} className="py-12 text-center text-slate-400">
-                        <FileText className="w-8 h-8 mx-auto mb-2 text-slate-300" />
-                        <p className="font-medium text-slate-600">No pricing rules found matching filters</p>
-                        <p className="text-[11px] text-slate-400 mt-0.5">Try clearing your search or add a new pricing rule.</p>
-                      </td>
-                    </tr>
-                  ) : (
-                    filteredRules.map((rule) => {
-                      const isActive = rule.isActive ?? true;
-                      const check = validatePositivePrice(rule.pricePerPage, 0.5, 500);
-                      const isInvalid = !check.isValid;
-
-                      return (
-                        <tr
-                          key={rule.id}
-                          className={`transition-colors hover:bg-slate-50/70 ${
-                            !isActive ? 'opacity-65 bg-slate-50/30' : ''
-                          }`}
-                        >
-                          {/* Paper Size & Dimensions */}
-                          <td className="py-3 px-4">
-                            <div className="flex flex-col">
-                              <span className="font-medium text-slate-900 text-[13px] flex items-center gap-1.5">
-                                {rule.paperSize}
-                                {rule.customWidth && rule.customHeight && (
-                                  <span className="text-[10px] px-1.5 py-0.2 bg-purple-50 text-purple-700 rounded font-normal border border-purple-200">
-                                    {rule.customWidth}×{rule.customHeight} {rule.unit || 'in'}
-                                  </span>
-                                )}
-                              </span>
-                              <span className="text-[10px] text-slate-400">
-                                {STANDARD_PAPER_SIZES.find((s) => s.id === rule.paperSize)?.dimensions ||
-                                  (rule.customWidth ? `${rule.customWidth} × ${rule.customHeight} ${rule.unit}` : 'Custom Size')}
-                              </span>
-                            </div>
-                          </td>
-
-                          {/* Color Mode */}
-                          <td className="py-3 px-3">
-                            <span
-                              className={`inline-flex px-2 py-0.5 rounded-md text-[10px] font-medium border ${
-                                rule.color === 'COLOR'
-                                  ? 'bg-amber-50 text-amber-800 border-amber-200'
-                                  : 'bg-slate-100 text-slate-700 border-slate-200'
-                              }`}
-                            >
-                              {rule.color === 'COLOR' ? 'Color' : 'Black & White'}
-                            </span>
-                          </td>
-
-                          {/* Sides */}
-                          <td className="py-3 px-3 text-slate-700 font-normal">
-                            {rule.sides === 'DOUBLE' ? (
-                              <span className="inline-flex items-center gap-1 text-slate-800">
-                                <span>Double Sided</span>
-                                <span className="text-[10px] text-blue-600 font-mono">(Duplex)</span>
-                              </span>
-                            ) : (
-                              <span>Single Sided</span>
-                            )}
-                          </td>
-
-                          {/* Price Per Page (Editable input) */}
-                          <td className="py-3 px-3 text-right">
-                            <div className="inline-flex flex-col items-end gap-0.5">
-                              <div className="inline-flex items-center gap-1 bg-white px-2 py-1 rounded-lg border border-slate-200 shadow-2xs focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500">
-                                <span className="text-slate-400 text-xs">₹</span>
-                                <input
-                                  type="number"
-                                  step="0.25"
-                                  min="0.5"
-                                  max="500"
-                                  value={rule.pricePerPage}
-                                  onChange={(e) => handlePriceChange(rule.id, e.target.value)}
-                                  className="w-16 text-right font-mono font-medium text-slate-900 bg-transparent focus:outline-none text-xs"
-                                />
-                              </div>
-                              {isInvalid && (
-                                <span className="text-[9px] text-red-600 font-normal">{check.error}</span>
-                              )}
-                            </div>
-                          </td>
-
-                          {/* Active / Inactive Button */}
-                          <td className="py-3 px-3 text-center">
-                            <button
-                              type="button"
-                              onClick={() => handleToggleStatus(rule.id)}
-                              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-medium transition-all cursor-pointer border ${
-                                isActive
-                                  ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100/80 shadow-2xs'
-                                  : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200/80'
-                              }`}
-                              title={isActive ? 'Click to make Inactive' : 'Click to make Active'}
-                            >
-                              <span
-                                className={`w-1.5 h-1.5 rounded-full ${
-                                  isActive ? 'bg-emerald-500 ring-2 ring-emerald-200' : 'bg-slate-400'
-                                }`}
-                              />
-                              <span>{isActive ? 'Active' : 'Inactive'}</span>
-                            </button>
-                          </td>
-
-                          {/* Actions: Edit, Duplicate, Toggle, Delete */}
-                          <td className="py-3 px-3 text-right">
-                            <div className="inline-flex items-center gap-1 justify-end">
-                              <button
-                                type="button"
-                                onClick={() => handleOpenEdit(rule)}
-                                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                                title="Edit Rule"
-                              >
-                                <Pencil className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleDuplicateRule(rule)}
-                                className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-colors cursor-pointer"
-                                title="Duplicate Rule"
-                              >
-                                <Copy className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleToggleStatus(rule.id)}
-                                className={`p-1.5 rounded-lg transition-colors cursor-pointer ${
-                                  isActive
-                                    ? 'text-slate-400 hover:text-amber-600 hover:bg-amber-50'
-                                    : 'text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50'
-                                }`}
-                                title={isActive ? 'Make Inactive' : 'Make Active'}
-                              >
-                                <Power className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => setDeleteConfirmId(rule.id)}
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                                title="Delete Rule"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
             </div>
 
-            {/* Table Footer info */}
-            <div className="p-3.5 bg-slate-50/90 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between text-xs text-slate-500 gap-2 font-normal">
-              <span>
-                Showing <span className="font-medium text-slate-700">{filteredRules.length}</span> of{' '}
-                <span className="font-medium text-slate-700">{draftRules.length}</span> configured rules
-              </span>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] text-slate-400">
-                  Minimum Shop Checkout:{' '}
-                  <span className="font-medium text-slate-700">₹{activeShop.minimumOrder || 5}</span>
-                </span>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Column: Live Price Simulator & Counter Quick Guide (4 cols on lg) */}
-        <div className="lg:col-span-4 space-y-5">
-          {/* Live Customer Price Preview Card */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-4">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-700 flex items-center justify-center">
-                  <Calculator className="w-4 h-4" />
-                </div>
-                <h3 className="text-sm font-semibold text-slate-900">Customer Price Simulator</h3>
-              </div>
-              <span className="text-[10px] uppercase font-medium tracking-wider bg-emerald-50 text-emerald-700 px-2 py-0.5 rounded border border-emerald-200">
-                Live Engine
-              </span>
-            </div>
-
-            <p className="text-xs text-slate-500">
-              Verify how your active rules calculate order prices when customers order at the counter.
-            </p>
-
-            {/* Simulator Inputs */}
-            <div className="space-y-3 pt-1 text-xs">
-              {/* Paper Size */}
+            {/* Color & Sides */}
+            <div className="grid grid-cols-2 gap-2.5">
               <div>
-                <label className="text-[11px] font-medium text-slate-600 block mb-1">Paper Size</label>
+                <label className="text-[11px] font-semibold text-slate-700 block mb-1 font-mono uppercase tracking-[0.06em]">
+                  Color Mode
+                </label>
                 <select
-                  value={simPaperSize}
-                  onChange={(e) => setSimPaperSize(e.target.value)}
-                  className="w-full px-3 py-2 text-xs bg-slate-50 border border-slate-200 rounded-xl font-normal text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  value={simColor}
+                  onChange={(e) => setSimColor(e.target.value as PrintColor)}
+                  className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 font-medium cursor-pointer"
                 >
-                  {distinctShopSizes.map((sz) => (
-                    <option key={sz} value={sz}>
-                      {sz}
-                    </option>
-                  ))}
+                  <option value="BW">Black & White</option>
+                  <option value="COLOR">Color</option>
                 </select>
               </div>
 
-              {/* Color & Sides */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[11px] font-medium text-slate-600 block mb-1">Color Mode</label>
-                  <select
-                    value={simColor}
-                    onChange={(e) => setSimColor(e.target.value as PrintColor)}
-                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl font-normal text-slate-800 cursor-pointer"
-                  >
-                    <option value="BW">Black & White</option>
-                    <option value="COLOR">Color</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="text-[11px] font-medium text-slate-600 block mb-1">Print Sides</label>
-                  <select
-                    value={simSides}
-                    onChange={(e) => setSimSides(e.target.value as PrintSides)}
-                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl font-normal text-slate-800 cursor-pointer"
-                  >
-                    <option value="SINGLE">Single Sided</option>
-                    <option value="DOUBLE">Duplex</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Pages & Copies */}
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-[11px] font-medium text-slate-600 block mb-1">Document Pages</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={simPages}
-                    onChange={(e) => setSimPages(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl font-mono font-medium text-slate-800"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-medium text-slate-600 block mb-1">Copies</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={simCopies}
-                    onChange={(e) => setSimCopies(Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-full px-2.5 py-1.5 text-xs bg-slate-50 border border-slate-200 rounded-xl font-mono font-medium text-slate-800"
-                  />
-                </div>
+              <div>
+                <label className="text-[11px] font-semibold text-slate-700 block mb-1 font-mono uppercase tracking-[0.06em]">
+                  Print Sides
+                </label>
+                <select
+                  value={simSides}
+                  onChange={(e) => setSimSides(e.target.value as PrintSides)}
+                  className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg text-slate-800 font-medium cursor-pointer"
+                >
+                  <option value="SINGLE">Single Sided</option>
+                  <option value="DOUBLE">Duplex (2-Sided)</option>
+                </select>
               </div>
             </div>
 
-            {/* Calculated Result Breakdown */}
-            <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 space-y-2">
-              <div className="flex items-center justify-between text-xs text-slate-600">
-                <span>Unit Rate Resolved:</span>
-                <span className="font-mono font-medium text-slate-900">₹{simUnitPrice.toFixed(2)} / page</span>
+            {/* Pages & Copies */}
+            <div className="grid grid-cols-2 gap-2.5">
+              <div>
+                <label className="text-[11px] font-semibold text-slate-700 block mb-1 font-mono uppercase tracking-[0.06em]">
+                  Document Pages
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={simPages}
+                  onChange={(e) => setSimPages(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono font-semibold text-slate-800 tabular-nums"
+                />
               </div>
-              <div className="flex items-center justify-between text-xs text-slate-600">
-                <span>Total Billable Sheets:</span>
-                <span className="font-mono font-medium text-slate-900">{simPages * simCopies} pages</span>
+
+              <div>
+                <label className="text-[11px] font-semibold text-slate-700 block mb-1 font-mono uppercase tracking-[0.06em]">
+                  Copies
+                </label>
+                <input
+                  type="number"
+                  min="1"
+                  value={simCopies}
+                  onChange={(e) => setSimCopies(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-200 rounded-lg font-mono font-semibold text-slate-800 tabular-nums"
+                />
               </div>
-              <div className="flex items-center justify-between text-xs text-slate-600">
-                <span>Platform Convenience Fee:</span>
-                <span className="font-mono font-medium text-slate-900">₹2.00</span>
+            </div>
+          </div>
+
+          {/* Breakdown Card */}
+          <div className="p-4 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-2.5">
+            <h4 className="text-xs font-semibold text-slate-900 font-mono uppercase tracking-[0.08em]">
+              Checkout Breakdown
+            </h4>
+
+            <div className="space-y-2 text-xs divide-y divide-slate-100">
+              <div className="flex items-center justify-between pt-1">
+                <span className="text-slate-600">Resolved Unit Rate:</span>
+                <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                  ₹{simUnitPrice.toFixed(2)} / page
+                </span>
               </div>
-              <div className="pt-2 border-t border-slate-200 flex items-center justify-between">
-                <span className="text-xs font-medium text-slate-900">Customer Checkout Total:</span>
-                <span className="text-base font-semibold font-mono text-emerald-700">
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-slate-600">Total Billable Sheets:</span>
+                <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                  {simPages * simCopies} pages
+                </span>
+              </div>
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-slate-600">Subtotal:</span>
+                <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                  ₹{simDocumentTotal.toFixed(2)}
+                </span>
+              </div>
+              <div className="flex items-center justify-between pt-2">
+                <span className="text-slate-600">Platform Convenience Fee:</span>
+                <span className="font-mono font-semibold text-slate-900 tabular-nums">
+                  ₹2.00
+                </span>
+              </div>
+              <div className="pt-3 border-t-2 border-slate-200 flex items-center justify-between">
+                <span className="font-bold text-slate-900 text-sm">Customer Checkout Total:</span>
+                <span className="text-lg font-bold font-mono text-emerald-700 tabular-nums">
                   ₹{(simDocumentTotal + 2).toFixed(2)}
                 </span>
               </div>
             </div>
-
-            <button
-              type="button"
-              onClick={() => navigate(`/s/${activeShop.slug}`)}
-              className="w-full py-2 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100 rounded-xl border border-blue-200 transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Test In Customer Portal</span>
-            </button>
           </div>
 
-          {/* Pricing Best Practices & Guidelines Card */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/90 shadow-2xs space-y-3">
-            <div className="flex items-center gap-2">
-              <Info className="w-4 h-4 text-blue-600 shrink-0" />
-              <h4 className="text-xs font-semibold text-slate-900">Counter Pricing Best Practices</h4>
-            </div>
-            <ul className="text-xs text-slate-600 space-y-2 leading-relaxed font-normal">
-              <li className="flex items-start gap-1.5">
-                <span className="text-emerald-500">✓</span>
-                <span>
-                  <span className="font-medium text-slate-800">Duplex Discount:</span> Double-sided is usually priced at ₹1.50/page vs ₹2.00 single to encourage paper saving.
-                </span>
-              </li>
-              <li className="flex items-start gap-1.5">
-                <span className="text-emerald-500">✓</span>
-                <span>
-                  <span className="font-medium text-slate-800">Minimum Order:</span> Protect counter staff time with a ₹5–₹10 minimum fee configured in Shop Profile.
-                </span>
-              </li>
-              <li className="flex items-start gap-1.5">
-                <span className="text-emerald-500">✓</span>
-                <span>
-                  <span className="font-medium text-slate-800">Architectural Drawings (A1/A0):</span> Usually charged at ₹40 to ₹80 per sheet for engineering shops.
-                </span>
-              </li>
-            </ul>
-          </div>
+          {/* Quick link to test in customer view */}
+          <Button
+            variant="soft"
+            size="md"
+            onClick={() => {
+              setShowSimulatorDrawer(false);
+              navigate(`/s/${activeShop.slug}`);
+            }}
+            className="w-full"
+          >
+            <ExternalLink className="w-3.5 h-3.5" />
+            <span>Open Customer Upload Page</span>
+          </Button>
         </div>
-      </div>
+      </Drawer>
 
-      {/* MODAL: Add New Pricing Rule */}
+      {/* 6. ADD PRICING RULE MODAL */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
                   <Plus className="w-4 h-4" />
                 </div>
-                <h3 className="text-base font-semibold text-slate-900">Add Print Pricing Rule</h3>
+                <h3 className="text-base font-bold text-slate-900">Add Pricing Rule</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setShowAddModal(false)}
                 className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                aria-label="Close add rule modal"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -985,14 +1035,14 @@ export const ShopPricing: React.FC = () => {
               </div>
             )}
 
-            <form onSubmit={handleAddNewRule} className="space-y-4 text-xs font-normal">
+            <form onSubmit={handleAddNewRule} className="space-y-4 text-xs">
               {/* Paper Size selector */}
               <div>
-                <label className="text-xs font-medium text-slate-700 block mb-1">Paper Size</label>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Paper Size</label>
                 <select
                   value={newSizeSelection}
                   onChange={(e) => setNewSizeSelection(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-normal focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                 >
                   <optgroup label="Standard Office & Documents">
                     <option value="A4">A4 (210 × 297 mm)</option>
@@ -1018,7 +1068,7 @@ export const ShopPricing: React.FC = () => {
               {newSizeSelection === 'Custom Size' && (
                 <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
                   <div>
-                    <label className="text-[11px] font-medium text-slate-700 block mb-1">
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">
                       Paper Name (e.g. Photo 4x6, Certificate, ID Card)
                     </label>
                     <input
@@ -1026,38 +1076,38 @@ export const ShopPricing: React.FC = () => {
                       placeholder="e.g. Glossy 4x6 Photo"
                       value={customPaperName}
                       onChange={(e) => setCustomPaperName(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-normal text-slate-900"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-900"
                     />
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <label className="text-[11px] font-medium text-slate-700 block mb-1">Width</label>
+                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Width</label>
                       <input
                         type="number"
                         step="0.1"
                         min="1"
                         value={customWidth}
                         onChange={(e) => setCustomWidth(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono font-normal"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-medium text-slate-700 block mb-1">Height</label>
+                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Height</label>
                       <input
                         type="number"
                         step="0.1"
                         min="1"
                         value={customHeight}
                         onChange={(e) => setCustomHeight(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono font-normal"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-medium text-slate-700 block mb-1">Unit</label>
+                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Unit</label>
                       <select
                         value={customUnit}
                         onChange={(e) => setCustomUnit(e.target.value as 'mm' | 'inch')}
-                        className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg font-normal"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono cursor-pointer"
                       >
                         <option value="inch">Inches (in)</option>
                         <option value="mm">Millimeters (mm)</option>
@@ -1067,26 +1117,25 @@ export const ShopPricing: React.FC = () => {
                 </div>
               )}
 
-              {/* Color Mode & Print Sides */}
+              {/* Color Mode & Sides */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-slate-700 block mb-1">Color Mode</label>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Color Mode</label>
                   <select
                     value={newColorMode}
                     onChange={(e) => setNewColorMode(e.target.value as PrintColor)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-normal text-slate-900 cursor-pointer"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 cursor-pointer"
                   >
                     <option value="BW">Black & White</option>
                     <option value="COLOR">Full Color</option>
                   </select>
                 </div>
-
                 <div>
-                  <label className="text-xs font-medium text-slate-700 block mb-1">Print Sides</label>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Print Sides</label>
                   <select
                     value={newSides}
                     onChange={(e) => setNewSides(e.target.value as PrintSides)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-normal text-slate-900 cursor-pointer"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 cursor-pointer"
                   >
                     <option value="SINGLE">Single Sided</option>
                     <option value="DOUBLE">Double Sided (Duplex)</option>
@@ -1094,94 +1143,65 @@ export const ShopPricing: React.FC = () => {
                 </div>
               </div>
 
-              {/* Price per page */}
+              {/* Price Per Page */}
               <div>
-                <label className="text-xs font-medium text-slate-700 block mb-1">
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
                   Price Per Page (₹ INR)
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">₹</span>
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono">₹</span>
                   <input
                     type="number"
                     step="0.25"
                     min="0.5"
                     max="500"
-                    placeholder="2.00"
+                    placeholder="2.50"
                     value={newPrice}
                     onChange={(e) => setNewPrice(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-medium text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-semibold text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 tabular-nums"
                   />
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">Acceptable range: ₹0.50 to ₹500.00 per sheet.</p>
-              </div>
-
-              {/* Status: Active / Inactive Button Group */}
-              <div>
-                <label className="text-xs font-medium text-slate-700 block mb-1.5">Rule Status</label>
-                <div className="inline-flex rounded-xl p-1 bg-slate-100 border border-slate-200 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => setNewIsActive(true)}
-                    className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
-                      newIsActive
-                        ? 'bg-white text-emerald-700 shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${newIsActive ? 'bg-emerald-500' : 'bg-slate-300'}`} />
-                    <span>Active</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setNewIsActive(false)}
-                    className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
-                      !newIsActive
-                        ? 'bg-white text-slate-700 shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    <span className={`w-2 h-2 rounded-full ${!newIsActive ? 'bg-slate-500' : 'bg-slate-300'}`} />
-                    <span>Inactive</span>
-                  </button>
-                </div>
+                <p className="text-[11px] text-slate-400 mt-1">Acceptable range: ₹0.50 to ₹500.00 per page.</p>
               </div>
 
               {/* Modal Buttons */}
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 rounded-xl transition-colors cursor-pointer"
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="px-5 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-2xs transition-colors cursor-pointer"
+                  variant="solid"
+                  size="sm"
                 >
-                  Create Rule
-                </button>
+                  Add Rule
+                </Button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL: Edit Existing Pricing Rule */}
+      {/* 7. EDIT PRICING RULE MODAL */}
       {editingRule && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-100 space-y-5">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100">
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+                <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
                   <Pencil className="w-4 h-4" />
                 </div>
-                <h3 className="text-base font-semibold text-slate-900">Edit Pricing Rule</h3>
+                <h3 className="text-base font-bold text-slate-900">Edit Pricing Rule</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setEditingRule(null)}
                 className="text-slate-400 hover:text-slate-600 p-1 cursor-pointer"
+                aria-label="Close edit modal"
               >
                 <X className="w-5 h-5" />
               </button>
@@ -1194,14 +1214,14 @@ export const ShopPricing: React.FC = () => {
               </div>
             )}
 
-            <form onSubmit={handleSaveEditRule} className="space-y-4 text-xs font-normal">
+            <form onSubmit={handleSaveEditRule} className="space-y-4 text-xs">
               {/* Paper Size selector */}
               <div>
-                <label className="text-xs font-medium text-slate-700 block mb-1">Paper Size</label>
+                <label className="text-xs font-semibold text-slate-700 block mb-1">Paper Size</label>
                 <select
                   value={editPaperSize}
                   onChange={(e) => setEditPaperSize(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-normal focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 font-medium focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
                 >
                   <optgroup label="Standard Office & Documents">
                     <option value="A4">A4 (210 × 297 mm)</option>
@@ -1223,50 +1243,50 @@ export const ShopPricing: React.FC = () => {
                 </select>
               </div>
 
-              {/* Custom Dimensions Form when Custom Size selected */}
+              {/* Custom Dimensions Form */}
               {editPaperSize === 'Custom Size' && (
                 <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
                   <div>
-                    <label className="text-[11px] font-medium text-slate-700 block mb-1">
-                      Paper Name (e.g. Photo 4x6, Certificate, ID Card)
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">
+                      Paper Name
                     </label>
                     <input
                       type="text"
                       placeholder="e.g. Glossy 4x6 Photo"
                       value={editCustomName}
                       onChange={(e) => setEditCustomName(e.target.value)}
-                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg font-normal text-slate-900"
+                      className="w-full px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-900"
                     />
                   </div>
                   <div className="grid grid-cols-3 gap-2">
                     <div>
-                      <label className="text-[11px] font-medium text-slate-700 block mb-1">Width</label>
+                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Width</label>
                       <input
                         type="number"
                         step="0.1"
                         min="1"
                         value={editCustomWidth}
                         onChange={(e) => setEditCustomWidth(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono font-normal"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-medium text-slate-700 block mb-1">Height</label>
+                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Height</label>
                       <input
                         type="number"
                         step="0.1"
                         min="1"
                         value={editCustomHeight}
                         onChange={(e) => setEditCustomHeight(e.target.value)}
-                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono font-normal"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono"
                       />
                     </div>
                     <div>
-                      <label className="text-[11px] font-medium text-slate-700 block mb-1">Unit</label>
+                      <label className="text-[11px] font-semibold text-slate-700 block mb-1">Unit</label>
                       <select
                         value={editCustomUnit}
                         onChange={(e) => setEditCustomUnit(e.target.value as 'mm' | 'inch')}
-                        className="w-full px-2 py-1.5 bg-white border border-slate-200 rounded-lg font-normal"
+                        className="w-full px-2.5 py-1.5 bg-white border border-slate-200 rounded-lg font-mono cursor-pointer"
                       >
                         <option value="inch">Inches (in)</option>
                         <option value="mm">Millimeters (mm)</option>
@@ -1276,26 +1296,25 @@ export const ShopPricing: React.FC = () => {
                 </div>
               )}
 
-              {/* Color Mode & Print Sides */}
+              {/* Color Mode & Sides */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="text-xs font-medium text-slate-700 block mb-1">Color Mode</label>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Color Mode</label>
                   <select
                     value={editColorMode}
                     onChange={(e) => setEditColorMode(e.target.value as PrintColor)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-normal text-slate-900 cursor-pointer"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 cursor-pointer"
                   >
                     <option value="BW">Black & White</option>
                     <option value="COLOR">Full Color</option>
                   </select>
                 </div>
-
                 <div>
-                  <label className="text-xs font-medium text-slate-700 block mb-1">Print Sides</label>
+                  <label className="text-xs font-semibold text-slate-700 block mb-1">Print Sides</label>
                   <select
                     value={editSides}
                     onChange={(e) => setEditSides(e.target.value as PrintSides)}
-                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-normal text-slate-900 cursor-pointer"
+                    className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-slate-900 cursor-pointer"
                   >
                     <option value="SINGLE">Single Sided</option>
                     <option value="DOUBLE">Double Sided (Duplex)</option>
@@ -1305,11 +1324,11 @@ export const ShopPricing: React.FC = () => {
 
               {/* Price per page */}
               <div>
-                <label className="text-xs font-medium text-slate-700 block mb-1">
+                <label className="text-xs font-semibold text-slate-700 block mb-1">
                   Price Per Page (₹ INR)
                 </label>
                 <div className="relative">
-                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400">₹</span>
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 font-mono">₹</span>
                   <input
                     type="number"
                     step="0.25"
@@ -1318,23 +1337,23 @@ export const ShopPricing: React.FC = () => {
                     placeholder="2.00"
                     value={editPrice}
                     onChange={(e) => setEditPrice(e.target.value)}
-                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-medium text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="w-full pl-8 pr-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono font-semibold text-sm text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-500 tabular-nums"
                   />
                 </div>
-                <p className="text-[10px] text-slate-400 mt-1">Acceptable range: ₹0.50 to ₹500.00 per sheet.</p>
+                <p className="text-[11px] text-slate-400 mt-1">Acceptable range: ₹0.50 to ₹500.00 per sheet.</p>
               </div>
 
-              {/* Status: Active / Inactive Button Group */}
+              {/* Status */}
               <div>
-                <label className="text-xs font-medium text-slate-700 block mb-1.5">Rule Status</label>
-                <div className="inline-flex rounded-xl p-1 bg-slate-100 border border-slate-200 text-xs">
+                <label className="text-xs font-semibold text-slate-700 block mb-1.5">Rule Status</label>
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setEditIsActive(true)}
-                    className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
                       editIsActive
-                        ? 'bg-white text-emerald-700 shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-800'
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200 font-semibold'
+                        : 'bg-slate-100 text-slate-600 hover:text-slate-800'
                     }`}
                   >
                     <span className={`w-2 h-2 rounded-full ${editIsActive ? 'bg-emerald-500' : 'bg-slate-300'}`} />
@@ -1343,10 +1362,10 @@ export const ShopPricing: React.FC = () => {
                   <button
                     type="button"
                     onClick={() => setEditIsActive(false)}
-                    className={`px-3 py-1.5 rounded-lg font-medium transition-all cursor-pointer flex items-center gap-1.5 ${
+                    className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer flex items-center gap-1.5 ${
                       !editIsActive
-                        ? 'bg-white text-slate-700 shadow-2xs'
-                        : 'text-slate-500 hover:text-slate-800'
+                        ? 'bg-slate-200 text-slate-800 border border-slate-300 font-semibold'
+                        : 'bg-slate-100 text-slate-600 hover:text-slate-800'
                     }`}
                   >
                     <span className={`w-2 h-2 rounded-full ${!editIsActive ? 'bg-slate-500' : 'bg-slate-300'}`} />
@@ -1357,53 +1376,54 @@ export const ShopPricing: React.FC = () => {
 
               {/* Modal Buttons */}
               <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
-                <button
-                  type="button"
+                <Button
+                  variant="ghost"
+                  size="sm"
                   onClick={() => setEditingRule(null)}
-                  className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-900 rounded-xl transition-colors cursor-pointer"
                 >
                   Cancel
-                </button>
-                <button
+                </Button>
+                <Button
                   type="submit"
-                  className="px-5 py-2 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-xl shadow-2xs transition-colors cursor-pointer"
+                  variant="solid"
+                  size="sm"
                 >
                   Save Changes
-                </button>
+                </Button>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* Delete Confirmation Modal */}
+      {/* 8. DELETE CONFIRMATION MODAL */}
       {deleteConfirmId && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-100 space-y-4">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
+          <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-2xl border border-slate-200 space-y-4">
             <div className="w-10 h-10 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto">
               <Trash2 className="w-5 h-5" />
             </div>
             <div className="text-center">
-              <h4 className="text-base font-semibold text-slate-900">Delete Pricing Rule?</h4>
+              <h4 className="text-base font-bold text-slate-900">Delete Pricing Rule?</h4>
               <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                 Future customer orders for this size and color mode will fall back to default A4 or standard scaling rates.
               </p>
             </div>
             <div className="flex items-center justify-center gap-2 pt-2">
-              <button
-                type="button"
+              <Button
+                variant="outline"
+                size="sm"
                 onClick={() => setDeleteConfirmId(null)}
-                className="px-4 py-2 text-xs font-medium text-slate-600 hover:text-slate-800 rounded-xl bg-slate-100 cursor-pointer"
               >
                 Keep Rule
-              </button>
-              <button
-                type="button"
+              </Button>
+              <Button
+                variant="danger"
+                size="sm"
                 onClick={() => confirmDelete(deleteConfirmId)}
-                className="px-4 py-2 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-xl shadow-2xs cursor-pointer"
               >
-                Delete
-              </button>
+                Delete Rule
+              </Button>
             </div>
           </div>
         </div>

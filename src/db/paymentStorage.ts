@@ -114,7 +114,8 @@ export function isValidDatabaseUrl(rawUrl?: string): boolean {
     url.includes('USER:PASSWORD') ||
     url.includes('YOUR_DATABASE_URL') ||
     url.includes('your-database-url') ||
-    url.includes('placeholder')
+    url.includes('placeholder') ||
+    url.includes('HOST')
   ) {
     return false;
   }
@@ -132,7 +133,8 @@ export function isValidDatabaseUrl(rawUrl?: string): boolean {
       host === 'password' ||
       host === 'dbname' ||
       host === 'your_host' ||
-      host === 'your-host'
+      host === 'your-host' ||
+      host.includes('host')
     ) {
       return false;
     }
@@ -147,28 +149,36 @@ const DEFAULT_SUPABASE_DATABASE_URL = 'postgresql://postgres:wAz7k6AQBmfQ0QjG@db
 let pgPool: Pool | null = null;
 const rawDatabaseUrl = (process.env.DATABASE_URL || DEFAULT_SUPABASE_DATABASE_URL).trim();
 const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : DEFAULT_SUPABASE_DATABASE_URL;
-export const isNeonDatabaseConfigured = (): boolean => pgPool !== null;
+let _overridePoolExplicitlyNull = false;
 
-if (DATABASE_URL && DATABASE_URL.length > 0) {
+export const isNeonDatabaseConfigured = (): boolean => {
+  if (_overridePoolExplicitlyNull) return false;
+  if (pgPool !== null) return true;
   try {
-    pgPool = new Pool({
-      connectionString: DATABASE_URL,
-      max: 10,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-      ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
-    });
-    pgPool.on('error', (err) => {
-      console.warn('[PaymentStorage] Idle PostgreSQL client warning (handled):', err?.message || err);
-    });
+    const activeUrl = (process.env.DATABASE_URL || DEFAULT_SUPABASE_DATABASE_URL).trim().replace(/^['"]|['"]$/g, '');
+    if (activeUrl && isValidDatabaseUrl(activeUrl)) {
+      pgPool = new Pool({
+        connectionString: activeUrl,
+        max: 10,
+        idleTimeoutMillis: 30_000,
+        connectionTimeoutMillis: 5_000,
+        ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false }
+      });
+      pgPool.on('error', (err) => {
+        console.warn('[PaymentStorage] Idle PostgreSQL client warning (handled):', err?.message || err);
+      });
+    } else {
+      return false;
+    }
   } catch (err) {
-    console.warn('[PaymentStorage] Failed to initialize PostgreSQL connection pool:', err);
-    pgPool = null;
+    console.warn('[PaymentStorage] Failed to lazy-initialize PostgreSQL connection pool:', err);
+    return false;
   }
-}
+  return pgPool !== null;
+};
 
 export function requirePostgresPool(): Pool {
-  if (!pgPool) {
+  if (!isNeonDatabaseConfigured() || !pgPool) {
     const error = new Error('DATABASE_URL is required. Neon PostgreSQL is not configured or unavailable.');
     (error as any).statusCode = 503;
     throw error;
@@ -178,6 +188,7 @@ export function requirePostgresPool(): Pool {
 
 export function setNeonPoolForTest(pool: Pool | null): void {
   pgPool = pool;
+  _overridePoolExplicitlyNull = pool === null;
 }
 
 function hashAgentToken(token: string): string {
@@ -308,6 +319,19 @@ export async function initializePaymentTables(): Promise<void> {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        CREATE TABLE IF NOT EXISTS public.platform_maintenance_mode (
+          id VARCHAR(32) PRIMARY KEY DEFAULT 'current',
+          enabled BOOLEAN NOT NULL DEFAULT false,
+          scope VARCHAR(64) NOT NULL DEFAULT 'entire_application',
+          message TEXT NOT NULL DEFAULT 'We are performing scheduled maintenance. Please check back shortly.',
+          expected_end_at TIMESTAMPTZ,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_by VARCHAR(128) NOT NULL DEFAULT 'admin'
+        );
+        INSERT INTO public.platform_maintenance_mode (id, enabled, scope, message)
+        VALUES ('current', false, 'entire_application', 'We are performing scheduled maintenance. Please check back shortly.')
+        ON CONFLICT (id) DO NOTHING;
 
         DO $$
         BEGIN

@@ -135,7 +135,8 @@ interface AppContextType {
   }) => Promise<{ success: boolean; message?: string }> | { success: boolean; message?: string };
   login: (email: string, password: string) => Promise<{ success: boolean; message?: string; user?: UserProfile }>;
   adminLogin: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
-  forgotPassword: (email: string, newPassword?: string) => { success: boolean; message?: string };
+  forgotPassword: (email: string) => Promise<{ success: boolean; message?: string; devResetLink?: string }>;
+  resetPassword: (token: string, newPassword: string) => Promise<{ success: boolean; message?: string }>;
   logout: () => void;
   switchRole: (role: Role) => void;
 
@@ -173,6 +174,7 @@ interface AppContextType {
   updatePlan: (planId: string, updates: Partial<SaasPlan>, policy?: PlanChangePolicy) => void;
   duplicatePlan: (planId: string) => SaasPlan | null;
   archivePlan: (planId: string) => { success: boolean; message: string };
+  deletePlan: (planId: string) => { success: boolean; message: string };
   togglePlanStatus: (planId: string, status: PlanStatus) => void;
   upgradeShopPlan: (shopId: string, planId: string) => Promise<boolean>;
   updateSubscription: (subId: string, updates: Partial<Subscription>) => void;
@@ -649,27 +651,45 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Authentication: Forgot Password Reset
-  const forgotPassword = (email: string, newPassword?: string) => {
+  // Authentication: Request Password Reset Link
+  const forgotPassword = async (email: string): Promise<{ success: boolean; message?: string; devResetLink?: string }> => {
     const trimmedEmail = email.trim().toLowerCase();
-    const userIndex = users.findIndex((u) => u.email.toLowerCase() === trimmedEmail);
-
-    if (userIndex === -1) {
-      // Uniform generic response to prevent account enumeration
-      return { success: true, message: 'If an account exists with this email, password reset instructions have been processed.' };
+    try {
+      const response = await fetch(apiUrl('/api/auth/forgot-password'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ email: trimmedEmail })
+      });
+      const data = await response.json();
+      return { 
+        success: true, 
+        message: data.message || 'If an account exists for this email address, you will receive a password reset link shortly. Please check your inbox and spam folder.',
+        devResetLink: data.devResetLink
+      };
+    } catch {
+      return { success: true, message: 'If an account exists for this email address, you will receive a password reset link shortly. Please check your inbox and spam folder.' };
     }
+  };
 
-    const updatedPassword = hashPassword(newPassword || 'Shop@2026');
-    const nextUsers = [...users];
-    nextUsers[userIndex] = {
-      ...nextUsers[userIndex],
-      password: updatedPassword
-    };
-
-    setUsers(nextUsers);
-
-    showToast('Password Reset Successfully!', `You can now sign in with your new password.`, 'success', 4000);
-    return { success: true, message: 'Password updated successfully.' };
+  // Authentication: Complete Password Reset with Token
+  const resetPassword = async (token: string, newPassword: string): Promise<{ success: boolean; message?: string }> => {
+    try {
+      const response = await fetch(apiUrl('/api/auth/reset-password'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ token, newPassword })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        return { success: false, message: data.error || 'Failed to reset password. The link may have expired or already been used.' };
+      }
+      showToast('Password Updated', 'Your password has been reset successfully. Please sign in.', 'success', 4000);
+      return { success: true, message: data.message };
+    } catch (err: any) {
+      return { success: false, message: 'Could not connect to authentication service. Please check your network.' };
+    }
   };
 
   // Multi-Factor Authentication (MFA)
@@ -1034,6 +1054,42 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addAuditLog('SAAS_PLAN_ARCHIVED', 'SUBSCRIPTION', planId, msg);
     showToast('Plan Archived', msg, 'info', 4000);
     return { success: true, message: msg };
+  };
+
+  const deletePlan = (planId: string): { success: boolean; message: string } => {
+    const targetPlan = plans.find((p) => p.id === planId);
+    if (!targetPlan) return { success: false, message: 'Plan not found.' };
+
+    const protectedIds = new Set(['plan_starter', 'free', 'plan_free', 'starter']);
+    if (protectedIds.has(planId.toLowerCase()) || targetPlan.priceMonthly === 0) {
+      return { success: false, message: 'The default Free / Starter plan is required by the platform and cannot be deleted.' };
+    }
+
+    const activeSubs = subscriptions.filter((s) => s.planId === planId && s.status === 'ACTIVE');
+    if (activeSubs.length > 0) {
+      return {
+        success: false,
+        message: `Cannot delete plan: ${activeSubs.length} active subscription(s) are bound to this plan.`
+      };
+    }
+
+    const assignedShops = shops.filter((s) => s.planId === planId);
+    if (assignedShops.length > 0) {
+      return {
+        success: false,
+        message: `Cannot delete plan: ${assignedShops.length} shop(s) are currently on this plan.`
+      };
+    }
+
+    setPlans((prev) => {
+      const next = prev.filter((p) => p.id !== planId);
+      setStoredItem('saas_plans', next);
+      return next;
+    });
+
+    addAuditLog('SAAS_PLAN_DELETED', 'SUBSCRIPTION', planId, `Plan "${targetPlan.name}" deleted.`);
+    showToast('Plan Deleted', `Plan "${targetPlan.name}" deleted permanently.`, 'success', 4000);
+    return { success: true, message: 'Plan deleted.' };
   };
 
   const togglePlanStatus = (planId: string, status: PlanStatus) => {
@@ -2436,6 +2492,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         login,
         adminLogin,
         forgotPassword,
+        resetPassword,
         logout,
         switchRole,
         enrollMfa,
@@ -2461,6 +2518,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updatePlan,
         duplicatePlan,
         archivePlan,
+        deletePlan,
         togglePlanStatus,
         upgradeShopPlan,
         updateSubscription,

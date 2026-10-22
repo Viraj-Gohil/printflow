@@ -94,27 +94,6 @@ export const AdminDashboard: React.FC = () => {
         </div>
       </div>
 
-      <div className="p-5 bg-linear-to-r from-purple-900 to-indigo-900 rounded-2xl text-white shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div>
-          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-bold bg-purple-500/20 text-purple-300 border border-purple-500/30 mb-1">
-            <Shield className="w-3 h-3" />
-            <span>Multi-Tenant SaaS Infrastructure</span>
-          </div>
-          <h3 className="text-base font-bold">Platform SaaS Razorpay Gateway Ready</h3>
-          <p className="text-xs text-purple-200 mt-0.5">
-            Configure platform Razorpay Key ID and Secret in settings to collect subscription payments from shop owners.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
-            onClick={() => navigate('/admin/settings')}
-            className="px-4 py-2 bg-white text-purple-900 hover:bg-purple-50 font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
-          >
-            Configure Admin Razorpay
-          </button>
-        </div>
-      </div>
-
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="p-5 border-b border-slate-100 flex items-center justify-between">
           <div>
@@ -158,7 +137,7 @@ export const AdminDashboard: React.FC = () => {
                   </td>
                   <td className="py-3.5 px-4">
                     <span className="font-mono text-slate-600 text-[11px]">
-                      {shop.razorpaySettings.keyId ? shop.razorpaySettings.keyId.slice(0, 14) + '...' : 'Not Set'}
+                      {shop.razorpaySettings?.keyId ? shop.razorpaySettings.keyId.slice(0, 14) + '...' : 'Not Set'}
                     </span>
                   </td>
                   <td className="py-3.5 px-4">

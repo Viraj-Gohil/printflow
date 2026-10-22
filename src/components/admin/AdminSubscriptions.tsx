@@ -42,7 +42,9 @@ import {
   Eye,
   EyeOff,
   Radio,
-  ArrowRight
+  ArrowRight,
+  ShieldCheck,
+  Trash2
 } from 'lucide-react';
 import {
   SaasPlan,
@@ -62,6 +64,7 @@ export const AdminSubscriptions: React.FC = () => {
     updatePlan,
     duplicatePlan,
     archivePlan,
+    deletePlan,
     togglePlanStatus,
     subscriptions,
     updateSubscription,
@@ -96,6 +99,28 @@ export const AdminSubscriptions: React.FC = () => {
   const [isCreatingNew, setIsCreatingNew] = useState(false);
   const [selectedPlanForSubscribers, setSelectedPlanForSubscribers] = useState<string | null>(null);
   const [planToArchive, setPlanToArchive] = useState<SaasPlan | null>(null);
+  const [planToDelete, setPlanToDelete] = useState<SaasPlan | null>(null);
+
+  const handleConfirmDelete = async () => {
+    if (!planToDelete) return;
+    try {
+      const res = await fetch(apiUrl(`/api/plans/${encodeURIComponent(planToDelete.id)}`), {
+        method: 'DELETE',
+        headers: {
+          'Authorization': 'Bearer admin_token_active',
+          'X-User-Role': 'ADMIN'
+        }
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed to delete plan.');
+      }
+      deletePlan(planToDelete.id);
+      setPlanToDelete(null);
+    } catch (err: any) {
+      showToast('Delete Failed', err?.message || 'Could not delete plan.', 'error', 5000);
+    }
+  };
 
   // Subscriber management state
   const [subscriberSearch, setSubscriberSearch] = useState('');
@@ -1313,6 +1338,13 @@ export const AdminSubscriptions: React.FC = () => {
                                   <Archive className="w-3.5 h-3.5" />
                                 </button>
                               )}
+                              <button
+                                onClick={() => setPlanToDelete(p)}
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg cursor-pointer"
+                                title="Delete Plan"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
                             </div>
                           </td>
                         </tr>
@@ -1854,108 +1886,14 @@ export const AdminSubscriptions: React.FC = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div className="space-y-1.5">
-                <label className="font-semibold text-slate-800">Platform Key ID</label>
-                <input
-                  type="text"
-                  value={adminRazorpay.keyId}
-                  onChange={(e) => updateAdminRazorpay({ ...adminRazorpay, keyId: e.target.value })}
-                  placeholder="rzp_live_..."
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-900"
-                />
-                <p className="text-[10px] text-slate-400">Used for client checkout initialization.</p>
+            <div className="p-4 bg-blue-50/80 border border-blue-200 rounded-xl space-y-2 text-xs text-blue-900">
+              <div className="font-bold flex items-center gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0" />
+                <span>Configured via Server-Side Environment Variables</span>
               </div>
-
-              <div className="space-y-1.5">
-                <label className="font-semibold text-slate-800 flex items-center justify-between">
-                  <span>Server Secret Key</span>
-                  <span className="text-[10px] text-purple-600 font-normal">Encrypted AES-256</span>
-                </label>
-                <input
-                  type={showSecretKey ? 'text' : 'password'}
-                  placeholder="•••••••••••• (Leave blank to keep existing stored secret)"
-                  value={replaceSecretKey}
-                  onChange={(e) => setReplaceSecretKey(e.target.value)}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-900"
-                />
-                <p className="text-[10px] text-slate-400">Encrypted with AES-256-GCM. Never returned to browser.</p>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="font-semibold text-slate-800">Webhook Secret</label>
-                <input
-                  type="text"
-                  value={adminRazorpay.webhookSecret || ''}
-                  onChange={(e) => updateAdminRazorpay({ ...adminRazorpay, webhookSecret: e.target.value })}
-                  className="w-full px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl font-mono text-slate-900"
-                />
-                <p className="text-[10px] text-slate-400">Used for HMAC SHA-256 signature verification.</p>
-              </div>
-
-              <div className="space-y-1.5">
-                <label className="font-semibold text-slate-800">Environment Mode</label>
-                <div className="flex items-center gap-2 pt-1">
-                  <label className="inline-flex items-center gap-1.5 cursor-pointer">
-                    <input
-                      type="radio"
-                      name="envMode"
-                      checked={adminRazorpay.isTestMode}
-                      onChange={() => updateAdminRazorpay({ ...adminRazorpay, isTestMode: true })}
-                      className="text-purple-600"
-                    />
-                    <span>Test Sandbox</span>
-                  </label>
-                  <label className="inline-flex items-center gap-1.5 cursor-pointer ml-3">
-                    <input
-                      type="radio"
-                      name="envMode"
-                      checked={!adminRazorpay.isTestMode}
-                      onChange={() => updateAdminRazorpay({ ...adminRazorpay, isTestMode: false })}
-                      className="text-purple-600"
-                    />
-                    <span>Production Live</span>
-                  </label>
-                </div>
-              </div>
-            </div>
-
-            {gatewaySaveSuccess && (
-              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>Gateway credentials encrypted and persisted successfully to database.</span>
-              </div>
-            )}
-
-            {gatewaySaveError && (
-              <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-800 flex items-start gap-2">
-                <AlertTriangle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                <div>
-                  <p className="font-bold">Save Rejected</p>
-                  <p className="mt-0.5">{gatewaySaveError}</p>
-                </div>
-              </div>
-            )}
-
-            <div className="pt-2 flex justify-end">
-              <button
-                type="button"
-                onClick={handleSaveGateway}
-                disabled={isSavingGateway}
-                className="px-5 py-2.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-xl shadow-xs transition-colors flex items-center gap-2 cursor-pointer"
-              >
-                {isSavingGateway ? (
-                  <>
-                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                    <span>Encrypting & Saving...</span>
-                  </>
-                ) : (
-                  <>
-                    <Save className="w-3.5 h-3.5" />
-                    <span>Save Platform Gateway Configuration</span>
-                  </>
-                )}
-              </button>
+              <p className="text-blue-800 leading-relaxed">
+                Platform SaaS Razorpay Gateway API credentials (<code className="font-mono bg-blue-100 px-1 py-0.5 rounded">RAZORPAY_KEY_ID</code> / <code className="font-mono bg-blue-100 px-1 py-0.5 rounded">RAZORPAY_KEY_SECRET</code>) are configured exclusively via server-side environment variables. Admin dashboard configuration, editing, saving, and overrides have been permanently disabled for security.
+              </p>
             </div>
 
             <div className="p-4 bg-slate-50 rounded-xl border border-slate-200/80 text-xs space-y-2">
@@ -2517,6 +2455,46 @@ export const AdminSubscriptions: React.FC = () => {
                 className="px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-semibold rounded-xl cursor-pointer text-xs shadow-xs"
               >
                 Confirm & Archive
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
+      {/* MODAL 2.1: DELETE PLAN CONFIRMATION */}
+      {/* ========================================================================= */}
+      {planToDelete && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 space-y-4">
+            <div className="flex items-center gap-3 text-red-600">
+              <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center">
+                <Trash2 className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base font-bold text-slate-900">Delete Plan</h3>
+                <p className="text-xs text-slate-500">"{planToDelete.name}"</p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Are you sure you want to permanently delete this SaaS subscription plan? This action cannot be undone and will remove the plan from the catalog.
+            </p>
+
+            <div className="pt-3 border-t border-slate-100 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setPlanToDelete(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium rounded-xl cursor-pointer text-xs"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleConfirmDelete}
+                className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white font-semibold rounded-xl cursor-pointer text-xs shadow-xs"
+              >
+                Delete Permanently
               </button>
             </div>
           </div>

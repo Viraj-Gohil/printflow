@@ -246,8 +246,8 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab })
             <Shield className="w-4 h-4" />
           </div>
           <div>
-            <span className="font-bold text-xs text-slate-900 block">PrintFlow Super Admin</span>
-            <span className="text-[10px] text-purple-700 font-medium">Enterprise Control Panel</span>
+            <span className="font-bold text-xs text-slate-900 block">Super Admin</span>
+            <span className="text-[10px] text-purple-700 font-medium">Control Panel</span>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -469,63 +469,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab })
 
       {/* Main Content Viewport */}
       <main className="flex-1 min-w-0 flex flex-col min-h-screen overflow-x-hidden">
-        {/* Top Header Bar for Global Actions & Breadcrumbs */}
-        <header className="sticky top-0 z-30 bg-white/95 backdrop-blur-xs border-b border-slate-200 px-4 sm:px-6 lg:px-8 py-3 flex items-center justify-between gap-4 font-heading">
-          {/* Breadcrumb Hierarchy */}
-          <div className="flex items-center gap-1.5 text-xs text-slate-500 truncate">
-            <span className="font-semibold text-slate-400">Platform</span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
-            <span className="font-bold text-slate-600 uppercase text-[10px] tracking-wider">
-              {currentItemInfo.section}
-            </span>
-            <ChevronRight className="w-3.5 h-3.5 text-slate-300 shrink-0" />
-            <span className="font-heading font-medium text-sm text-purple-700 truncate">
-              {currentItemInfo.item.label}
-            </span>
-          </div>
-
-          {/* Quick Header Actions */}
-          <div className="flex items-center gap-2.5 shrink-0">
-            {/* System Health Status Indicator */}
-            <button
-              onClick={() => navigate('/admin/health')}
-              className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-colors cursor-pointer"
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
-              <span>Systems Operational</span>
-            </button>
-
-            {/* Command Palette Trigger */}
-            <button
-              onClick={() => setIsCommandPaletteOpen(true)}
-              className="hidden md:flex items-center gap-2 px-3 py-1.5 text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl transition-colors cursor-pointer"
-            >
-              <Search className="w-3.5 h-3.5 text-slate-500" />
-              <span className="text-[11px] font-medium">Quick Jump</span>
-              <kbd className="px-1.5 py-0.5 text-[10px] font-mono bg-white rounded border border-slate-200 text-slate-500">⌘K</kbd>
-            </button>
-
-            {/* Quick Switch to Shop Portal */}
-            <button
-              onClick={() => switchRole('SHOP_OWNER')}
-              className="px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl shadow-2xs flex items-center gap-1.5 transition-colors cursor-pointer"
-            >
-              <Store className="w-3.5 h-3.5 text-purple-600" />
-              <span className="hidden sm:inline">Shop View</span>
-            </button>
-
-            {/* Platform Settings */}
-            <button
-              onClick={() => navigate('/admin/platform-settings')}
-              className="p-1.5 sm:px-3 sm:py-1.5 text-xs font-semibold text-white bg-purple-600 hover:bg-purple-700 rounded-xl shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
-              title="Platform Settings"
-            >
-              <Settings className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Settings</span>
-            </button>
-          </div>
-        </header>
-
         {/* Content Area with Animation */}
         <div className="flex-1 p-4 sm:p-6 lg:p-8 overflow-y-auto">
           <AnimatePresence mode="wait">

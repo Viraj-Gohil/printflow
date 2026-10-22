@@ -8,16 +8,27 @@ import {
   IndianRupee,
   QrCode,
   SlidersHorizontal,
-  ArrowUpRight,
-  TrendingUp,
-  Cpu,
   ChevronRight,
   Copy,
   ExternalLink,
-  Share2,
-  Sparkles
+  Sparkles,
+  Check,
+  Cpu,
+  TrendingUp,
+  Loader2,
+  FileText
 } from 'lucide-react';
 import { PrintStatus } from '../../types';
+import { Button } from '../ui/Button';
+import { Chip } from '../ui/Chip';
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell
+} from '../ui/Table';
 
 export const ShopDashboard: React.FC = () => {
   const {
@@ -30,14 +41,15 @@ export const ShopDashboard: React.FC = () => {
     showToast,
     simulateCustomerPrintJob
   } = useApp();
-  const [copied, setCopied] = useState(false);
+
+  const [copied, setCopied] = useState<boolean>(false);
+  const [updatingJobId, setUpdatingJobId] = useState<string | null>(null);
 
   const currentPlan = plans.find((p) => p.id === activeShop.planId) || plans[0];
   const shopJobs = printJobs.filter((j) => j.shopId === activeShop.id);
   const queuedJobs = shopJobs.filter((j) => j.printStatus === 'QUEUED' || j.printStatus === 'ASSIGNED');
   const printingJobs = shopJobs.filter((j) => j.printStatus === 'PRINTING' || j.printStatus === 'DOWNLOADING');
   const completedJobs = shopJobs.filter((j) => j.printStatus === 'COMPLETED');
-  const failedJobs = shopJobs.filter((j) => j.printStatus === 'FAILED' || j.printStatus === 'CANCELLED' || j.printStatus === 'REQUIRES_ATTENTION');
 
   const todayRevenue = shopJobs
     .filter((j) => j.paymentStatus === 'SUCCESS')
@@ -50,37 +62,119 @@ export const ShopDashboard: React.FC = () => {
     ? `${window.location.origin}/s/${activeShop.slug}`
     : `/s/${activeShop.slug}`;
 
-  const handleCopyLink = () => {
-    navigator.clipboard?.writeText(customerPortalUrl);
-    setCopied(true);
-    showToast('Customer Link Copied!', `URL for ${activeShop.name} copied to clipboard`, 'info', 3000);
-    setTimeout(() => setCopied(false), 2500);
+  const handleCopyLink = async () => {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(customerPortalUrl);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = customerPortalUrl;
+        document.body.appendChild(textArea);
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopied(true);
+      showToast('Customer Link Copied!', `URL for ${activeShop.name} copied to clipboard`, 'info', 3000);
+      setTimeout(() => setCopied(false), 2500);
+    } catch {
+      showToast('Copy Failed', 'Unable to copy customer link to clipboard', 'error');
+    }
+  };
+
+  const handleStatusUpdate = async (jobId: string, nextStatus: PrintStatus) => {
+    if (updatingJobId) return;
+    setUpdatingJobId(jobId);
+    try {
+      await updateJobStatus(jobId, nextStatus);
+      showToast(
+        nextStatus === 'PRINTING' ? 'Print Initiated' : 'Order Ready',
+        `Job ${jobId} updated to ${nextStatus}`,
+        'success'
+      );
+    } catch {
+      showToast('Status Update Failed', 'Failed to update print job status. Please try again.', 'error');
+    } finally {
+      setUpdatingJobId(null);
+    }
+  };
+
+  const renderStatusChip = (status: PrintStatus) => {
+    switch (status) {
+      case 'COMPLETED':
+        return <Chip variant="success" size="sm" dot>{status}</Chip>;
+      case 'PRINTING':
+      case 'DOWNLOADING':
+        return <Chip variant="special" size="sm" dot className="animate-pulse">{status}</Chip>;
+      case 'QUEUED':
+      case 'ASSIGNED':
+        return <Chip variant="warning" size="sm" dot>{status}</Chip>;
+      case 'FAILED':
+      case 'CANCELLED':
+      case 'REQUIRES_ATTENTION':
+        return <Chip variant="danger" size="sm" dot>{status}</Chip>;
+      default:
+        return <Chip variant="default" size="sm">{status}</Chip>;
+    }
   };
 
   return (
-    <div className="space-y-6">
-      {/* 1. SHOP CUSTOMER SCAN & ORDERING PORTAL LINK BANNER */}
-      <div className="bg-white rounded-2xl border border-blue-200/90 p-4 sm:p-5 shadow-xs relative overflow-hidden bg-linear-to-r from-blue-50/70 via-white to-indigo-50/50">
+    <div className="space-y-5 max-w-7xl mx-auto pb-10 text-slate-800">
+      {/* 1. COMPACT PAGE HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+            Dashboard
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5 leading-relaxed">
+            Monitor printing activity and manage today's orders.
+          </p>
+        </div>
+
+        {/* Header Actions */}
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => navigate('/shop/qr-codes')}
+          >
+            <QrCode className="w-3.5 h-3.5 text-slate-500" />
+            <span>Counter QR</span>
+          </Button>
+
+          <Button
+            variant="solid"
+            size="sm"
+            onClick={() => navigate(`/s/${activeShop.slug}`)}
+          >
+            <ExternalLink className="w-3.5 h-3.5 text-white" />
+            <span>Customer View</span>
+          </Button>
+        </div>
+      </div>
+
+      {/* 2. CUSTOMER QR & ORDERING LINK UTILITY PANEL */}
+      <div className="bg-white rounded-xl border border-slate-200/90 p-4 sm:p-5 shadow-2xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-          <div className="flex items-start gap-3.5">
-            <div className="w-11 h-11 rounded-2xl bg-blue-600 text-white flex items-center justify-center shrink-0 shadow-xs">
-              <QrCode className="w-5 h-5 text-white" />
+          <div className="flex items-start gap-3.5 min-w-0">
+            <div className="w-10 h-10 rounded-lg bg-blue-50 text-blue-600 border border-blue-100 flex items-center justify-center shrink-0">
+              <QrCode className="w-5 h-5 text-blue-600" />
             </div>
-            <div className="space-y-1">
+            <div className="space-y-1.5 min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
-                <h3 className="text-sm sm:text-base font-bold text-slate-900">
+                <h2 className="text-sm sm:text-base font-semibold text-slate-900">
                   Shop Customer QR & Ordering Link
-                </h3>
-                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-0.5 rounded-full border border-emerald-200">
-                  ● Ready for Customers
-                </span>
+                </h2>
+                <Chip variant="success" size="sm" dot>
+                  Ready for Customers
+                </Chip>
               </div>
-              <p className="text-xs text-slate-600">
-                Customers scan this QR code or open this link at your counter to upload files, choose print options, and pay via UPI.
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Customers scan this QR code or open this link at your counter to upload files, configure print options, and pay via UPI.
               </p>
-              <div className="pt-1 flex items-center gap-2">
-                <span className="text-[11px] font-semibold text-slate-400">Customer Link:</span>
-                <code className="text-xs font-mono font-bold text-blue-700 bg-white px-2.5 py-0.5 rounded-lg border border-slate-200 shadow-2xs select-all">
+              <div className="pt-0.5 flex items-center gap-2 min-w-0">
+                <span className="text-[11px] font-medium text-slate-400 shrink-0">Counter Link:</span>
+                <code className="text-xs font-mono font-medium text-blue-700 bg-slate-50 px-2 py-0.5 rounded border border-slate-200 truncate select-all">
                   {customerPortalUrl}
                 </code>
               </div>
@@ -88,99 +182,124 @@ export const ShopDashboard: React.FC = () => {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap shrink-0">
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={handleCopyLink}
-              className="px-3.5 py-2 text-xs font-bold text-slate-700 hover:text-blue-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl shadow-2xs flex items-center gap-1.5 transition-all cursor-pointer"
             >
               {copied ? (
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                <Check className="w-3.5 h-3.5 text-emerald-600" />
               ) : (
                 <Copy className="w-3.5 h-3.5 text-slate-500" />
               )}
-              <span>{copied ? 'Copied to Clipboard!' : 'Copy Customer Link'}</span>
-            </button>
+              <span>{copied ? 'Copied' : 'Copy Link'}</span>
+            </Button>
 
-            <button
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => navigate(`/s/${activeShop.slug}`)}
-              className="px-3.5 py-2 text-xs font-bold text-white bg-blue-600 hover:bg-blue-700 active:bg-blue-800 rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
             >
-              <ExternalLink className="w-3.5 h-3.5 text-white" />
+              <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
               <span>Open Customer View</span>
-            </button>
+            </Button>
 
-            <button
+            <Button
+              variant="soft"
+              size="sm"
               onClick={() => navigate('/shop/qr-codes')}
-              className="px-3.5 py-2 text-xs font-bold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-xl flex items-center gap-1.5 transition-all cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5 text-blue-600" />
               <span>Print Tabletop Stand</span>
-            </button>
+            </Button>
           </div>
         </div>
       </div>
-      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3 sm:gap-4">
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+
+      {/* 3. KPI SUMMARY CARDS */}
+      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+        {/* Today's Revenue */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold">Today's Revenue</span>
-            <div className="w-8 h-8 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
-              <IndianRupee className="w-4 h-4" />
+            <span className="text-xs font-medium text-slate-500">Today's Revenue</span>
+            <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <IndianRupee className="w-3.5 h-3.5" />
             </div>
           </div>
-          <p className="text-2xl font-extrabold text-slate-900 font-mono">₹{todayRevenue.toFixed(2)}</p>
-          <span className="text-[11px] text-emerald-600 font-semibold flex items-center gap-1 mt-1">
+          <p className="text-2xl font-bold text-slate-900 font-mono tracking-tight">
+            ₹{todayRevenue.toFixed(2)}
+          </p>
+          <div className="flex items-center gap-1 text-[11px] text-emerald-600 font-medium mt-1">
             <TrendingUp className="w-3 h-3" />
-            Direct UPI Settlement
+            <span>Direct UPI Settlement</span>
+          </div>
+        </div>
+
+        {/* Queue Pending */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs">
+          <div className="flex items-center justify-between text-slate-500 mb-2">
+            <span className="text-xs font-medium text-slate-500">Queue Pending</span>
+            <div className="w-7 h-7 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
+              <Clock className="w-3.5 h-3.5" />
+            </div>
+          </div>
+          <p className="text-2xl font-bold text-slate-900 font-mono tracking-tight">
+            {queuedJobs.length}
+          </p>
+          <span className="text-[11px] text-slate-400 font-medium mt-1 block">
+            Awaiting print agent
           </span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+        {/* Printing Now */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold">Queue (Pending)</span>
-            <div className="w-8 h-8 rounded-lg bg-amber-50 text-amber-600 flex items-center justify-center">
-              <Clock className="w-4 h-4" />
+            <span className="text-xs font-medium text-slate-500">Printing Now</span>
+            <div className="w-7 h-7 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
+              <Printer className="w-3.5 h-3.5" />
             </div>
           </div>
-          <p className="text-2xl font-extrabold text-slate-900 font-mono">{queuedJobs.length}</p>
-          <span className="text-[11px] text-amber-600 font-medium mt-1 block">Awaiting print agent</span>
+          <p className="text-2xl font-bold text-blue-600 font-mono tracking-tight">
+            {printingJobs.length}
+          </p>
+          <span className="text-[11px] text-slate-400 font-medium mt-1 block">
+            Active on trays
+          </span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+        {/* Completed Today */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold">Printing Now</span>
-            <div className="w-8 h-8 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center">
-              <Printer className="w-4 h-4" />
+            <span className="text-xs font-medium text-slate-500">Completed Today</span>
+            <div className="w-7 h-7 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center">
+              <CheckCircle2 className="w-3.5 h-3.5" />
             </div>
           </div>
-          <p className="text-2xl font-extrabold text-blue-600 font-mono">{printingJobs.length}</p>
-          <span className="text-[11px] text-slate-500 font-medium mt-1 block">Active on trays</span>
+          <p className="text-2xl font-bold text-slate-900 font-mono tracking-tight">
+            {completedJobs.length}
+          </p>
+          <span className="text-[11px] text-emerald-600 font-medium mt-1 block">
+            Delivered to counter
+          </span>
         </div>
 
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
+        {/* Printers Online */}
+        <div className="bg-white p-4 rounded-xl border border-slate-200/90 shadow-2xs col-span-2 md:col-span-1">
           <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold">Completed Today</span>
-            <div className="w-8 h-8 rounded-lg bg-green-50 text-green-600 flex items-center justify-center">
-              <CheckCircle2 className="w-4 h-4" />
+            <span className="text-xs font-medium text-slate-500">Printers Online</span>
+            <div className="w-7 h-7 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center">
+              <Cpu className="w-3.5 h-3.5" />
             </div>
           </div>
-          <p className="text-2xl font-extrabold text-slate-900 font-mono">{completedJobs.length}</p>
-          <span className="text-[11px] text-green-600 font-medium mt-1 block">100% delivered</span>
-        </div>
-
-        <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs col-span-2 lg:col-span-1">
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-semibold">Printers Online</span>
-            <div className="w-8 h-8 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center">
-              <Cpu className="w-4 h-4" />
-            </div>
-          </div>
-          <p className="text-2xl font-extrabold text-slate-900 font-mono">
+          <p className="text-2xl font-bold text-slate-900 font-mono tracking-tight">
             {onlinePrinters.length} / {shopPrinters.length}
           </p>
           <div className="flex items-center justify-between text-[11px] mt-1">
-            <span className="text-slate-500 font-medium">Max {currentPlan.printerLimit} ({currentPlan.name})</span>
+            <span className="text-slate-400 font-medium">Max {currentPlan.printerLimit} ({currentPlan.name})</span>
             <button
+              type="button"
               onClick={() => navigate('/shop/printers')}
-              className="text-blue-600 font-bold hover:underline cursor-pointer"
+              className="text-blue-600 hover:text-blue-700 font-medium hover:underline cursor-pointer"
             >
               Hardware →
             </button>
@@ -188,173 +307,222 @@ export const ShopDashboard: React.FC = () => {
         </div>
       </div>
 
-      <div className="p-4 bg-linear-to-r from-blue-600 to-indigo-700 rounded-2xl text-white shadow-xs flex flex-col sm:flex-row items-center justify-between gap-4">
-        <div>
-          <h3 className="text-base font-bold">Fast Actions for Counter Operators</h3>
-          <p className="text-xs text-blue-100 mt-0.5">
-            Download your countertop QR flyer, configure per-page prices, or check printer agent status.
-          </p>
+      {/* 4. COMPACT QUICK ACTIONS TOOLBAR */}
+      <div className="bg-slate-50 border border-slate-200/90 rounded-xl p-3 sm:px-4 sm:py-3 flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-slate-800">Quick Actions:</span>
+          <span className="text-xs text-slate-500 hidden md:inline">
+            Fast access to countertop flyers, per-page rates, and queue details.
+          </span>
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <button
+        <div className="flex items-center gap-2 flex-wrap">
+          <Button
+            variant="outline"
+            size="xs"
             onClick={() => navigate('/shop/qr-codes')}
-            className="px-3 py-2 bg-white text-blue-700 hover:bg-blue-50 font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
           >
-            <QrCode className="w-4 h-4" />
+            <QrCode className="w-3.5 h-3.5 text-slate-500" />
             <span>Generate Counter QR</span>
-          </button>
-          <button
+          </Button>
+
+          <Button
+            variant="outline"
+            size="xs"
             onClick={() => navigate('/shop/pricing')}
-            className="px-3 py-2 bg-blue-500/30 hover:bg-blue-500/50 text-white font-semibold text-xs rounded-xl border border-white/20 transition-colors cursor-pointer"
           >
-            <SlidersHorizontal className="w-4 h-4" />
+            <SlidersHorizontal className="w-3.5 h-3.5 text-slate-500" />
             <span>Edit Pricing</span>
-          </button>
+          </Button>
+
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => navigate('/shop/print-jobs')}
+          >
+            <span>View All in Queue</span>
+            <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
+          </Button>
         </div>
       </div>
 
-      <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="p-4 sm:p-5 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      {/* 5. LIVE PRINT QUEUE */}
+      <div className="bg-white rounded-xl border border-slate-200/90 shadow-2xs overflow-hidden">
+        <div className="p-4 sm:px-5 sm:py-4 border-b border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-2.5">
-            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0" />
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-bold text-slate-900">Live Print Queue</h2>
-                <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
-                  Real-Time Listening
-                </span>
+                <h2 className="text-sm sm:text-base font-semibold text-slate-900">Live Print Queue</h2>
+                <Chip variant="success" size="sm" dot>
+                  Real-Time
+                </Chip>
               </div>
-              <p className="text-xs text-slate-500">Orders placed by customers via counter QR scan appear here instantly</p>
+              <p className="text-xs text-slate-500 mt-0.5">Orders placed by customers via counter QR scan appear here instantly</p>
             </div>
           </div>
+
           <div className="flex items-center gap-2">
             {import.meta.env.DEV && (
-              <button
+              <Button
+                variant="soft"
+                size="xs"
                 onClick={() => simulateCustomerPrintJob()}
-                className="px-3 py-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl flex items-center gap-1 transition-colors cursor-pointer"
                 title="Generate a sample test print order"
               >
-                <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                <Sparkles className="w-3 h-3 text-blue-600" />
                 <span>+ Test Order</span>
-              </button>
+              </Button>
             )}
-            <button
+
+            <Button
+              variant="outline"
+              size="xs"
               onClick={() => navigate('/shop/print-jobs')}
-              className="px-3 py-1.5 text-xs font-semibold text-blue-600 hover:text-blue-700 hover:bg-blue-50 border border-slate-200 rounded-xl flex items-center gap-1 transition-colors"
             >
               <span>View All</span>
-              <ChevronRight className="w-3.5 h-3.5" />
-            </button>
+              <ChevronRight className="w-3 h-3 text-slate-400" />
+            </Button>
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs">
-            <thead className="bg-slate-50 text-slate-600 font-semibold border-b border-slate-200">
-              <tr>
-                <th className="py-3 px-4">Order ID</th>
-                <th className="py-3 px-4">Customer</th>
-                <th className="py-3 px-4">Document / Settings</th>
-                <th className="py-3 px-4">Assigned Printer</th>
-                <th className="py-3 px-4">Amount</th>
-                <th className="py-3 px-4">Status</th>
-                <th className="py-3 px-4 text-right">Quick Action</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {shopJobs.length === 0 ? (
-                <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
-                    <div className="max-w-xs mx-auto space-y-3">
-                      <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
-                        <Clock className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <p className="text-xs font-bold text-slate-700">No Orders in Live Queue</p>
-                        <p className="text-[11px] text-slate-500 mt-0.5">
-                          When customers scan your counter QR code, orders flow here automatically.
-                        </p>
-                      </div>
-                      {import.meta.env.DEV && (
-                        <button
-                          onClick={() => simulateCustomerPrintJob()}
-                          className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-xs inline-flex items-center gap-1.5 transition-colors cursor-pointer"
-                        >
-                          <Sparkles className="w-3.5 h-3.5" />
-                          <span>Send Sample Test Order</span>
-                        </button>
-                      )}
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Order ID</TableHead>
+              <TableHead>Customer</TableHead>
+              <TableHead>Document / Settings</TableHead>
+              <TableHead>Assigned Printer</TableHead>
+              <TableHead>Amount</TableHead>
+              <TableHead>Status</TableHead>
+              <TableHead className="text-right">Quick Action</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {shopJobs.length === 0 ? (
+              <TableRow>
+                <TableCell colSpan={7} className="py-12 text-center text-slate-400">
+                  <div className="max-w-xs mx-auto space-y-3">
+                    <div className="w-10 h-10 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+                      <Clock className="w-5 h-5" />
                     </div>
-                  </td>
-                </tr>
-              ) : (
-                shopJobs.slice(0, 6).map((job) => {
+                    <div>
+                      <p className="text-xs font-semibold text-slate-700">No Orders in Live Queue</p>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        When customers scan your counter QR code, orders flow here automatically.
+                      </p>
+                    </div>
+                    {import.meta.env.DEV && (
+                      <Button
+                        variant="solid"
+                        size="xs"
+                        onClick={() => simulateCustomerPrintJob()}
+                        className="mx-auto"
+                      >
+                        <Sparkles className="w-3 h-3 text-white" />
+                        <span>Send Sample Test Order</span>
+                      </Button>
+                    )}
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : (
+              shopJobs.slice(0, 8).map((job) => {
                 const firstFile = job.files[0];
+                const isUpdating = updatingJobId === job.id;
+
                 return (
-                  <tr key={job.id} className="hover:bg-slate-50/60 transition-colors">
-                    <td className="py-3.5 px-4 font-mono font-bold text-blue-700">{job.id}</td>
-                    <td className="py-3.5 px-4">
-                      <span className="font-semibold text-slate-900 block">{job.customerName}</span>
+                  <TableRow key={job.id}>
+                    <TableCell className="font-mono font-semibold text-blue-700">
+                      {job.id}
+                    </TableCell>
+
+                    <TableCell>
+                      <span className="font-medium text-slate-900 block">{job.customerName}</span>
                       <span className="text-[11px] text-slate-400">{job.customerPhone || 'Walk-in Guest'}</span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <p className="font-medium text-slate-900 truncate max-w-[180px]">{firstFile?.fileName || 'Document'}</p>
+                    </TableCell>
+
+                    <TableCell>
+                      <p className="font-medium text-slate-800 truncate max-w-[200px]" title={firstFile?.fileName}>
+                        {firstFile?.fileName || 'Document'}
+                      </p>
                       <div className="flex items-center gap-1 text-[11px] text-slate-500 mt-0.5">
                         <span>{firstFile?.paperSize || 'A4'}</span>
                         <span>·</span>
                         <span>{firstFile?.color === 'COLOR' ? 'Color' : 'B&W'}</span>
                         <span>·</span>
-                        <span>{firstFile?.copies} cop.</span>
+                        <span>{firstFile?.copies || 1} {firstFile?.copies === 1 ? 'copy' : 'copies'}</span>
                       </div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className="text-slate-700 font-medium">{job.assignedPrinterName || 'Auto-Dispatch'}</span>
-                    </td>
-                    <td className="py-3.5 px-4 font-mono font-bold text-slate-900">
-                      ₹{job.totalAmount.toFixed(2)}
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span
-                        className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
-                          job.printStatus === 'COMPLETED'
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : job.printStatus === 'PRINTING'
-                            ? 'bg-blue-50 text-blue-700 animate-pulse'
-                            : job.printStatus === 'QUEUED'
-                            ? 'bg-amber-50 text-amber-700'
-                            : 'bg-red-50 text-red-700'
-                        }`}
-                      >
-                        {job.printStatus}
+                    </TableCell>
+
+                    <TableCell>
+                      <span className="text-slate-700 font-medium">
+                        {job.assignedPrinterName || 'Auto-Dispatch'}
                       </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      {job.printStatus === 'QUEUED' && (
-                        <button
-                          onClick={() => updateJobStatus(job.id, 'PRINTING')}
-                          className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[11px] font-bold shadow-2xs"
+                    </TableCell>
+
+                    <TableCell className="font-mono font-semibold text-slate-900">
+                      ₹{job.totalAmount.toFixed(2)}
+                    </TableCell>
+
+                    <TableCell>
+                      {renderStatusChip(job.printStatus)}
+                    </TableCell>
+
+                    <TableCell className="text-right">
+                      {(job.printStatus === 'QUEUED' || job.printStatus === 'ASSIGNED') && (
+                        <Button
+                          variant="solid"
+                          size="xs"
+                          disabled={isUpdating}
+                          onClick={() => handleStatusUpdate(job.id, 'PRINTING')}
                         >
-                          Send to Print
-                        </button>
+                          {isUpdating ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Printer className="w-3 h-3" />
+                          )}
+                          <span>Send to Print</span>
+                        </Button>
                       )}
-                      {job.printStatus === 'PRINTING' && (
-                        <button
-                          onClick={() => updateJobStatus(job.id, 'COMPLETED')}
-                          className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-[11px] font-bold shadow-2xs"
+
+                      {(job.printStatus === 'PRINTING' || job.printStatus === 'DOWNLOADING') && (
+                        <Button
+                          variant="solid"
+                          size="xs"
+                          disabled={isUpdating}
+                          onClick={() => handleStatusUpdate(job.id, 'COMPLETED')}
+                          className="bg-emerald-600 hover:bg-emerald-700 focus-visible:ring-emerald-500"
                         >
-                          Mark Ready
-                        </button>
+                          {isUpdating ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Check className="w-3 h-3" />
+                          )}
+                          <span>Mark Ready</span>
+                        </Button>
                       )}
+
                       {job.printStatus === 'COMPLETED' && (
-                        <span className="text-[11px] text-slate-400">Delivered</span>
+                        <span className="text-xs text-slate-400 font-medium">Delivered</span>
                       )}
-                    </td>
-                  </tr>
+
+                      {(job.printStatus === 'FAILED' || job.printStatus === 'CANCELLED' || job.printStatus === 'REQUIRES_ATTENTION') && (
+                        <Button
+                          variant="outline"
+                          size="xs"
+                          disabled={isUpdating}
+                          onClick={() => handleStatusUpdate(job.id, 'QUEUED')}
+                        >
+                          Retry
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
                 );
-              }))}
-            </tbody>
-          </table>
-        </div>
+              })
+            )}
+          </TableBody>
+        </Table>
       </div>
     </div>
   );

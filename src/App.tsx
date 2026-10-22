@@ -5,6 +5,7 @@ import { Navbar } from './components/layout/Navbar';
 import { Footer } from './components/layout/Footer';
 import { LandingPage } from './components/landing/LandingPage';
 import { CustomerPrintFlow } from './components/customer/CustomerPrintFlow';
+import { TrackPrintPage } from './components/customer/TrackPrintPage';
 import { AuthPages } from './components/auth/AuthPages';
 import { AdminLogin } from './components/admin/AdminLogin';
 import { ToastContainer } from './components/common/ToastContainer';
@@ -84,7 +85,6 @@ const AppRouter: React.FC = () => {
     const slug = path.replace(/^[/#]*s\//, '').split('/')[0] || activeShop.slug;
     return (
       <div className="min-h-screen bg-[#f8fafc] flex flex-col">
-        <Navbar />
         <AnimatePresence mode="wait">
           <motion.main
             key={`customer-flow-${slug}`}
@@ -101,11 +101,31 @@ const AppRouter: React.FC = () => {
     );
   }
 
+  // 1.5. Track Print Page: /track-print
+  if (path === '/track-print' || path === '#/track-print' || path.startsWith('/track-print')) {
+    return (
+      <div className="min-h-screen bg-[#f8fafc] flex flex-col">
+        <Navbar />
+        <AnimatePresence mode="wait">
+          <motion.main
+            key="track-print-page"
+            variants={pageTransitionVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="flex-1"
+          >
+            <TrackPrintPage />
+          </motion.main>
+        </AnimatePresence>
+      </div>
+    );
+  }
+
   // 2. Redirect /customer to QR ordering flow
   if (path.startsWith('/customer')) {
     return (
       <div className="min-h-screen bg-[#f8fafc] flex flex-col">
-        <Navbar />
         <AnimatePresence mode="wait">
           <motion.main
             key="customer-flow-redirect"
@@ -125,7 +145,7 @@ const AppRouter: React.FC = () => {
   // 3. Authentication
   if (path.startsWith('/auth')) {
     const isRegister = path.includes('register');
-    const isForgot = path.includes('forgot');
+    const isForgot = path.includes('forgot') || path.includes('reset');
     return (
       <div className="min-h-screen bg-[#f8fafc] flex flex-col">
         <Navbar />
@@ -170,7 +190,6 @@ const AppRouter: React.FC = () => {
     const tab = path.replace('/shop/', '').replace('/shop', '') || 'dashboard';
     return (
       <div className="min-h-screen bg-[#f8fafc] flex flex-col">
-        <Navbar />
         <ShopLayout activeTab={tab}>
           {tab === 'dashboard' && <ShopDashboard />}
           {tab === 'print-jobs' && <ShopPrintJobs />}

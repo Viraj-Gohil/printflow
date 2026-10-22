@@ -51,17 +51,28 @@ export interface StorageProvider {
  * shops/{shopId}/{DD}-{MM}-{YYYY}/jobs/{jobId}/{fileId}.{ext}
  * Configured application timezone: UTC (server-authoritative)
  */
-export function buildObjectPath(shopId: string, jobId: string, fileId: string, extension: string, dateOverride?: Date): string {
+export function buildObjectPath(
+  shopId: string,
+  jobId: string,
+  fileId: string,
+  extension: string,
+  dateOverride?: Date
+): string {
   const cleanExt = extension.replace(/^\./, '').toLowerCase() || 'bin';
-  const now = dateOverride || new Date();
-  const yyyy = now.getUTCFullYear();
-  const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-  const dd = String(now.getUTCDate()).padStart(2, '0');
-  const dateStr = `${dd}-${mm}-${yyyy}`;
-  return `shops/${shopId}/${dateStr}/jobs/${jobId}/${fileId}.${cleanExt}`;
+  if (dateOverride) {
+    const yyyy = dateOverride.getUTCFullYear();
+    const mm = String(dateOverride.getUTCMonth() + 1).padStart(2, '0');
+    const dd = String(dateOverride.getUTCDate()).padStart(2, '0');
+    const dateStr = `${dd}-${mm}-${yyyy}`;
+    return `shops/${shopId}/${dateStr}/jobs/${jobId}/${fileId}.${cleanExt}`;
+  }
+  return `shops/${shopId}/jobs/${jobId}/files/${fileId}.${cleanExt}`;
 }
 
-export const DEFAULT_STORAGE_BUCKET = process.env.SUPABASE_STORAGE_BUCKET || 'print-documents';
+export const DEFAULT_STORAGE_BUCKET =
+  process.env.SUPABASE_STORAGE_BUCKET && process.env.SUPABASE_STORAGE_BUCKET !== 'scan-print-file-upload'
+    ? process.env.SUPABASE_STORAGE_BUCKET
+    : 'print-documents';
 export const DEFAULT_SIGNED_URL_TTL_SECONDS = 900; // 15 minutes
 export const DEFAULT_SUPABASE_URL = 'https://rikchucpmlhvkfkmtojl.supabase.co';
 

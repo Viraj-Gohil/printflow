@@ -31,7 +31,8 @@ import {
   Camera,
   ExternalLink,
   Key,
-  Zap
+  Zap,
+  Search
 } from 'lucide-react';
 import { validatePhone, validatePageRange } from '../../lib/validation';
 import {
@@ -76,6 +77,20 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   const [remotePricingRules, setRemotePricingRules] = useState<PricingRule[] | null>(null);
   const [isLoadingPublicShop, setIsLoadingPublicShop] = useState<boolean>(false);
   const [publicShopError, setPublicShopError] = useState<string | null>(null);
+  const [maintenanceMode, setMaintenanceMode] = useState<{ enabled: boolean; message: string; scope: string } | null>(null);
+
+  useEffect(() => {
+    fetch(apiUrl('/api/maintenance/status'))
+      .then(res => res.json())
+      .then(data => {
+        if (data.success && data.maintenance && data.maintenance.enabled) {
+          if (data.maintenance.scope === 'entire_application' || data.maintenance.scope === 'customer_facing') {
+            setMaintenanceMode(data.maintenance);
+          }
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -287,6 +302,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
   // Prepare selected documents for secure upload after payment verification.
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (maintenanceMode) {
+      showToast('Maintenance Active', 'System is under maintenance. File uploads are disabled.', 'error', 4000);
+      return;
+    }
     setUploadError(null);
     setStepError(null);
     const selectedFiles = e.target.files;
@@ -1081,27 +1100,62 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
   return (
     <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans pb-24">
+      {maintenanceMode && (
+        <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 text-amber-900 text-xs sm:text-sm font-medium flex items-center justify-between gap-3 sticky top-0 z-40 shadow-xs">
+          <div className="flex items-center gap-2.5 max-w-7xl mx-auto w-full">
+            <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+            <div>
+              <span className="font-bold block">Scheduled Maintenance Mode Active</span>
+              <span>{maintenanceMode.message} File uploads and new orders are temporarily disabled.</span>
+            </div>
+          </div>
+        </div>
+      )}
       {/* 1. TOP HEADER (Matching Reference QuickPrint / Campus Copy Centre) */}
       <header className="bg-white border-b border-slate-200/90 sticky top-0 z-30 shadow-2xs font-heading">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
-              <Printer className="w-5 h-5" />
+        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2.5 sm:py-0 sm:h-16 flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-4">
+          <div className="flex items-center gap-2.5 w-full sm:w-auto justify-between sm:justify-start">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
+                <Printer className="w-5 h-5" />
+              </div>
+              <div className="min-w-0">
+                <span className="font-heading font-bold text-base sm:text-xl text-slate-900 block truncate max-w-[180px] sm:max-w-xs leading-tight tracking-tight">
+                  {shop.name}
+                </span>
+                <span className="text-[11px] text-slate-500 font-semibold tracking-tight truncate block max-w-[180px] sm:max-w-xs">
+                  {shop.city || 'Counter Print Portal'}
+                </span>
+              </div>
             </div>
-            <div>
-              <span className="font-heading font-medium text-xl sm:text-2xl text-slate-900 block leading-tight tracking-tight brand-text">
-                {shop.name}
-              </span>
-              <span className="text-xs text-slate-500 font-semibold tracking-tight">
-                {shop.city || 'Counter Print Portal'}
-              </span>
+
+            {/* Mobile Track Print button inside top row on small screens */}
+            <div className="flex sm:hidden items-center gap-2">
+              <a
+                href="#/track-print"
+                className="px-2.5 py-1 bg-blue-50 text-blue-700 font-bold text-xs rounded-lg border border-blue-200 flex items-center gap-1 shrink-0"
+              >
+                <Search className="w-3 h-3" />
+                <span>Track</span>
+              </a>
             </div>
           </div>
 
-          <div className="flex items-center gap-2 text-xs font-semibold text-emerald-700 bg-emerald-50 px-3.5 py-1.5 rounded-full border border-emerald-200">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span className="hidden sm:inline">Files are automatically deleted after printing</span>
-            <span className="sm:hidden">Auto-deleted after printing</span>
+          <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto">
+            <div className="hidden sm:flex items-center gap-2">
+              <a
+                href="#/track-print"
+                className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-colors flex items-center gap-1.5"
+              >
+                <Search className="w-3.5 h-3.5" />
+                <span>Track Print</span>
+              </a>
+            </div>
+            <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 truncate w-full sm:w-auto justify-center sm:justify-start">
+              <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 shrink-0" />
+              <span className="hidden md:inline">Files are automatically deleted after printing</span>
+              <span className="inline md:hidden">Auto-deleted after printing</span>
+            </div>
           </div>
         </div>
 
@@ -1215,31 +1269,31 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               </div>
 
               {/* Upload Mode Switcher: Standard Documents vs ID / Aadhaar 2-in-1 Merge */}
-              <div className="flex p-1 bg-slate-200/80 rounded-2xl max-w-md mx-auto">
+              <div className="flex flex-col sm:flex-row p-1 bg-slate-200/80 rounded-2xl max-w-md mx-auto gap-1">
                 <button
                   type="button"
                   onClick={() => setUploadMode('STANDARD')}
-                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
                     uploadMode === 'STANDARD'
                       ? 'bg-white text-slate-900 shadow-2xs'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <FileText className="w-3.5 h-3.5 text-blue-600" />
+                  <FileText className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   <span>Standard Files</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setUploadMode('ID_MERGE')}
-                  className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
                     uploadMode === 'ID_MERGE'
                       ? 'bg-white text-blue-700 shadow-2xs ring-1 ring-blue-600/20'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
-                  <CreditCard className="w-3.5 h-3.5 text-blue-600" />
+                  <CreditCard className="w-3.5 h-3.5 text-blue-600 shrink-0" />
                   <span>ID / Aadhaar 2-in-1</span>
-                  <span className="text-[9px] font-black uppercase px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-md">
+                  <span className="text-[9px] font-black uppercase px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-md shrink-0">
                     Merge
                   </span>
                 </button>
@@ -1264,14 +1318,21 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                   <div className="flex items-center justify-center">
                     <label
-                      htmlFor={uploadingQueue.length > 0 ? undefined : fileInputId}
+                      htmlFor={uploadingQueue.length > 0 || maintenanceMode ? undefined : fileInputId}
                       className={`h-11 px-6 font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 transition-all ${
-                        uploadingQueue.length > 0
+                        maintenanceMode
+                          ? 'bg-slate-300 text-slate-600 cursor-not-allowed opacity-90'
+                          : uploadingQueue.length > 0
                           ? 'bg-blue-400 text-white cursor-wait opacity-80'
                           : 'bg-blue-600 hover:bg-blue-700 active:scale-95 text-white cursor-pointer'
                       }`}
                     >
-                      {uploadingQueue.length > 0 ? (
+                      {maintenanceMode ? (
+                        <>
+                          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-700" />
+                          <span>Maintenance (Uploads Disabled)</span>
+                        </>
+                      ) : uploadingQueue.length > 0 ? (
                         <>
                           <RotateCw className="w-4 h-4 animate-spin shrink-0" />
                           <span>Uploading files...</span>
@@ -1286,7 +1347,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                         id={fileInputId}
                         type="file"
                         multiple
-                        disabled={uploadingQueue.length > 0}
+                        disabled={uploadingQueue.length > 0 || Boolean(maintenanceMode)}
                         accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
                         onChange={handleFileUpload}
                         className="hidden"
@@ -2292,24 +2353,24 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                   {/* Supported Payment Channels */}
                   <div className="pt-2 text-center space-y-2">
-                    <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500 font-medium">
-                      <span>Supported:</span>
-                      <span className="font-bold text-slate-800">UPI</span>
-                      <span>·</span>
-                      <span className="font-bold text-slate-800">Google Pay</span>
-                      <span>·</span>
-                      <span className="font-bold text-slate-800">PhonePe</span>
-                      <span>·</span>
-                      <span className="font-bold text-slate-800">Paytm</span>
-                      <span>·</span>
-                      <span className="font-bold text-slate-800">Cards</span>
-                      <span>·</span>
-                      <span className="font-bold text-slate-800">NetBanking</span>
+                    <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[11px] text-slate-500 font-medium px-1">
+                      <span className="shrink-0">Supported:</span>
+                      <span className="font-bold text-slate-800 shrink-0">UPI</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-bold text-slate-800 shrink-0">Google Pay</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-bold text-slate-800 shrink-0">PhonePe</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-bold text-slate-800 shrink-0">Paytm</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-bold text-slate-800 shrink-0">Cards</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="font-bold text-slate-800 shrink-0">NetBanking</span>
                     </div>
 
-                    <div className="flex items-center justify-center gap-1.5 text-[11px] text-slate-400 font-mono">
-                      <Lock className="w-3.5 h-3.5 text-emerald-600" />
-                      <span>Razorpay Secure Checkout · Instant Printer Dispatch</span>
+                    <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-slate-400 font-mono px-1">
+                      <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                      <span className="text-center">Razorpay Secure Checkout · Instant Printer Dispatch</span>
                     </div>
                   </div>
                 </div>

@@ -44,21 +44,21 @@ export const Navbar: React.FC = () => {
     <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-slate-200/80 transition-all font-heading">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* Brand Element */}
-        <div className="flex items-center gap-3 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
           <button
             onClick={() => navigate('/')}
-            className="flex items-center gap-2.5 text-left group focus:outline-none cursor-pointer shrink-0"
+            className="flex items-center gap-2 text-left group focus:outline-none cursor-pointer shrink-0 min-w-0"
           >
-            <div className="relative">
-              <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-xl bg-linear-to-br from-blue-600 via-blue-600 to-indigo-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 group-hover:shadow-blue-500/25 transition-all">
-                <Printer className="w-5 h-5 text-white" />
+            <div className="relative shrink-0">
+              <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-linear-to-br from-blue-600 via-blue-600 to-indigo-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 group-hover:shadow-blue-500/25 transition-all">
+                <Printer className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
               </div>
               <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full" />
             </div>
-            <div className="flex flex-col">
-              <span className="font-heading font-semibold text-2xl sm:text-3xl tracking-tight text-slate-900 group-hover:text-blue-600 transition-colors leading-tight flex items-center gap-2 brand-text">
+            <div className="flex flex-col min-w-0">
+              <span className="font-heading font-semibold text-lg sm:text-3xl tracking-tight text-slate-900 group-hover:text-blue-600 transition-colors leading-tight flex items-center gap-1.5 brand-text truncate">
                 PrintFlow
-                <span className="text-[11px] font-medium text-blue-600 bg-blue-50/90 px-2.5 py-0.5 rounded-md border border-blue-200 uppercase tracking-wider">
+                <span className="text-[10px] sm:text-[11px] font-medium text-blue-600 bg-blue-50/90 px-1.5 sm:px-2.5 py-0.5 rounded-md border border-blue-200 uppercase tracking-wider shrink-0">
                   Cloud
                 </span>
               </span>
@@ -132,23 +132,7 @@ export const Navbar: React.FC = () => {
 
         {/* Action Buttons */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {!currentUser ? (
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => navigate('/auth/login')}
-                className="px-4 py-2 text-xs sm:text-sm font-medium text-slate-700 hover:text-blue-600 bg-white hover:bg-slate-50 border border-slate-200/90 rounded-xl shadow-2xs hover:shadow-xs active:scale-95 transition-all cursor-pointer font-heading"
-              >
-                Shop Login
-              </button>
-              <button
-                onClick={() => navigate('/auth/register')}
-                className="px-4 py-2 text-xs sm:text-sm font-medium text-white bg-linear-to-r from-blue-600 via-indigo-600 to-blue-700 hover:from-blue-700 hover:to-indigo-800 rounded-xl shadow-xs shadow-blue-500/25 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5 group font-heading"
-              >
-                <span>Register Your Shop</span>
-                <ArrowRight className="w-3.5 h-3.5 group-hover:translate-x-0.5 transition-transform" />
-              </button>
-            </div>
-          ) : currentUser.role === 'ADMIN' ? (
+          {!currentUser ? null : currentUser.role === 'ADMIN' ? (
             <div className="flex items-center gap-2">
               {!currentPath.startsWith('/admin') && (
                 <button
@@ -242,27 +226,19 @@ export const Navbar: React.FC = () => {
               </button>
             </div>
 
-            <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  navigate('/auth/login');
-                }}
-                className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all text-center"
-              >
-                Shop Login
-              </button>
-              <button
-                onClick={() => {
-                  setMobileMenuOpen(false);
-                  navigate('/auth/register');
-                }}
-                className="w-full py-2.5 px-4 bg-linear-to-r from-blue-600 to-indigo-600 text-white rounded-xl text-xs font-bold shadow-xs text-center flex items-center justify-center gap-2"
-              >
-                <span>Register Your Shop</span>
-                <ArrowRight className="w-3.5 h-3.5" />
-              </button>
-            </div>
+            {currentUser && (
+              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    navigate('/auth/login');
+                  }}
+                  className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all text-center"
+                >
+                  Shop Login
+                </button>
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
