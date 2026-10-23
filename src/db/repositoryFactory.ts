@@ -68,7 +68,7 @@ if (DATABASE_URL && DATABASE_URL.length > 0) {
   try {
     _sharedPool = new Pool({
       connectionString: DATABASE_URL,
-      max: 10,
+      max: 5,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 10_000,
       ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
@@ -94,7 +94,7 @@ export const isSharedPoolConfigured = (): boolean => {
       if (activeUrl) {
         _sharedPool = new Pool({
           connectionString: activeUrl,
-          max: 10,
+          max: 5,
           idleTimeoutMillis: 30_000,
           connectionTimeoutMillis: 10_000,
           ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false }

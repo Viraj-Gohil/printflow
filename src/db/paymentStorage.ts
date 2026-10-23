@@ -159,7 +159,7 @@ export const isNeonDatabaseConfigured = (): boolean => {
     if (activeUrl && isValidDatabaseUrl(activeUrl)) {
       pgPool = new Pool({
         connectionString: activeUrl,
-        max: 10,
+        max: 5,
         idleTimeoutMillis: 30_000,
         connectionTimeoutMillis: 5_000,
         ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false }
@@ -432,63 +432,66 @@ export async function initializePaymentTables(): Promise<void> {
         CREATE INDEX IF NOT EXISTS idx_plans_active_public_sort ON public.plans(is_active, is_public, sort_order ASC, price_monthly ASC);
 
         -- Safe canonical seeding of plans ONLY if public.plans has no records
-        IF NOT EXISTS (SELECT 1 FROM public.plans LIMIT 1) THEN
-          INSERT INTO public.plans (
-            id, name, slug, tagline, description, price_monthly, price_yearly, currency, features, limits, is_active, is_public, is_popular, sort_order
-          ) VALUES
-          (
-            'plan_starter',
-            'Free Starter',
-            'starter',
-            'Ideal for small or newly opened local copy shops',
-            'Entry-level plan for local xerox kiosks testing touchless QR ordering.',
-            0.00,
-            0.00,
-            'INR',
-            '["1 Connected Printer", "Up to 50 jobs/mo", "Email Support", "Direct UPI QR Payments"]'::jsonb,
-            '{"printerLimit": 1, "printLimitMonthly": 50, "storageLimitMb": 1024, "staffLimit": 2, "maxUploadSizeMb": 25, "fileRetentionHours": 48}'::jsonb,
-            true, true, false, 1
-          ),
-          (
-            'plan_growth',
-            'Growth',
-            'growth',
-            'For bustling college & market copy shops needing automation',
-            'Designed for independent high-traffic counters handling regular daily college and market footfall.',
-            499.00,
-            4990.00,
-            'INR',
-            '["3 Connected Printers", "Up to 500 jobs/mo", "Auto Print Spooling", "Priority WhatsApp Support"]'::jsonb,
-            '{"printerLimit": 3, "printLimitMonthly": 500, "storageLimitMb": 10240, "staffLimit": 2, "maxUploadSizeMb": 25, "fileRetentionHours": 48}'::jsonb,
-            true, true, true, 2
-          ),
-          (
-            'plan_pro',
-            'Professional',
-            'professional',
-            'High-volume commercial reprography & blueprint centers',
-            'Complete operational system with desktop agent auto-spooling and multi-device routing for busy print centers.',
-            999.00,
-            9990.00,
-            'INR',
-            '["10 Connected Printers", "Up to 2,000 jobs/mo", "Custom Shop Branding", "Multi-staff Accounts", "Dedicated Support"]'::jsonb,
-            '{"printerLimit": 10, "printLimitMonthly": 2000, "storageLimitMb": 51200, "staffLimit": 5, "maxUploadSizeMb": 40, "fileRetentionHours": 48}'::jsonb,
-            true, true, false, 3
-          ),
-          (
-            'plan_enterprise',
-            'Enterprise',
-            'enterprise',
-            'Multi-store print chains and large document service providers',
-            'Multi-branch document centers requiring custom limits, API routing, and dedicated account manager SLA.',
-            2499.00,
-            24990.00,
-            'INR',
-            '["Unlimited Printers", "Custom Job Limits", "Multi-Branch Routing", "API Access", "24/7 Phone SLA"]'::jsonb,
-            '{"printerLimit": 50, "printLimitMonthly": 10000, "storageLimitMb": 204800, "staffLimit": 10, "maxUploadSizeMb": 50, "fileRetentionHours": 48}'::jsonb,
-            true, true, false, 4
-          );
-        END IF;
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM public.plans LIMIT 1) THEN
+            INSERT INTO public.plans (
+              id, name, slug, tagline, description, price_monthly, price_yearly, currency, features, limits, is_active, is_public, is_popular, sort_order
+            ) VALUES
+            (
+              'plan_starter',
+              'Free Starter',
+              'starter',
+              'Ideal for small or newly opened local copy shops',
+              'Entry-level plan for local xerox kiosks testing touchless QR ordering.',
+              0.00,
+              0.00,
+              'INR',
+              '["1 Connected Printer", "Up to 50 jobs/mo", "Email Support", "Direct UPI QR Payments"]'::jsonb,
+              '{"printerLimit": 1, "printLimitMonthly": 50, "storageLimitMb": 1024, "staffLimit": 2, "maxUploadSizeMb": 25, "fileRetentionHours": 48}'::jsonb,
+              true, true, false, 1
+            ),
+            (
+              'plan_growth',
+              'Growth',
+              'growth',
+              'For bustling college & market copy shops needing automation',
+              'Designed for independent high-traffic counters handling regular daily college and market footfall.',
+              499.00,
+              4990.00,
+              'INR',
+              '["3 Connected Printers", "Up to 500 jobs/mo", "Auto Print Spooling", "Priority WhatsApp Support"]'::jsonb,
+              '{"printerLimit": 3, "printLimitMonthly": 500, "storageLimitMb": 10240, "staffLimit": 2, "maxUploadSizeMb": 25, "fileRetentionHours": 48}'::jsonb,
+              true, true, true, 2
+            ),
+            (
+              'plan_pro',
+              'Professional',
+              'professional',
+              'High-volume commercial reprography & blueprint centers',
+              'Complete operational system with desktop agent auto-spooling and multi-device routing for busy print centers.',
+              999.00,
+              9990.00,
+              'INR',
+              '["10 Connected Printers", "Up to 2,000 jobs/mo", "Custom Shop Branding", "Multi-staff Accounts", "Dedicated Support"]'::jsonb,
+              '{"printerLimit": 10, "printLimitMonthly": 2000, "storageLimitMb": 51200, "staffLimit": 5, "maxUploadSizeMb": 40, "fileRetentionHours": 48}'::jsonb,
+              true, true, false, 3
+            ),
+            (
+              'plan_enterprise',
+              'Enterprise',
+              'enterprise',
+              'Multi-store print chains and large document service providers',
+              'Multi-branch document centers requiring custom limits, API routing, and dedicated account manager SLA.',
+              2499.00,
+              24990.00,
+              'INR',
+              '["Unlimited Printers", "Custom Job Limits", "Multi-Branch Routing", "API Access", "24/7 Phone SLA"]'::jsonb,
+              '{"printerLimit": 50, "printLimitMonthly": 10000, "storageLimitMb": 204800, "staffLimit": 10, "maxUploadSizeMb": 50, "fileRetentionHours": 48}'::jsonb,
+              true, true, false, 4
+            );
+          END IF;
+        END $$;
 
         -- Also ensure saas_plans table exists so any legacy queries never fail
         CREATE TABLE IF NOT EXISTS public.saas_plans (
@@ -508,6 +511,44 @@ export async function initializePaymentTables(): Promise<void> {
               CHECK (((purpose = 'SUBSCRIPTION' AND job_id IS NULL) OR (purpose = 'PRINT_JOB')));
           END IF;
         END $$;
+
+        -- Ensure canonical default counter shop exists for public touchless QR flow
+        INSERT INTO public.shops (
+          id, name, slug, tagline, address, phone, email, status, is_open,
+          business_hours, logo_url, primary_color, min_order_amount, auto_accept,
+          file_retention_days, razorpay_enabled, razorpay_test_mode, created_at, updated_at
+        ) VALUES (
+          'a001a111-0000-0000-0000-000000000001',
+          'PrintFlow Counter',
+          'printflow-counter',
+          'Instant Counter Xerox & Smart Print Station',
+          'Central Campus Complex, Mumbai',
+          '+91 98765 43210',
+          'shop@printflow.io',
+          'ACTIVE',
+          true,
+          '8:30 AM - 9:00 PM',
+          '',
+          '#2563EB',
+          200,
+          true,
+          7,
+          true,
+          false,
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (id) DO UPDATE SET
+          slug = 'printflow-counter',
+          status = 'ACTIVE',
+          is_open = true,
+          updated_at = NOW();
+
+        INSERT INTO public.printflow_shop_mappings (client_shop_id, neon_shop_id, updated_at)
+        VALUES 
+          ('shop_default', 'a001a111-0000-0000-0000-000000000001', NOW()),
+          ('printflow-counter', 'a001a111-0000-0000-0000-000000000001', NOW())
+        ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id;
       `);
 
       console.log('[PaymentStorage] Supabase PostgreSQL payment and PrintFlow Agent tables verified successfully.');
