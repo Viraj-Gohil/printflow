@@ -3,8 +3,13 @@ import path from 'path';
 import fs from 'fs';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import dns from 'dns';
 import Razorpay from 'razorpay';
 import cookieParser from 'cookie-parser';
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {}
 import {
   escapeHtml,
   sanitizePlainText,

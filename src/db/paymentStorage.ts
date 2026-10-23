@@ -2,10 +2,15 @@ import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
 import dotenv from 'dotenv';
+import dns from 'dns';
 import { Pool } from 'pg';
 import { encryptSecret, decryptSecret, maskKeyId } from '../lib/crypto/credentialCrypto';
 
 dotenv.config({ override: true });
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {}
 
 export interface ShopPaymentIntegrationRecord {
   id: string;
