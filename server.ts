@@ -2565,17 +2565,8 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
       targetMode = platformConfig.mode;
     } else {
       // Case 2: Customer Counter Print Job for a specific shop
-      // Enforce: Shop's Electron Print Agent must be online and ready before creating a payable print order
-      const orderAvailability = await getShopAgentAvailability(effectiveShopId);
-      if (!orderAvailability.isAvailable) {
-        return res.status(503).json({
-          success: false,
-          error: orderAvailability.message,
-          code: 'SHOP_OFFLINE',
-          reason: orderAvailability.reason,
-          availability: orderAvailability
-        });
-      }
+      // Advisory availability check (non-blocking so orders can always be paid and queued)
+      const orderAvailability = await getShopAgentAvailability(effectiveShopId).catch(() => null);
 
       const shopIntegration = await getShopPaymentIntegration(effectiveShopId);
       if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
@@ -3199,17 +3190,8 @@ app.post('/api/upload', createRateLimiter(30), async (req: Request, res: Respons
       return res.status(400).json({ success: false, error: 'Target shopId is required' });
     }
 
-    // Authoritative check: Block upload if shop has no online agent with a ready printer
-    const uploadAvailability = await getShopAgentAvailability(shopId);
-    if (!uploadAvailability.isAvailable) {
-      return res.status(503).json({
-        success: false,
-        error: uploadAvailability.message,
-        code: 'SHOP_OFFLINE',
-        reason: uploadAvailability.reason,
-        availability: uploadAvailability
-      });
-    }
+    // Advisory check: allow file uploads to queue even if agent is offline
+    const uploadAvailability = await getShopAgentAvailability(shopId).catch(() => null);
 
     // Decode base64 payload safely
     const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
