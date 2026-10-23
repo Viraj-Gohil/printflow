@@ -170,12 +170,13 @@ interface AppContextType {
   plans: SaasPlan[];
   subscriptions: Subscription[];
   platformPolicies: PlatformPolicies;
-  createPlan: (plan: Omit<SaasPlan, 'id' | 'createdAt' | 'updatedAt'>) => SaasPlan;
-  updatePlan: (planId: string, updates: Partial<SaasPlan>, policy?: PlanChangePolicy) => void;
-  duplicatePlan: (planId: string) => SaasPlan | null;
+  createPlan: (plan: Omit<SaasPlan, 'id' | 'createdAt' | 'updatedAt'>) => SaasPlan | Promise<SaasPlan>;
+  updatePlan: (planId: string, updates: Partial<SaasPlan>, policy?: PlanChangePolicy) => void | Promise<void>;
+  duplicatePlan: (planId: string) => SaasPlan | null | Promise<SaasPlan | null>;
   archivePlan: (planId: string) => { success: boolean; message: string };
-  deletePlan: (planId: string) => { success: boolean; message: string };
-  togglePlanStatus: (planId: string, status: PlanStatus) => void;
+  deletePlan: (planId: string) => { success: boolean; message: string } | Promise<{ success: boolean; message: string }>;
+  togglePlanStatus: (planId: string, status: PlanStatus) => void | Promise<void>;
+  refreshPlans?: () => Promise<void>;
   upgradeShopPlan: (shopId: string, planId: string) => Promise<boolean>;
   updateSubscription: (subId: string, updates: Partial<Subscription>) => void;
   changeShopSubscription: (shopId: string, newPlanId: string, policy?: PlanChangePolicy) => Promise<boolean>;
@@ -429,19 +430,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
   }, []);
 
-  // Public SaaS plans loader: fetch live plans from Supabase PostgreSQL
-  useEffect(() => {
-    fetch(apiUrl('/api/public/plans'))
-      .then((res) => (res.ok ? res.json() : null))
-      .then((data) => {
-        if (data?.success && Array.isArray(data.plans) && data.plans.length > 0) {
+  // Public and Admin SaaS plans loader: fetch live plans from PostgreSQL
+  const refreshPlans = async () => {
+    try {
+      const endpoint = currentUser?.role === 'ADMIN' ? '/api/admin/plans' : '/api/public/plans';
+      const res = await fetch(apiUrl(endpoint), {
+        credentials: 'same-origin',
+        headers: currentUser?.role === 'ADMIN' ? { 'X-User-Role': 'ADMIN' } : {}
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.success && Array.isArray(data.plans)) {
           setPlans(data.plans);
         }
-      })
-      .catch((err) => {
-        console.warn('[store] Public plans fetch notice:', err);
-      });
-  }, []);
+      }
+    } catch (err) {
+      console.warn('[store] Plans sync notice:', err);
+    }
+  };
+
+  useEffect(() => {
+    void refreshPlans();
+  }, [currentUser?.role]);
 
   const isAuthenticated = currentUser !== null;
 
@@ -924,7 +934,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [subscriptions, setSubscriptions] = useState<Subscription[]>([]);
   const [platformPolicies, setPlatformPolicies] = useState<PlatformPolicies>(DEFAULT_PLATFORM_POLICIES);
 
-  const createPlan = (planData: Omit<SaasPlan, 'id' | 'createdAt' | 'updatedAt'>): SaasPlan => {
+  const createPlan = async (planData: Omit<SaasPlan, 'id' | 'createdAt' | 'updatedAt'>): Promise<SaasPlan> => {
     const now = new Date().toISOString();
     const slug =
       planData.slug ||
@@ -932,48 +942,78 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .toLowerCase()
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/(^-|-$)/g, '');
-    const newPlan: SaasPlan = {
-      ...planData,
-      id: `plan_${Date.now()}`,
-      slug,
-      status: planData.status || 'ACTIVE',
-      isActive: planData.isActive ?? true,
-      version: 1,
-      createdAt: now,
-      updatedAt: now
+
+    const limits = planData.limits || {
+      printLimitMonthly: planData.printLimitMonthly ?? 500,
+      printerLimit: planData.printerLimit ?? 2,
+      storageLimitMb: planData.storageLimitMb ?? 5120,
+      staffLimit: planData.staffLimit ?? 2,
+      maxUploadSizeMb: planData.maxUploadSizeMb ?? 35,
+      fileRetentionHours: planData.fileRetentionHours ?? 48,
+      isUnlimitedPrintJobs: Boolean(planData.isUnlimitedPrintJobs),
+      isUnlimitedPrinters: Boolean(planData.isUnlimitedPrinters),
+      isUnlimitedStorage: Boolean(planData.isUnlimitedStorage)
     };
 
-    setPlans((prev) => {
-      const next = [...prev, newPlan];
-      setStoredItem('saas_plans', next);
-      return next;
-    });
-
-    addAuditLog('SAAS_PLAN_CREATED', 'SUBSCRIPTION', newPlan.id, `Created plan "${newPlan.name}" (₹${newPlan.priceMonthly}/mo)`);
-    showToast('Plan Created', `"${newPlan.name}" has been published to the catalog.`, 'success', 3500);
-    return newPlan;
+    try {
+      const res = await fetch(apiUrl('/api/admin/plans'), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Role': 'ADMIN'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          ...planData,
+          slug,
+          limits
+        })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success || !data.plan) {
+        const errorMsg = data?.error || 'Server error creating plan';
+        showToast('Creation Failed', errorMsg, 'error', 4500);
+        throw new Error(errorMsg);
+      }
+      setPlans((prev) => [data.plan, ...prev.filter((p) => p.id !== data.plan.id && p.slug !== data.plan.slug)]);
+      addAuditLog('SAAS_PLAN_CREATED', 'SUBSCRIPTION', data.plan.id, `Created plan "${data.plan.name}" (₹${data.plan.priceMonthly}/mo)`);
+      showToast('Plan Created', `"${data.plan.name}" has been saved to the database.`, 'success', 3500);
+      return data.plan;
+    } catch (err: any) {
+      console.warn('Backend plan creation error:', err);
+      throw err;
+    }
   };
 
-  const updatePlan = (planId: string, updates: Partial<SaasPlan>, policy: PlanChangePolicy = 'NEW_ONLY') => {
+  const updatePlan = async (planId: string, updates: Partial<SaasPlan>, policy: PlanChangePolicy = 'NEW_ONLY') => {
     const now = new Date().toISOString();
     let targetPlanName = '';
 
-    setPlans((prev) => {
-      const next = prev.map((p) => {
-        if (p.id === planId) {
-          targetPlanName = p.name;
-          return {
-            ...p,
-            ...updates,
-            version: (p.version || 1) + 1,
-            updatedAt: now
-          };
-        }
-        return p;
+    try {
+      const res = await fetch(apiUrl(`/api/admin/plans/${encodeURIComponent(planId)}`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Role': 'ADMIN'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(updates)
       });
-      setStoredItem('saas_plans', next);
-      return next;
-    });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast('Update Failed', data?.error || 'Failed to update plan in database.', 'error', 4500);
+        return;
+      }
+      if (data.plan) {
+        setPlans((prev) => prev.map((p) => (p.id === planId || p.slug === planId ? data.plan : p)));
+        targetPlanName = data.plan.name;
+        showToast('Plan Updated', `"${data.plan.name}" updated successfully in database.`, 'success', 3500);
+      }
+    } catch (err: any) {
+      console.warn('Backend plan update error:', err);
+      showToast('Update Error', err?.message || 'Could not reach server.', 'error', 4500);
+      return;
+    }
 
     // Handle Safe Plan Updates grandfathering policy
     if (policy === 'IMMEDIATE') {
@@ -1002,45 +1042,71 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     showToast('Plan Updated', `Changes applied with policy "${policy}".`, 'success', 3500);
   };
 
-  const duplicatePlan = (planId: string): SaasPlan | null => {
-    const original = plans.find((p) => p.id === planId);
+  const duplicatePlan = async (planId: string): Promise<SaasPlan | null> => {
+    const original = plans.find((p) => p.id === planId || p.slug === planId);
     if (!original) return null;
 
-    const now = new Date().toISOString();
-    const cloned: SaasPlan = {
-      ...original,
-      id: `plan_${Date.now()}`,
-      name: `${original.name} (Copy)`,
-      slug: `${original.slug || original.id}-copy`,
-      status: 'DRAFT',
-      isActive: false,
-      version: 1,
-      createdAt: now,
-      updatedAt: now
-    };
+    const baseSlug = (original.slug || original.id).replace(/-copy(-\d+)?$/, '');
+    const cleanSlug = `${baseSlug}-copy-${Date.now().toString().slice(-4)}`;
+    const copyName = `${original.name} (Copy)`;
 
-    setPlans((prev) => {
-      const next = [...prev, cloned];
-      setStoredItem('saas_plans', next);
-      return next;
-    });
+    try {
+      const cloned = await createPlan({
+        name: copyName,
+        slug: cleanSlug,
+        tagline: original.tagline || '',
+        description: original.description || '',
+        priceMonthly: original.priceMonthly,
+        priceYearly: original.priceYearly,
+        currency: original.currency || 'INR',
+        features: original.features || [],
+        limits: original.limits || {},
+        isActive: false,
+        isPublic: false,
+        isPopular: false,
+        sortOrder: (original.sortOrder || 1) + 1,
+        status: 'DRAFT',
+        isFree: original.isFree,
+        billingInterval: original.billingInterval,
+        trialDays: original.trialDays,
+        taxInclusive: original.taxInclusive,
+        adminNotes: `Cloned from ${original.name}`,
+        printLimitMonthly: original.printLimitMonthly,
+        printerLimit: original.printerLimit,
+        storageLimitMb: original.storageLimitMb,
+        staffLimit: original.staffLimit,
+        maxUploadSizeMb: original.maxUploadSizeMb,
+        fileRetentionHours: original.fileRetentionHours
+      });
 
-    addAuditLog('SAAS_PLAN_DUPLICATED', 'SUBSCRIPTION', cloned.id, `Duplicated plan "${original.name}" into "${cloned.name}"`);
-    showToast('Plan Duplicated', `"${cloned.name}" created in Draft status.`, 'info', 3500);
-    return cloned;
+      addAuditLog('SAAS_PLAN_DUPLICATED', 'SUBSCRIPTION', cloned.id, `Duplicated plan "${original.name}" into "${cloned.name}"`);
+      showToast('Plan Duplicated', `"${cloned.name}" saved as draft in database.`, 'info', 3500);
+      return cloned;
+    } catch {
+      return null;
+    }
   };
 
   const archivePlan = (planId: string): { success: boolean; message: string } => {
-    const targetPlan = plans.find((p) => p.id === planId);
+    const targetPlan = plans.find((p) => p.id === planId || p.slug === planId);
     if (!targetPlan) return { success: false, message: 'Plan not found.' };
 
-    const activeSubs = subscriptions.filter((s) => s.planId === planId && s.status === 'ACTIVE');
+    const activeSubs = subscriptions.filter((s) => (s.planId === planId || s.planId === targetPlan.id) && s.status === 'ACTIVE');
     const now = new Date().toISOString();
 
     // Preserve historical records by soft-archiving instead of deleting
+    try {
+      fetch(apiUrl(`/api/admin/plans/${encodeURIComponent(planId)}/status`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Role': 'ADMIN' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ isActive: false, status: 'ARCHIVED' })
+      }).catch(() => {});
+    } catch {}
+
     setPlans((prev) => {
       const next = prev.map((p) =>
-        p.id === planId ? { ...p, status: 'ARCHIVED' as const, isActive: false, updatedAt: now } : p
+        p.id === planId || p.slug === planId ? { ...p, status: 'ARCHIVED' as const, isActive: false, updatedAt: now } : p
       );
       setStoredItem('saas_plans', next);
       return next;
@@ -1056,47 +1122,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true, message: msg };
   };
 
-  const deletePlan = (planId: string): { success: boolean; message: string } => {
-    const targetPlan = plans.find((p) => p.id === planId);
+  const deletePlan = async (planId: string): Promise<{ success: boolean; message: string }> => {
+    const targetPlan = plans.find((p) => p.id === planId || p.slug === planId);
     if (!targetPlan) return { success: false, message: 'Plan not found.' };
 
-    const protectedIds = new Set(['plan_starter', 'free', 'plan_free', 'starter']);
-    if (protectedIds.has(planId.toLowerCase()) || targetPlan.priceMonthly === 0) {
-      return { success: false, message: 'The default Free / Starter plan is required by the platform and cannot be deleted.' };
+    const effectiveId = targetPlan.id;
+
+    if (effectiveId === 'plan_starter' && targetPlan.slug === 'starter') {
+      const otherFree = plans.filter((p) => p.id !== 'plan_starter' && (p.priceMonthly === 0 || p.slug === 'starter'));
+      if (otherFree.length === 0) {
+        return { success: false, message: 'The primary Free Starter plan is required by the platform and cannot be deleted when it is the only free tier.' };
+      }
     }
 
-    const activeSubs = subscriptions.filter((s) => s.planId === planId && s.status === 'ACTIVE');
-    if (activeSubs.length > 0) {
-      return {
-        success: false,
-        message: `Cannot delete plan: ${activeSubs.length} active subscription(s) are bound to this plan.`
-      };
-    }
-
-    const assignedShops = shops.filter((s) => s.planId === planId);
-    if (assignedShops.length > 0) {
-      return {
-        success: false,
-        message: `Cannot delete plan: ${assignedShops.length} shop(s) are currently on this plan.`
-      };
+    try {
+      const res = await fetch(apiUrl(`/api/admin/plans/${encodeURIComponent(effectiveId)}`), {
+        method: 'DELETE',
+        headers: { 'X-User-Role': 'ADMIN' },
+        credentials: 'same-origin'
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        return { success: false, message: data.error || 'Server prevented deletion.' };
+      }
+    } catch (err: any) {
+      return { success: false, message: err?.message || 'Could not contact server.' };
     }
 
     setPlans((prev) => {
-      const next = prev.filter((p) => p.id !== planId);
+      const next = prev.filter((p) => p.id !== effectiveId && p.slug !== targetPlan.slug);
       setStoredItem('saas_plans', next);
       return next;
     });
 
-    addAuditLog('SAAS_PLAN_DELETED', 'SUBSCRIPTION', planId, `Plan "${targetPlan.name}" deleted.`);
-    showToast('Plan Deleted', `Plan "${targetPlan.name}" deleted permanently.`, 'success', 4000);
-    return { success: true, message: 'Plan deleted.' };
+    addAuditLog('SAAS_PLAN_DELETED', 'SUBSCRIPTION', effectiveId, `Plan "${targetPlan.name}" deleted.`);
+    showToast('Plan Deleted', `Plan "${targetPlan.name}" deleted permanently from database.`, 'success', 4000);
+    return { success: true, message: `Plan "${targetPlan.name}" deleted.` };
   };
 
-  const togglePlanStatus = (planId: string, status: PlanStatus) => {
+  const togglePlanStatus = async (planId: string, status: PlanStatus) => {
     const now = new Date().toISOString();
+    const isActive = status === 'ACTIVE';
+
+    try {
+      fetch(apiUrl(`/api/admin/plans/${encodeURIComponent(planId)}/status`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'X-User-Role': 'ADMIN' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ isActive, status })
+      }).catch(() => {});
+    } catch {}
+
     setPlans((prev) => {
       const next = prev.map((p) =>
-        p.id === planId ? { ...p, status, isActive: status === 'ACTIVE', updatedAt: now } : p
+        p.id === planId || p.slug === planId ? { ...p, status, isActive, updatedAt: now } : p
       );
       setStoredItem('saas_plans', next);
       return next;

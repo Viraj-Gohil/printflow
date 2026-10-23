@@ -271,6 +271,19 @@ export interface SaasPlan {
   displayOrder?: number;
   adminNotes?: string;
 
+  currency?: string;
+  isPublic?: boolean;
+  sortOrder?: number;
+  limits?: {
+    printLimitMonthly?: number;
+    printerLimit?: number;
+    storageLimitMb?: number;
+    staffLimit?: number;
+    maxUploadSizeMb?: number;
+    fileRetentionHours?: number;
+    [key: string]: any;
+  };
+
   // Quotas (Strictly Single Independent Shop Architecture)
   printLimitMonthly?: number;
   printLimit?: number;

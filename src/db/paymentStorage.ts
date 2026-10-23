@@ -199,7 +199,7 @@ function hashAgentToken(token: string): string {
  * Initializes database schema migrations safely.
  */
 export async function initializePaymentTables(): Promise<void> {
-  if (!pgPool) {
+  if (!isNeonDatabaseConfigured() || !pgPool) {
     return;
   }
 
@@ -332,6 +332,173 @@ export async function initializePaymentTables(): Promise<void> {
         INSERT INTO public.platform_maintenance_mode (id, enabled, scope, message)
         VALUES ('current', false, 'entire_application', 'We are performing scheduled maintenance. Please check back shortly.')
         ON CONFLICT (id) DO NOTHING;
+
+        CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+        CREATE TABLE IF NOT EXISTS public.plans (
+          id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+          name TEXT NOT NULL,
+          slug TEXT,
+          tagline TEXT,
+          description TEXT,
+          price_monthly NUMERIC(10,2) NOT NULL DEFAULT 0,
+          price_yearly NUMERIC(10,2) NOT NULL DEFAULT 0,
+          currency TEXT NOT NULL DEFAULT 'INR',
+          features JSONB NOT NULL DEFAULT '[]'::jsonb,
+          limits JSONB NOT NULL DEFAULT '{}'::jsonb,
+          is_active BOOLEAN NOT NULL DEFAULT true,
+          is_public BOOLEAN NOT NULL DEFAULT true,
+          is_popular BOOLEAN NOT NULL DEFAULT false,
+          sort_order INT NOT NULL DEFAULT 1,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'slug') THEN
+            ALTER TABLE public.plans ADD COLUMN slug TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'description') THEN
+            ALTER TABLE public.plans ADD COLUMN description TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'currency') THEN
+            ALTER TABLE public.plans ADD COLUMN currency TEXT NOT NULL DEFAULT 'INR';
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'limits') THEN
+            ALTER TABLE public.plans ADD COLUMN limits JSONB NOT NULL DEFAULT '{}'::jsonb;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'is_public') THEN
+            ALTER TABLE public.plans ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT true;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'sort_order') THEN
+            ALTER TABLE public.plans ADD COLUMN sort_order INT NOT NULL DEFAULT 1;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'is_popular') THEN
+            ALTER TABLE public.plans ADD COLUMN is_popular BOOLEAN NOT NULL DEFAULT false;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'tagline') THEN
+            ALTER TABLE public.plans ADD COLUMN tagline TEXT;
+          END IF;
+          IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'plans' AND column_name = 'updated_at') THEN
+            ALTER TABLE public.plans ADD COLUMN updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+          END IF;
+        END $$;
+
+        UPDATE public.plans
+        SET slug = CASE
+          WHEN id = 'b001a111-0000-0000-0000-000000000001' THEN 'free-legacy'
+          WHEN id = 'b001a111-0000-0000-0000-000000000002' THEN 'basic-legacy'
+          WHEN id = 'b001a111-0000-0000-0000-000000000003' THEN 'pro-legacy'
+          WHEN id = 'b001a111-0000-0000-0000-000000000004' THEN 'enterprise-legacy'
+          WHEN id = 'plan_starter' THEN 'starter'
+          WHEN id = 'plan_growth' THEN 'growth'
+          WHEN id = 'plan_pro' THEN 'professional'
+          WHEN id = 'plan_enterprise' THEN 'enterprise'
+          ELSE LOWER(REGEXP_REPLACE(name, '[^a-zA-Z0-9]+', '-', 'g')) || '-' || SUBSTRING(REPLACE(id::text, '-', '') FROM 1 FOR 6)
+        END
+        WHERE slug IS NULL OR slug = '';
+
+        UPDATE public.plans
+        SET description = COALESCE(description, tagline, 'Subscription plan for PrintFlow photocopy and print shops.')
+        WHERE description IS NULL OR description = '';
+
+        UPDATE public.plans
+        SET limits = jsonb_build_object(
+          'printerLimit', 2,
+          'printLimitMonthly', 500,
+          'storageLimitMb', 5120,
+          'staffLimit', 2,
+          'maxUploadSizeMb', 35,
+          'fileRetentionHours', 48
+        )
+        WHERE limits IS NULL OR limits = '{}'::jsonb;
+
+        UPDATE public.plans
+        SET is_public = false
+        WHERE id LIKE 'b001%' OR name LIKE '%legacy%';
+
+        UPDATE public.plans
+        SET sort_order = CASE
+          WHEN id = 'plan_starter' OR slug = 'starter' THEN 1
+          WHEN id = 'plan_growth' OR slug = 'growth' THEN 2
+          WHEN id = 'plan_pro' OR slug = 'professional' THEN 3
+          WHEN id = 'plan_enterprise' OR slug = 'enterprise' THEN 4
+          ELSE sort_order
+        END
+        WHERE id LIKE 'plan_%';
+
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_slug ON public.plans(slug);
+        CREATE INDEX IF NOT EXISTS idx_plans_active_public_sort ON public.plans(is_active, is_public, sort_order ASC, price_monthly ASC);
+
+        -- Safe canonical seeding of plans ONLY if public.plans has no records
+        IF NOT EXISTS (SELECT 1 FROM public.plans LIMIT 1) THEN
+          INSERT INTO public.plans (
+            id, name, slug, tagline, description, price_monthly, price_yearly, currency, features, limits, is_active, is_public, is_popular, sort_order
+          ) VALUES
+          (
+            'plan_starter',
+            'Free Starter',
+            'starter',
+            'Ideal for small or newly opened local copy shops',
+            'Entry-level plan for local xerox kiosks testing touchless QR ordering.',
+            0.00,
+            0.00,
+            'INR',
+            '["1 Connected Printer", "Up to 50 jobs/mo", "Email Support", "Direct UPI QR Payments"]'::jsonb,
+            '{"printerLimit": 1, "printLimitMonthly": 50, "storageLimitMb": 1024, "staffLimit": 2, "maxUploadSizeMb": 25, "fileRetentionHours": 48}'::jsonb,
+            true, true, false, 1
+          ),
+          (
+            'plan_growth',
+            'Growth',
+            'growth',
+            'For bustling college & market copy shops needing automation',
+            'Designed for independent high-traffic counters handling regular daily college and market footfall.',
+            499.00,
+            4990.00,
+            'INR',
+            '["3 Connected Printers", "Up to 500 jobs/mo", "Auto Print Spooling", "Priority WhatsApp Support"]'::jsonb,
+            '{"printerLimit": 3, "printLimitMonthly": 500, "storageLimitMb": 10240, "staffLimit": 2, "maxUploadSizeMb": 25, "fileRetentionHours": 48}'::jsonb,
+            true, true, true, 2
+          ),
+          (
+            'plan_pro',
+            'Professional',
+            'professional',
+            'High-volume commercial reprography & blueprint centers',
+            'Complete operational system with desktop agent auto-spooling and multi-device routing for busy print centers.',
+            999.00,
+            9990.00,
+            'INR',
+            '["10 Connected Printers", "Up to 2,000 jobs/mo", "Custom Shop Branding", "Multi-staff Accounts", "Dedicated Support"]'::jsonb,
+            '{"printerLimit": 10, "printLimitMonthly": 2000, "storageLimitMb": 51200, "staffLimit": 5, "maxUploadSizeMb": 40, "fileRetentionHours": 48}'::jsonb,
+            true, true, false, 3
+          ),
+          (
+            'plan_enterprise',
+            'Enterprise',
+            'enterprise',
+            'Multi-store print chains and large document service providers',
+            'Multi-branch document centers requiring custom limits, API routing, and dedicated account manager SLA.',
+            2499.00,
+            24990.00,
+            'INR',
+            '["Unlimited Printers", "Custom Job Limits", "Multi-Branch Routing", "API Access", "24/7 Phone SLA"]'::jsonb,
+            '{"printerLimit": 50, "printLimitMonthly": 10000, "storageLimitMb": 204800, "staffLimit": 10, "maxUploadSizeMb": 50, "fileRetentionHours": 48}'::jsonb,
+            true, true, false, 4
+          );
+        END IF;
+
+        -- Also ensure saas_plans table exists so any legacy queries never fail
+        CREATE TABLE IF NOT EXISTS public.saas_plans (
+          id VARCHAR(64) PRIMARY KEY,
+          plan_data JSONB NOT NULL,
+          price_monthly NUMERIC NOT NULL DEFAULT 0,
+          is_active BOOLEAN NOT NULL DEFAULT true,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
 
         DO $$
         BEGIN

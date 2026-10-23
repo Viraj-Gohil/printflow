@@ -581,8 +581,8 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
 
         {/* Content Viewport */}
         <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-y-auto">
-          {/* Breadcrumb Header for non-pricing pages */}
-          {activeTab !== 'pricing' && (
+          {/* Breadcrumb Header for pages that do not have their own bespoke header */}
+          {activeTab !== 'pricing' && activeTab !== 'dashboard' && (
             <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
               <div>
                 <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">

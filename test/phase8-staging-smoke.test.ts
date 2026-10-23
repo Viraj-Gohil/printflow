@@ -169,12 +169,12 @@ async function runPhase8Tests() {
     assert.ok(signed.expiresAt.getTime() > Date.now());
   });
 
-  // 8. Migration Runner Integrity & Checksums (001 through 005)
-  await test('Migration runner loads migrations 001 through 005 in strict sequential order', async () => {
+  // 8. Migration Runner Integrity & Checksums (001 through 006)
+  await test('Migration runner loads migrations 001 through 006 in strict sequential order', async () => {
     const migrations = await loadMigrations();
-    assert.strictEqual(migrations.length, 5, 'Exactly 5 migrations must be registered');
+    assert.strictEqual(migrations.length, 6, 'Exactly 6 migrations must be registered');
 
-    const expectedIds = ['001', '002', '003', '004', '005'];
+    const expectedIds = ['001', '002', '003', '004', '005', '006'];
     for (let i = 0; i < expectedIds.length; i++) {
       assert.strictEqual(migrations[i].id, expectedIds[i], `Migration at index ${i} must have id ${expectedIds[i]}`);
       assert.ok(migrations[i].sql.trim().length > 50, `Migration ${migrations[i].filename} SQL must not be empty`);

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '../../lib/store';
+import { apiUrl } from '../../lib/apiConfig';
 import {
   QrCode,
   SlidersHorizontal,
@@ -48,6 +49,69 @@ export const LandingPage: React.FC = () => {
 
   // Billing period toggle (Monthly / Yearly)
   const [billingPeriod, setBillingPeriod] = useState<'MONTHLY' | 'YEARLY'>('MONTHLY');
+
+  // Live SaaS Pricing Plans from Database with Optimized Fetching & Caching
+  const [livePlans, setLivePlans] = useState<any[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchLivePlans() {
+      try {
+        const res = await fetch(apiUrl('/api/public/plans'));
+        const data = await res.json();
+        if (!cancelled && data.success && Array.isArray(data.plans) && data.plans.length > 0) {
+          setLivePlans(data.plans);
+        }
+      } catch (err) {
+        console.warn('[LandingPage] Using fallback store plans:', err);
+      }
+    }
+    fetchLivePlans();
+    return () => { cancelled = true; };
+  }, []);
+
+  const displayPlans = livePlans.length > 0 ? livePlans : (plans.length > 0 ? plans : [
+    {
+      id: 'starter',
+      name: 'Starter',
+      tagline: 'For small photocopy shops testing the platform',
+      priceMonthly: 0,
+      priceYearly: 0,
+      currency: 'INR',
+      features: ['Up to 100 prints/month', '1 Counter QR Stand', 'Desktop Print Agent (1 PC)', 'Razorpay & UPI Payments'],
+      isPopular: false
+    },
+    {
+      id: 'growth',
+      name: 'Growth',
+      tagline: 'For busy college-area xerox & copy shops',
+      priceMonthly: 499,
+      priceYearly: 399,
+      currency: 'INR',
+      features: ['Unlimited Monthly Prints', '3 Printable Counter QR Stands', 'Multi-Printer Spooling (B&W + Color)', 'Daily Revenue & Accounting Reports', 'Priority WhatsApp Support'],
+      isPopular: true
+    },
+    {
+      id: 'pro',
+      name: 'Commercial Pro Hub',
+      tagline: 'For high-volume xerox centers & busy campus hubs',
+      priceMonthly: 999,
+      priceYearly: 799,
+      currency: 'INR',
+      features: ['Up to 20 Connected Printers', 'Multiple Cashier Logins', 'Custom Branding & Domain', 'Dedicated Account Manager'],
+      isPopular: false
+    },
+    {
+      id: 'enterprise',
+      name: 'Enterprise',
+      tagline: 'Multi-branch franchises, university hubs & print enterprises',
+      priceMonthly: 2499,
+      priceYearly: 1999,
+      currency: 'INR',
+      features: ['Unlimited Connected Printers', 'Unlimited Cashier Accounts', 'Dedicated Infrastructure & 99.99% SLA', 'Custom ERP & Accounting Sync', '24/7 Phone & WhatsApp Support'],
+      isPopular: false
+    }
+  ]);
 
   // Accordion FAQ state
   const [openFaq, setOpenFaq] = useState<number | null>(0);
@@ -126,7 +190,7 @@ export const LandingPage: React.FC = () => {
               <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full text-xs font-semibold text-blue-700 bg-blue-50 border border-blue-200/90 shadow-2xs">
                 <Sparkles className="w-3.5 h-3.5 text-blue-600 animate-pulse" />
                 <span className="font-mono text-[11px] tracking-wider uppercase font-bold">
-                  NEXT-GEN PRINTING FOR MODERN XEROX SHOPS
+                  NEXT-GEN PRINTING FOR XEROX SHOPS
                 </span>
               </div>
 
@@ -626,21 +690,23 @@ export const LandingPage: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="bg-slate-900 text-slate-100 rounded-2xl p-5 font-mono text-xs space-y-3 shadow-inner">
-                    <div className="flex items-center justify-between border-b border-slate-800 pb-2.5">
+                  <div className="bg-slate-50 border border-slate-200 text-slate-800 rounded-2xl p-5 font-mono text-xs space-y-3 shadow-xs">
+                    <div className="flex items-center justify-between border-b border-slate-200 pb-2.5">
                       <div className="flex items-center gap-2">
-                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                        <span className="font-bold text-white">PrintFlow Desktop Agent v2.4</span>
+                        <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse" />
+                        <span className="font-bold text-slate-900">PrintFlow Desktop Agent v2.4</span>
                       </div>
-                      <span className="text-slate-400 text-[11px]">SHOP-AGENT-ONLINE</span>
+                      <span className="text-slate-600 text-[11px] font-semibold bg-white px-2 py-0.5 rounded border border-slate-200">
+                        SHOP-AGENT-ONLINE
+                      </span>
                     </div>
 
-                    <div className="space-y-1.5 text-slate-300">
-                      <p className="text-emerald-400 font-bold">[12:42:01] Job Received: #PRT-84291 from Cloud Queue</p>
-                      <p className="text-blue-400">[12:42:02] File Downloaded: Project_Report_Final.pdf (1.4 MB)</p>
-                      <p className="text-indigo-400">[12:42:02] Printer Selected: HP LaserJet Pro M404dn (Ready)</p>
-                      <p className="text-yellow-400">[12:42:03] Applying Specs: A4 · Duplex · B&W · 12 Pages</p>
-                      <p className="text-emerald-400 font-bold">[12:42:04] Sending to Tray 1... Auto Spool Started ✓</p>
+                    <div className="space-y-1.5 text-slate-700">
+                      <p className="text-emerald-700 font-bold bg-emerald-50/80 px-2 py-1 rounded border border-emerald-100">[12:42:01] Job Received: #PRT-84291 from Cloud Queue</p>
+                      <p className="text-blue-700 bg-blue-50/80 px-2 py-1 rounded border border-blue-100">[12:42:02] File Downloaded: Project_Report_Final.pdf (1.4 MB)</p>
+                      <p className="text-indigo-700 bg-indigo-50/80 px-2 py-1 rounded border border-indigo-100">[12:42:02] Printer Selected: HP LaserJet Pro M404dn (Ready)</p>
+                      <p className="text-amber-800 bg-amber-50/80 px-2 py-1 rounded border border-amber-100">[12:42:03] Applying Specs: A4 · Duplex · B&W · 12 Pages</p>
+                      <p className="text-emerald-700 font-bold bg-emerald-50/80 px-2 py-1 rounded border border-emerald-100">[12:42:04] Sending to Tray 1... Auto Spool Started ✓</p>
                     </div>
                   </div>
 
@@ -681,28 +747,28 @@ export const LandingPage: React.FC = () => {
                     </span>
                   </div>
 
-                  <div className="bg-slate-950 text-white rounded-3xl p-6 sm:p-8 text-center space-y-4 max-w-lg mx-auto shadow-xl border border-slate-800">
-                    <div className="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center mx-auto text-white shadow-lg">
+                  <div className="bg-slate-50 text-slate-900 rounded-3xl p-6 sm:p-8 text-center space-y-4 max-w-lg mx-auto shadow-sm border border-slate-200">
+                    <div className="w-14 h-14 rounded-2xl bg-blue-600 flex items-center justify-center mx-auto text-white shadow-md">
                       <Printer className="w-7 h-7" />
                     </div>
 
                     <div className="space-y-1">
-                      <span className="text-xs font-mono text-emerald-400 font-bold uppercase tracking-wider">
+                      <span className="text-xs font-mono text-emerald-700 font-bold uppercase tracking-wider">
                         PRINTING COMPLETED
                       </span>
-                      <div className="w-full bg-slate-800 h-2 rounded-full overflow-hidden my-3">
+                      <div className="w-full bg-slate-200 h-2.5 rounded-full overflow-hidden my-3">
                         <div className="bg-emerald-500 h-full w-full" />
                       </div>
-                      <p className="font-mono text-xs text-slate-400">████████████ 100%</p>
+                      <p className="font-mono text-xs text-slate-600 font-semibold">100% Complete</p>
                     </div>
 
-                    <div className="p-4 bg-slate-900 rounded-2xl border border-slate-800 space-y-1">
-                      <span className="text-xs text-slate-400">Pickup Counter Token:</span>
-                      <p className="text-3xl font-mono font-extrabold text-white">#84291</p>
-                      <p className="text-xs text-emerald-400 font-bold pt-1">Ready on Counter Tray</p>
+                    <div className="p-5 bg-white rounded-2xl border border-slate-200 shadow-xs space-y-1">
+                      <span className="text-xs text-slate-500 font-medium">Pickup Counter Token:</span>
+                      <p className="text-3xl font-mono font-extrabold text-blue-600">#84291</p>
+                      <p className="text-xs text-emerald-600 font-bold pt-1">Ready on Counter Tray</p>
                     </div>
 
-                    <p className="text-xs text-slate-400 leading-relaxed">
+                    <p className="text-xs text-slate-600 leading-relaxed">
                       Customer simply matches Token #84291 and collects their printed document. Total turnaround time: 28 seconds.
                     </p>
                   </div>
@@ -981,68 +1047,68 @@ export const LandingPage: React.FC = () => {
 
             {/* Right Column: Visual PC Agent Mockup with Live Logs */}
             <div className="lg:col-span-6">
-              <div className="bg-slate-950 text-white rounded-3xl p-6 sm:p-8 border border-slate-800 shadow-2xl space-y-5">
+              <div className="bg-white text-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-200/90 shadow-xl space-y-5">
                 {/* Window Title Bar */}
-                <div className="flex items-center justify-between border-b border-slate-800 pb-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-4">
                   <div className="flex items-center gap-2.5">
                     <div className="flex gap-1.5">
-                      <span className="w-3 h-3 rounded-full bg-red-500" />
-                      <span className="w-3 h-3 rounded-full bg-yellow-500" />
-                      <span className="w-3 h-3 rounded-full bg-emerald-500" />
+                      <span className="w-3 h-3 rounded-full bg-red-400" />
+                      <span className="w-3 h-3 rounded-full bg-amber-400" />
+                      <span className="w-3 h-3 rounded-full bg-emerald-400" />
                     </div>
-                    <span className="text-xs font-mono font-bold text-slate-300 ml-2">
+                    <span className="text-xs font-mono font-bold text-slate-700 ml-2">
                       PrintFlow Agent - Counter Station PC
                     </span>
                   </div>
-                  <div className="flex items-center gap-2 bg-emerald-950 text-emerald-400 px-2.5 py-1 rounded-full text-[11px] font-mono border border-emerald-800">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                  <div className="flex items-center gap-2 bg-emerald-50 text-emerald-700 px-2.5 py-1 rounded-full text-[11px] font-mono border border-emerald-200 font-bold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                     <span>CONNECTED TO CLOUD</span>
                   </div>
                 </div>
 
                 {/* Default Printer Selection */}
-                <div className="bg-slate-900 p-3.5 rounded-2xl border border-slate-800 flex items-center justify-between">
+                <div className="bg-slate-50 p-3.5 rounded-2xl border border-slate-200 flex items-center justify-between">
                   <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center">
+                    <div className="w-9 h-9 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs">
                       <Printer className="w-5 h-5" />
                     </div>
                     <div>
-                      <p className="text-xs font-bold text-white">Canon imageRUNNER 2525</p>
-                      <p className="text-[11px] text-slate-400">USB Connected · Tray 1 (A4) Ready · Status: Online</p>
+                      <p className="text-xs font-bold text-slate-900">Canon imageRUNNER 2525</p>
+                      <p className="text-[11px] text-slate-500">USB Connected · Tray 1 (A4) Ready · Status: Online</p>
                     </div>
                   </div>
-                  <span className="text-[10px] font-bold text-emerald-400 bg-emerald-950/90 px-2 py-0.5 rounded border border-emerald-800">
+                  <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded border border-emerald-200">
                     Default B&W
                   </span>
                 </div>
 
                 {/* Live Job Spooler Log */}
                 <div className="space-y-2">
-                  <span className="text-[11px] font-mono text-slate-400 uppercase tracking-wider block">
+                  <span className="text-[11px] font-mono text-slate-500 uppercase tracking-wider block font-semibold">
                     LIVE SPOOLER LOG STREAM:
                   </span>
-                  <div className="bg-black/60 rounded-xl p-3.5 font-mono text-[11px] space-y-1.5 text-slate-300 border border-slate-800/80">
-                    <p className="text-emerald-400">[12:44:10] WebSocket connection established (wss://api.printflow.cloud)</p>
-                    <p className="text-slate-400">[12:44:11] Syncing offline buffer: 0 pending items</p>
-                    <p className="text-blue-400">[12:44:18] INCOMING: Token #84291 · 12 Pages · ₹24 Paid</p>
-                    <p className="text-indigo-400">[12:44:19] Spooling to Canon imageRUNNER 2525...</p>
-                    <p className="text-emerald-400 font-bold">[12:44:22] Job #84291 printed successfully ✓</p>
+                  <div className="bg-slate-50 rounded-xl p-3.5 font-mono text-[11px] space-y-1.5 text-slate-700 border border-slate-200">
+                    <p className="text-emerald-700 font-semibold">[12:44:10] WebSocket connection established (wss://api.printflow.cloud)</p>
+                    <p className="text-slate-500">[12:44:11] Syncing offline buffer: 0 pending items</p>
+                    <p className="text-blue-700 font-semibold">[12:44:18] INCOMING: Token #84291 · 12 Pages · ₹24 Paid</p>
+                    <p className="text-indigo-700 font-semibold">[12:44:19] Spooling to Canon imageRUNNER 2525...</p>
+                    <p className="text-emerald-700 font-bold">[12:44:22] Job #84291 printed successfully ✓</p>
                   </div>
                 </div>
 
                 {/* Hardware indicators */}
-                <div className="pt-2 border-t border-slate-800 grid grid-cols-3 gap-2 text-center text-xs">
-                  <div className="bg-slate-900/80 p-2 rounded-xl">
-                    <span className="text-slate-400 text-[10px] block">Paper Level</span>
-                    <span className="text-emerald-400 font-bold">Tray 1 (82%)</span>
+                <div className="pt-2 border-t border-slate-100 grid grid-cols-3 gap-2 text-center text-xs">
+                  <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                    <span className="text-slate-500 text-[10px] block">Paper Level</span>
+                    <span className="text-emerald-600 font-bold">Tray 1 (82%)</span>
                   </div>
-                  <div className="bg-slate-900/80 p-2 rounded-xl">
-                    <span className="text-slate-400 text-[10px] block">Toner Status</span>
-                    <span className="text-emerald-400 font-bold">Good (76%)</span>
+                  <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                    <span className="text-slate-500 text-[10px] block">Toner Status</span>
+                    <span className="text-emerald-600 font-bold">Good (76%)</span>
                   </div>
-                  <div className="bg-slate-900/80 p-2 rounded-xl">
-                    <span className="text-slate-400 text-[10px] block">Queue Delay</span>
-                    <span className="text-emerald-400 font-bold">0.8 Seconds</span>
+                  <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                    <span className="text-slate-500 text-[10px] block">Queue Delay</span>
+                    <span className="text-blue-600 font-bold">0.8 Seconds</span>
                   </div>
                 </div>
               </div>
@@ -1130,104 +1196,104 @@ export const LandingPage: React.FC = () => {
           </div>
 
           {/* Shop Dashboard Mockup */}
-          <div className="bg-slate-900 rounded-3xl border border-slate-800 p-6 sm:p-10 shadow-2xl text-white max-w-5xl mx-auto space-y-6">
+          <div className="bg-white rounded-3xl border border-slate-200/90 p-6 sm:p-10 shadow-xl text-slate-900 max-w-5xl mx-auto space-y-6">
             {/* Top Stats Row */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700/60">
-                <span className="text-xs text-slate-400 block">Today's Revenue</span>
-                <p className="text-2xl font-extrabold text-emerald-400 font-mono mt-1">₹3,480.00</p>
-                <span className="text-[10px] text-emerald-400 flex items-center gap-1 mt-1">↑ 24% vs yesterday</span>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-xs text-slate-500 block font-medium">Today's Revenue</span>
+                <p className="text-2xl font-extrabold text-emerald-600 font-mono mt-1">₹3,480.00</p>
+                <span className="text-[10px] text-emerald-700 font-semibold flex items-center gap-1 mt-1">↑ 24% vs yesterday</span>
               </div>
-              <div className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700/60">
-                <span className="text-xs text-slate-400 block">Total Prints</span>
-                <p className="text-2xl font-extrabold text-white font-mono mt-1">1,740 pgs</p>
-                <span className="text-[10px] text-slate-400 mt-1 block">82 completed jobs</span>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-xs text-slate-500 block font-medium">Total Prints</span>
+                <p className="text-2xl font-extrabold text-slate-900 font-mono mt-1">1,740 pgs</p>
+                <span className="text-[10px] text-slate-500 mt-1 block">82 completed jobs</span>
               </div>
-              <div className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700/60">
-                <span className="text-xs text-slate-400 block">Live Active Queue</span>
-                <p className="text-2xl font-extrabold text-blue-400 font-mono mt-1">3 Jobs</p>
-                <span className="text-[10px] text-blue-300 mt-1 block">Avg turnaround 28s</span>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-xs text-slate-500 block font-medium">Live Active Queue</span>
+                <p className="text-2xl font-extrabold text-blue-600 font-mono mt-1">3 Jobs</p>
+                <span className="text-[10px] text-blue-600 font-medium mt-1 block">Avg turnaround 28s</span>
               </div>
-              <div className="bg-slate-800/80 p-4 rounded-2xl border border-slate-700/60">
-                <span className="text-xs text-slate-400 block">Desktop Agent</span>
-                <p className="text-2xl font-extrabold text-emerald-400 font-mono mt-1">ONLINE</p>
-                <span className="text-[10px] text-emerald-300 mt-1 block">HP LaserJet Tray 1</span>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-200">
+                <span className="text-xs text-slate-500 block font-medium">Desktop Agent</span>
+                <p className="text-2xl font-extrabold text-emerald-600 font-mono mt-1">ONLINE</p>
+                <span className="text-[10px] text-emerald-700 font-medium mt-1 block">HP LaserJet Tray 1</span>
               </div>
             </div>
 
             {/* Middle Configuration & Queue Split */}
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
               {/* Rate Card Preview */}
-              <div className="lg:col-span-5 bg-slate-800/60 p-5 rounded-2xl border border-slate-700/60 space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
-                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Per-Page Rate Card</h4>
-                  <span className="text-[10px] font-bold text-blue-400 bg-blue-950 px-2 py-0.5 rounded border border-blue-800">
+              <div className="lg:col-span-5 bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Per-Page Rate Card</h4>
+                  <span className="text-[10px] font-bold text-blue-700 bg-blue-100 px-2 py-0.5 rounded border border-blue-200">
                     Live Rates
                   </span>
                 </div>
                 <div className="space-y-2.5 text-xs">
-                  <div className="flex justify-between py-1 border-b border-slate-700/40">
-                    <span className="text-slate-400">A4 Black & White (1-Sided)</span>
-                    <span className="font-mono font-bold text-white">₹2.00 / page</span>
+                  <div className="flex justify-between py-1 border-b border-slate-200/80">
+                    <span className="text-slate-600">A4 Black & White (1-Sided)</span>
+                    <span className="font-mono font-bold text-slate-900">₹2.00 / page</span>
                   </div>
-                  <div className="flex justify-between py-1 border-b border-slate-700/40">
-                    <span className="text-slate-400">A4 Black & White (2-Sided Duplex)</span>
-                    <span className="font-mono font-bold text-white">₹1.50 / side</span>
+                  <div className="flex justify-between py-1 border-b border-slate-200/80">
+                    <span className="text-slate-600">A4 Black & White (2-Sided Duplex)</span>
+                    <span className="font-mono font-bold text-slate-900">₹1.50 / side</span>
                   </div>
-                  <div className="flex justify-between py-1 border-b border-slate-700/40">
-                    <span className="text-slate-400">A4 Full Color Print</span>
-                    <span className="font-mono font-bold text-white">₹10.00 / page</span>
+                  <div className="flex justify-between py-1 border-b border-slate-200/80">
+                    <span className="text-slate-600">A4 Full Color Print</span>
+                    <span className="font-mono font-bold text-slate-900">₹10.00 / page</span>
                   </div>
                   <div className="flex justify-between py-1">
-                    <span className="text-slate-400">A3 Large Format B&W</span>
-                    <span className="font-mono font-bold text-white">₹5.00 / page</span>
+                    <span className="text-slate-600">A3 Large Format B&W</span>
+                    <span className="font-mono font-bold text-slate-900">₹5.00 / page</span>
                   </div>
                 </div>
               </div>
 
               {/* Active Print Queue List */}
-              <div className="lg:col-span-7 bg-slate-800/60 p-5 rounded-2xl border border-slate-700/60 space-y-3">
-                <div className="flex items-center justify-between border-b border-slate-700/80 pb-3">
-                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wider">Live Active Queue</h4>
-                  <span className="text-[10px] font-mono text-emerald-400">3 Verified Jobs</span>
+              <div className="lg:col-span-7 bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">Live Active Queue</h4>
+                  <span className="text-[10px] font-mono text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">3 Verified Jobs</span>
                 </div>
 
                 <div className="space-y-2 text-xs">
-                  <div className="p-2.5 bg-slate-900 rounded-xl flex items-center justify-between border border-slate-700/60">
+                  <div className="p-2.5 bg-white rounded-xl flex items-center justify-between border border-slate-200 shadow-2xs">
                     <div className="flex items-center gap-2.5">
-                      <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
                       <div>
-                        <p className="font-mono font-bold text-white">#84291</p>
-                        <p className="text-[10px] text-slate-400">12 pgs · B&W Duplex · ₹24</p>
+                        <p className="font-mono font-bold text-slate-900">#84291</p>
+                        <p className="text-[10px] text-slate-500">12 pgs · B&W Duplex · ₹24</p>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold text-blue-400 bg-blue-950 px-2 py-0.5 rounded border border-blue-800">
+                    <span className="text-[10px] font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
                       Printing on Tray 1
                     </span>
                   </div>
 
-                  <div className="p-2.5 bg-slate-900 rounded-xl flex items-center justify-between border border-slate-700/60">
+                  <div className="p-2.5 bg-white rounded-xl flex items-center justify-between border border-slate-200 shadow-2xs">
                     <div className="flex items-center gap-2.5">
-                      <span className="w-2 h-2 rounded-full bg-blue-400" />
+                      <span className="w-2 h-2 rounded-full bg-blue-500" />
                       <div>
-                        <p className="font-mono font-bold text-white">#84292</p>
-                        <p className="text-[10px] text-slate-400">4 pgs · Color · ₹40</p>
+                        <p className="font-mono font-bold text-slate-900">#84292</p>
+                        <p className="text-[10px] text-slate-500">4 pgs · Color · ₹40</p>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold text-slate-300 bg-slate-800 px-2 py-0.5 rounded">
+                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
                       Queued next
                     </span>
                   </div>
 
-                  <div className="p-2.5 bg-slate-900 rounded-xl flex items-center justify-between border border-slate-700/60">
+                  <div className="p-2.5 bg-white rounded-xl flex items-center justify-between border border-slate-200 shadow-2xs">
                     <div className="flex items-center gap-2.5">
-                      <span className="w-2 h-2 rounded-full bg-slate-500" />
+                      <span className="w-2 h-2 rounded-full bg-slate-400" />
                       <div>
-                        <p className="font-mono font-bold text-white">#84293</p>
-                        <p className="text-[10px] text-slate-400">8 pgs · B&W · ₹16</p>
+                        <p className="font-mono font-bold text-slate-900">#84293</p>
+                        <p className="text-[10px] text-slate-500">8 pgs · B&W · ₹16</p>
                       </div>
                     </div>
-                    <span className="text-[10px] font-bold text-slate-300 bg-slate-800 px-2 py-0.5 rounded">
+                    <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
                       Queued
                     </span>
                   </div>
@@ -1351,147 +1417,70 @@ export const LandingPage: React.FC = () => {
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            {/* Starter Plan */}
-            <div className="bg-white rounded-3xl p-7 border border-slate-200/90 hover:border-slate-300 transition-all flex flex-col justify-between">
-              <div>
-                <h3 className="text-xl font-bold text-slate-900">Starter</h3>
-                <p className="text-xs text-slate-500 mt-1">For small photocopy shops testing the platform</p>
+          {/* Plans Container - One unified flex view across desktop */}
+          <div className="flex flex-col md:flex-row flex-wrap lg:flex-nowrap items-stretch justify-center gap-5 lg:gap-6 max-w-7xl mx-auto">
+            {displayPlans.map((plan: any, i: number) => {
+              const isPopular = plan.isPopular || i === 1;
+              const monthlyPrice = plan.priceMonthly !== undefined ? plan.priceMonthly : (plan.price !== undefined ? plan.price : (i === 0 ? 0 : i === 1 ? 499 : i === 2 ? 999 : 2499));
+              const yearlyPrice = plan.priceYearly !== undefined ? plan.priceYearly : Math.round(monthlyPrice * 0.8);
+              const activePrice = billingPeriod === 'MONTHLY' ? monthlyPrice : yearlyPrice;
+              const features = Array.isArray(plan.features) ? plan.features : (plan.perks || []);
 
-                <div className="mt-5 mb-6">
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-4xl font-extrabold text-slate-900 font-mono">₹0</span>
-                    <span className="text-xs text-slate-500">/month (Free)</span>
-                  </div>
-                </div>
-
-                <div className="space-y-3 pt-4 border-t border-slate-100 text-xs text-slate-700">
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Up to 100 prints/month</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>1 Counter QR Stand</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Desktop Print Agent (1 PC)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Razorpay & UPI Payments</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-8">
-                <button
-                  onClick={() => navigate('/auth/register')}
-                  className="w-full py-3 rounded-xl text-xs font-bold uppercase tracking-wider bg-slate-100 hover:bg-slate-200 text-slate-800 transition-all cursor-pointer active:scale-95"
+              return (
+                <div
+                  key={plan.id || i}
+                  className={`flex-1 min-w-[240px] max-w-full md:max-w-[calc(50%-12px)] lg:max-w-none bg-white rounded-3xl p-6 sm:p-7 transition-all flex flex-col justify-between relative ${
+                    isPopular
+                      ? 'border-2 border-blue-600 shadow-xl ring-1 ring-blue-600/20'
+                      : 'border border-slate-200/90 hover:border-slate-300'
+                  }`}
                 >
-                  Start Free
-                </button>
-              </div>
-            </div>
+                  {isPopular && (
+                    <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow-xs whitespace-nowrap">
+                      MOST POPULAR
+                    </div>
+                  )}
 
-            {/* Growth Plan */}
-            <div className="bg-white rounded-3xl p-7 border-2 border-blue-600 shadow-xl relative flex flex-col justify-between">
-              <div className="absolute -top-3.5 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-wider shadow-xs">
-                MOST POPULAR
-              </div>
+                  <div className="flex-1 flex flex-col">
+                    <h3 className="text-xl font-bold text-slate-900">{plan.name}</h3>
+                    <p className="text-xs text-slate-500 mt-1 min-h-[34px] leading-relaxed">{plan.tagline || plan.description || ''}</p>
 
-              <div>
-                <h3 className="text-xl font-bold text-slate-900">Growth</h3>
-                <p className="text-xs text-slate-500 mt-1">For busy college-area xerox & copy shops</p>
+                    <div className="mt-4 mb-6">
+                      <div className="flex items-baseline gap-1">
+                        <span className="text-3xl sm:text-4xl font-extrabold text-slate-900 font-mono">
+                          ₹{activePrice}
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          {monthlyPrice === 0 ? '/month (Free)' : '/month'}
+                        </span>
+                      </div>
+                    </div>
 
-                <div className="mt-5 mb-6">
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-4xl font-extrabold text-slate-900 font-mono">
-                      ₹{billingPeriod === 'MONTHLY' ? '499' : '399'}
-                    </span>
-                    <span className="text-xs text-slate-500">/month</span>
+                    <div className="space-y-3 pt-4 border-t border-slate-100 text-xs text-slate-700 flex-1">
+                      {features.map((feat: string, fIdx: number) => (
+                        <div key={fIdx} className="flex items-start gap-2">
+                          <Check className={`w-4 h-4 shrink-0 mt-0.5 ${isPopular ? 'text-blue-600' : 'text-emerald-600'}`} />
+                          <span className={fIdx === 0 && isPopular ? 'font-semibold text-slate-900' : ''}>{feat}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="pt-6 mt-auto">
+                    <button
+                      onClick={() => navigate('/auth/register')}
+                      className={`w-full py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all cursor-pointer active:scale-95 ${
+                        isPopular
+                          ? 'bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/25'
+                          : 'bg-slate-100 hover:bg-slate-200 text-slate-800'
+                      }`}
+                    >
+                      {monthlyPrice === 0 ? 'Start Free' : isPopular ? 'Start 14-Day Free Trial' : 'Choose Plan'}
+                    </button>
                   </div>
                 </div>
-
-                <div className="space-y-3 pt-4 border-t border-slate-100 text-xs text-slate-700">
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span className="font-semibold text-slate-900">Unlimited Monthly Prints</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span>3 Printable Counter QR Stands</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span>Multi-Printer Spooling (B&W + Color)</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span>Daily Revenue & Accounting Reports</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-blue-600 shrink-0" />
-                    <span>Priority WhatsApp Support</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-8">
-                <button
-                  onClick={() => navigate('/auth/register')}
-                  className="w-full py-3 rounded-xl text-xs font-bold uppercase tracking-wider bg-blue-600 hover:bg-blue-700 text-white shadow-md shadow-blue-500/25 transition-all cursor-pointer active:scale-95"
-                >
-                  Start 14-Day Free Trial
-                </button>
-              </div>
-            </div>
-
-            {/* Commercial Enterprise Plan */}
-            <div className="bg-white rounded-3xl p-7 border border-slate-200/90 hover:border-slate-300 transition-all flex flex-col justify-between">
-              <div>
-                <h3 className="text-xl font-bold text-slate-900">Commercial Pro Hub</h3>
-                <p className="text-xs text-slate-500 mt-1">For high-volume xerox centers & busy campus hubs</p>
-
-                <div className="mt-5 mb-6">
-                  <div className="flex items-baseline gap-1">
-                    <span className="text-4xl font-extrabold text-slate-900 font-mono">
-                      ₹{billingPeriod === 'MONTHLY' ? '999' : '799'}
-                    </span>
-                    <span className="text-xs text-slate-500">/month</span>
-                  </div>
-                </div>
-
-                <div className="space-y-3 pt-4 border-t border-slate-100 text-xs text-slate-700">
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Up to 20 Connected Printers</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Multiple Cashier Logins</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Custom Branding & Domain</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                    <span>Dedicated Account Manager</span>
-                  </div>
-                </div>
-              </div>
-
-              <div className="pt-8">
-                <button
-                  onClick={() => navigate('/auth/register')}
-                  className="w-full py-3 rounded-xl text-xs font-bold uppercase tracking-wider bg-slate-100 hover:bg-slate-200 text-slate-800 transition-all cursor-pointer active:scale-95"
-                >
-                  Choose Pro Plan
-                </button>
-              </div>
-            </div>
+              );
+            })}
           </div>
         </div>
       </section>

@@ -155,7 +155,7 @@ export const ShopSubscription: React.FC = () => {
         throw new Error(data.error || 'Server rejected plan deletion request.');
       }
 
-      const storeResult = deletePlan(planToDelete.id);
+      const storeResult = await deletePlan(planToDelete.id);
       if (!storeResult.success) {
         throw new Error(storeResult.message);
       }

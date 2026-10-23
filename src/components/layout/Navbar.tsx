@@ -11,7 +11,9 @@ import {
   ArrowRight,
   Menu,
   X,
-  LayoutDashboard
+  LayoutDashboard,
+  LogIn,
+  UserPlus
 } from 'lucide-react';
 
 export const Navbar: React.FC = () => {
@@ -44,21 +46,21 @@ export const Navbar: React.FC = () => {
     <header className="sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-slate-200/80 transition-all font-heading">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
         {/* Brand Element */}
-        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           <button
             onClick={() => navigate('/')}
-            className="flex items-center gap-2 text-left group focus:outline-none cursor-pointer shrink-0 min-w-0"
+            className="flex items-center gap-2 text-left group focus:outline-none cursor-pointer shrink-0"
           >
             <div className="relative shrink-0">
-              <div className="w-9 h-9 sm:w-11 sm:h-11 rounded-xl bg-linear-to-br from-blue-600 via-blue-600 to-indigo-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 group-hover:shadow-blue-500/25 transition-all">
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-linear-to-br from-blue-600 via-blue-600 to-indigo-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 group-hover:shadow-blue-500/25 transition-all">
                 <Printer className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
               </div>
-              <span className="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 bg-emerald-500 border-2 border-white rounded-full" />
+              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 sm:w-2.5 sm:h-2.5 bg-emerald-500 border-2 border-white rounded-full" />
             </div>
             <div className="flex flex-col min-w-0">
-              <span className="font-heading font-semibold text-lg sm:text-3xl tracking-tight text-slate-900 group-hover:text-blue-600 transition-colors leading-tight flex items-center gap-1.5 brand-text truncate">
+              <span className="font-heading font-semibold text-base sm:text-2xl tracking-tight text-slate-900 group-hover:text-blue-600 transition-colors leading-tight flex items-center gap-1.5 brand-text">
                 PrintFlow
-                <span className="text-[10px] sm:text-[11px] font-medium text-blue-600 bg-blue-50/90 px-1.5 sm:px-2.5 py-0.5 rounded-md border border-blue-200 uppercase tracking-wider shrink-0">
+                <span className="hidden sm:inline-flex text-[10px] sm:text-[11px] font-medium text-blue-600 bg-blue-50/90 px-1.5 sm:px-2.5 py-0.5 rounded-md border border-blue-200 uppercase tracking-wider shrink-0">
                   Cloud
                 </span>
               </span>
@@ -131,8 +133,40 @@ export const Navbar: React.FC = () => {
         ) : null}
 
         {/* Action Buttons */}
-        <div className="flex items-center gap-2 sm:gap-3">
-          {!currentUser ? null : currentUser.role === 'ADMIN' ? (
+        <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+          {!currentUser ? (
+            <div className="flex items-center gap-1 sm:gap-2">
+              <button
+    onClick={() => navigate('/auth/login')}
+    className="inline-flex items-center justify-center gap-1.5
+      rounded-xl border border-slate-200 bg-white
+      px-3 py-2 sm:px-4 sm:py-2.5
+      text-xs sm:text-sm font-semibold text-slate-700
+      hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600
+      active:scale-95 transition-all duration-200
+      cursor-pointer whitespace-nowrap"
+  >
+    <LogIn className="hidden sm:block h-4 w-4" />
+    <span>Login</span>
+  </button>
+
+  {/* Register Button */}
+  <button
+    onClick={() => navigate('/auth/register')}
+    className="inline-flex items-center justify-center gap-1.5
+      rounded-xl bg-blue-600
+      px-3 py-2 sm:px-4 sm:py-2.5
+      text-xs sm:text-sm font-bold text-white
+      shadow-sm shadow-blue-500/25
+      hover:bg-blue-700 hover:shadow-md
+      active:scale-95 transition-all duration-200
+      cursor-pointer whitespace-nowrap"
+  >
+    <UserPlus className="hidden sm:block h-4 w-4" />
+    <span>Register</span>
+  </button>
+            </div>
+          ) : currentUser.role === 'ADMIN' ? (
             <div className="flex items-center gap-2">
               {!currentPath.startsWith('/admin') && (
                 <button
@@ -175,7 +209,7 @@ export const Navbar: React.FC = () => {
           {isMarketing && (
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="md:hidden p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 transition-colors"
+              className="md:hidden p-1.5 sm:p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 transition-colors cursor-pointer shrink-0"
               aria-label="Toggle navigation menu"
             >
               {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -226,16 +260,48 @@ export const Navbar: React.FC = () => {
               </button>
             </div>
 
-            {currentUser && (
-              <div className="pt-2 border-t border-slate-100 flex flex-col gap-2">
+            {!currentUser ? (
+              <div className="pt-3 border-t border-slate-200/80 flex flex-col gap-2">
                 <button
                   onClick={() => {
                     setMobileMenuOpen(false);
                     navigate('/auth/login');
                   }}
-                  className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all text-center"
+                  className="w-full py-2.5 px-4 bg-slate-100 hover:bg-slate-200 text-slate-800 rounded-xl text-xs font-bold transition-all text-center cursor-pointer flex items-center justify-center gap-2"
                 >
-                  Shop Login
+                  <LogIn className="w-4 h-4 text-slate-600" />
+                  <span>Login</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    navigate('/auth/register');
+                  }}
+                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all text-center shadow-xs cursor-pointer flex items-center justify-center gap-2"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Register Free</span>
+                </button>
+              </div>
+            ) : (
+              <div className="pt-3 border-t border-slate-200/80 flex flex-col gap-2">
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    navigate(currentUser.role === 'ADMIN' ? '/admin/dashboard' : '/shop/dashboard');
+                  }}
+                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all text-center shadow-xs cursor-pointer"
+                >
+                  {currentUser.role === 'ADMIN' ? 'Admin Console' : 'Shop Console'}
+                </button>
+                <button
+                  onClick={() => {
+                    setMobileMenuOpen(false);
+                    logout();
+                  }}
+                  className="w-full py-2 px-4 text-xs font-semibold text-red-600 hover:bg-red-50 rounded-xl transition-all text-center cursor-pointer"
+                >
+                  Sign Out
                 </button>
               </div>
             )}
