@@ -203,14 +203,17 @@ function hashAgentToken(token: string): string {
 /**
  * Initializes database schema migrations safely.
  */
-export async function initializePaymentTables(): Promise<void> {
+export async function initializePaymentTables(maxRetries = 3): Promise<void> {
   if (!isNeonDatabaseConfigured() || !pgPool) {
     return;
   }
 
-  try {
-    const client = await pgPool.connect();
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    attempt++;
+    let client: any = null;
     try {
+      client = await pgPool.connect();
       await client.query(`
         CREATE TABLE IF NOT EXISTS shop_payment_integrations (
           id VARCHAR(64) PRIMARY KEY,
@@ -557,12 +560,21 @@ export async function initializePaymentTables(): Promise<void> {
       `);
 
       console.log('[PaymentStorage] Supabase PostgreSQL payment and PrintFlow Agent tables verified successfully.');
+      return;
+    } catch (err: any) {
+      const isNetworkErr = err?.code === 'ENETUNREACH' || err?.code === 'EAI_AGAIN' || err?.code === 'ETIMEDOUT' || err?.message?.includes('ENETUNREACH');
+      console.warn(`[PaymentStorage] Database initialization attempt ${attempt}/${maxRetries} failed (${err?.message || err}). ${isNetworkErr ? 'Network/DNS routing issue detected on Render/Neon.' : ''}`);
+      if (attempt >= maxRetries) {
+        console.warn('[PaymentStorage] Could not run database migrations on Neon pool (non-fatal after max retries):', err);
+        return;
+      }
+      const delayMs = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
     } finally {
-      client.release();
+      if (client) {
+        try { client.release(); } catch {}
+      }
     }
-
-  } catch (err) {
-    console.warn('[PaymentStorage] Could not run database migrations on Neon pool (non-fatal):', err);
   }
 }
 
