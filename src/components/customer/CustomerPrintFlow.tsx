@@ -79,6 +79,63 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   const [publicShopError, setPublicShopError] = useState<string | null>(null);
   const [maintenanceMode, setMaintenanceMode] = useState<{ enabled: boolean; message: string; scope: string } | null>(null);
 
+  const [agentStatus, setAgentStatus] = useState<{
+    isAvailable: boolean;
+    reason: string;
+    message: string;
+    agentOnline: boolean;
+    printerReady: boolean;
+    readyPrintersCount?: number;
+    readyPrinters?: string[];
+  } | null>(null);
+  const [isCheckingAgentStatus, setIsCheckingAgentStatus] = useState<boolean>(false);
+  const [alternativeShops, setAlternativeShops] = useState<Array<{ id: string; name: string; slug: string; isAvailable?: boolean }>>([]);
+
+  const checkAgentAvailability = React.useCallback(async (targetSlugOrId?: string) => {
+    const queryTarget = targetSlugOrId || shopSlug || remoteShop?.slug || activeShop?.slug || activeShop?.id;
+    if (!queryTarget) return null;
+    setIsCheckingAgentStatus(true);
+    try {
+      const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(queryTarget)}/agent-status`));
+      const data = await res.json();
+      if (data.success && data.availability) {
+        setAgentStatus(data.availability);
+        return data.availability;
+      }
+    } catch {
+      // Fail gracefully
+    } finally {
+      setIsCheckingAgentStatus(false);
+    }
+    return null;
+  }, [shopSlug, remoteShop?.slug, activeShop?.slug, activeShop?.id]);
+
+  useEffect(() => {
+    void checkAgentAvailability();
+    const timer = setInterval(() => {
+      void checkAgentAvailability();
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [checkAgentAvailability]);
+
+  // Load alternative online shops if current shop is offline
+  useEffect(() => {
+    if (agentStatus && !agentStatus.isAvailable) {
+      fetch(apiUrl('/api/public/shops'))
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success && Array.isArray(data.shops)) {
+            setAlternativeShops(
+              data.shops.filter((s: any) => s.slug !== shopSlug && s.id !== remoteShop?.id && s.isAvailable)
+            );
+          }
+        })
+        .catch(() => {});
+    } else {
+      setAlternativeShops([]);
+    }
+  }, [agentStatus, shopSlug, remoteShop?.id]);
+
   useEffect(() => {
     fetch(apiUrl('/api/maintenance/status'))
       .then(res => res.json())
@@ -306,6 +363,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       showToast('Maintenance Active', 'System is under maintenance. File uploads are disabled.', 'error', 4000);
       return;
     }
+    if (agentStatus && !agentStatus.isAvailable) {
+      showToast('Shop Offline', agentStatus.message || 'This print shop is currently offline. File uploads are disabled.', 'error', 5000);
+      return;
+    }
     setUploadError(null);
     setStepError(null);
     const selectedFiles = e.target.files;
@@ -416,6 +477,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
   // Handler for ID Card Front side upload
   const handleFrontSideUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (agentStatus && !agentStatus.isAvailable) {
+      showToast('Shop Offline', agentStatus.message || 'This print shop is currently offline. File uploads are disabled.', 'error', 5000);
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 50 * 1024 * 1024) {
@@ -430,6 +495,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
   // Handler for ID Card Back side upload
   const handleBackSideUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (agentStatus && !agentStatus.isAvailable) {
+      showToast('Shop Offline', agentStatus.message || 'This print shop is currently offline. File uploads are disabled.', 'error', 5000);
+      return;
+    }
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 50 * 1024 * 1024) {
@@ -583,10 +652,16 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   const grandTotal = subtotal + serviceFee;
 
   // Proceed from Upload (Step 1) to Review (Step 2)
-  const handleProceedToReview = () => {
+  const handleProceedToReview = async () => {
     setStepError(null);
     if (files.length === 0) {
       setStepError('Please upload at least one file to continue.');
+      return;
+    }
+    const freshStatus = await checkAgentAvailability();
+    if (freshStatus && !freshStatus.isAvailable) {
+      setStepError(freshStatus.message || 'This print shop is currently offline. Please try again later or select another available shop.');
+      showToast('Shop Offline', freshStatus.message, 'error', 5000);
       return;
     }
 
@@ -606,8 +681,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   };
 
   // Proceed from Review (Step 2) to Payment (Step 3)
-  const handleProceedToPayment = () => {
+  const handleProceedToPayment = async () => {
     setStepError(null);
+    const freshStatus = await checkAgentAvailability();
+    if (freshStatus && !freshStatus.isAvailable) {
+      setStepError(freshStatus.message || 'This print shop is currently offline. Please try again later or select another available shop.');
+      showToast('Shop Offline', freshStatus.message, 'error', 5000);
+      return;
+    }
+
     const totalBytes = files.reduce((total, file) => {
       return total + (sourceFilesRef.current.get(file.id)?.size || 0);
     }, 0);
@@ -675,6 +757,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
         success?: boolean;
         error?: string;
         job?: { id?: string; trackingToken?: string };
+        statusMessage?: string;
+        agentOnline?: boolean;
       };
       if (!response.ok || !result.success || !result.job?.id) {
         throw new Error(result.error || `Could not dispatch the paid order (HTTP ${response.status}).`);
@@ -699,7 +783,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       window.scrollTo({ top: 0, behavior: 'smooth' });
       showToast(
         'Payment Verified Successfully!',
-        `Txn #${paymentId} confirmed. Order dispatched to ${shop.name} print queue.`,
+        result.statusMessage || `Txn #${paymentId} confirmed. Order dispatched to ${shop.name} print queue.`,
         'success',
         5000
       );
@@ -726,6 +810,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     setStepError(null);
     setRazorpayError(null);
     stopPolling();
+
+    // Re-verify agent availability before initiating payment
+    const freshStatus = await checkAgentAvailability();
+    if (freshStatus && !freshStatus.isAvailable) {
+      setIsProcessingPayment(false);
+      setStepError(freshStatus.message || 'This print shop is currently offline. Please try again later or select another available shop.');
+      showToast('Shop Offline', freshStatus.message, 'error', 5000);
+      return;
+    }
 
     if (customerPhone.trim()) {
       setPhoneTouched(true);
@@ -1268,6 +1361,61 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                 </p>
               </div>
 
+              {/* SHOP AGENT OFFLINE / PRINTER UNAVAILABLE WARNING BANNER */}
+              {agentStatus && !agentStatus.isAvailable && (
+                <div className="p-5 bg-rose-50 border-2 border-rose-200 rounded-3xl text-rose-950 space-y-3 shadow-sm">
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                      <AlertCircle className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h3 className="font-bold text-sm text-rose-950">
+                        {agentStatus.reason === 'PRINTER_UNAVAILABLE' ? 'Print Agent Connected · No Printer Ready' : 'This Print Shop is Currently Offline'}
+                      </h3>
+                      <p className="text-xs text-rose-800 mt-0.5 font-medium leading-relaxed">
+                        {agentStatus.message}
+                      </p>
+                      <p className="text-[11px] text-rose-700/90 mt-1 italic">
+                        Document uploads and orders are paused until the shop agent connects.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void checkAgentAvailability()}
+                      disabled={isCheckingAgentStatus}
+                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-2xs transition-all flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
+                    >
+                      <RotateCw className={`w-3.5 h-3.5 ${isCheckingAgentStatus ? 'animate-spin' : ''}`} />
+                      <span>Refresh</span>
+                    </button>
+                  </div>
+
+                  {alternativeShops.length > 0 && (
+                    <div className="pt-3 border-t border-rose-200/80 text-xs">
+                      <span className="font-bold text-rose-900 block mb-2 uppercase text-[10px] tracking-wider">
+                        Available Nearby Print Shops (Online):
+                      </span>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        {alternativeShops.map((alt) => (
+                          <button
+                            key={alt.id}
+                            type="button"
+                            onClick={() => navigate(`/print/${alt.slug}`)}
+                            className="p-2.5 bg-white hover:bg-rose-100/50 border border-rose-200 rounded-xl text-left transition-all cursor-pointer flex items-center justify-between gap-2 shadow-2xs"
+                          >
+                            <div className="min-w-0">
+                              <span className="font-bold text-slate-900 block truncate">{alt.name}</span>
+                              <span className="text-[10px] text-emerald-600 font-bold">● Online & Ready</span>
+                            </div>
+                            <ArrowRight className="w-4 h-4 text-rose-600 shrink-0" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {/* Upload Mode Switcher: Standard Documents vs ID / Aadhaar 2-in-1 Merge */}
               <div className="flex flex-col sm:flex-row p-1 bg-slate-200/80 rounded-2xl max-w-md mx-auto gap-1">
                 <button
@@ -1318,9 +1466,9 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                   <div className="flex items-center justify-center">
                     <label
-                      htmlFor={uploadingQueue.length > 0 || maintenanceMode ? undefined : fileInputId}
+                      htmlFor={uploadingQueue.length > 0 || maintenanceMode || (agentStatus !== null && !agentStatus.isAvailable) ? undefined : fileInputId}
                       className={`h-11 px-6 font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 transition-all ${
-                        maintenanceMode
+                        maintenanceMode || (agentStatus !== null && !agentStatus.isAvailable)
                           ? 'bg-slate-300 text-slate-600 cursor-not-allowed opacity-90'
                           : uploadingQueue.length > 0
                           ? 'bg-blue-400 text-white cursor-wait opacity-80'
@@ -1331,6 +1479,11 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                         <>
                           <AlertTriangle className="w-4 h-4 shrink-0 text-amber-700" />
                           <span>Maintenance (Uploads Disabled)</span>
+                        </>
+                      ) : agentStatus && !agentStatus.isAvailable ? (
+                        <>
+                          <AlertCircle className="w-4 h-4 shrink-0 text-rose-700" />
+                          <span>Shop Offline (Uploads Paused)</span>
                         </>
                       ) : uploadingQueue.length > 0 ? (
                         <>
@@ -1347,7 +1500,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                         id={fileInputId}
                         type="file"
                         multiple
-                        disabled={uploadingQueue.length > 0 || Boolean(maintenanceMode)}
+                        disabled={uploadingQueue.length > 0 || Boolean(maintenanceMode) || Boolean(agentStatus && !agentStatus.isAvailable)}
                         accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
                         onChange={handleFileUpload}
                         className="hidden"

@@ -143,6 +143,22 @@ export class PrintAgentService {
     }, delay);
   }
 
+  public async getShopInfo(): Promise<{ success: boolean; shopInfo?: import('../../renderer/types/agent.js').ShopDetails; error?: string }> {
+    const res = await this.apiClient.getShopInfo();
+    if (res.success && res.shopInfo) {
+      localVault.saveConfig({
+        printerLimit: res.shopInfo.printerLimit,
+        shopSlug: res.shopInfo.shopSlug,
+        shopId: res.shopInfo.shopId,
+        shopDetails: res.shopInfo
+      });
+      if (!res.shopInfo.isOperational) {
+        this.setStatus('RESTRICTED');
+      }
+    }
+    return res;
+  }
+
   public async triggerHeartbeat(): Promise<{ success: boolean; status?: string }> {
     if (this.heartbeatInProgress || this.pairingInProgress) return { success: false };
     this.heartbeatInProgress = true;
@@ -153,6 +169,24 @@ export class PrintAgentService {
       if (requestRevision !== this.configRevision) return { success: false };
       if (res.success) {
         localVault.recordSuccessfulHeartbeat();
+        
+        // Refresh shop and subscription details
+        const infoRes = await this.apiClient.getShopInfo();
+        if (infoRes.success && infoRes.shopInfo) {
+          localVault.saveConfig({
+            printerLimit: infoRes.shopInfo.printerLimit,
+            shopSlug: infoRes.shopInfo.shopSlug,
+            shopId: infoRes.shopInfo.shopId,
+            shopDetails: infoRes.shopInfo
+          });
+
+          if (!infoRes.shopInfo.isOperational) {
+            this.setStatus('RESTRICTED');
+            logger.warn('AUTH', infoRes.shopInfo.restrictionReason || 'Shop operational status restricted.');
+            return { success: true, status: 'RESTRICTED' };
+          }
+        }
+
         this.setStatus('ONLINE');
         if (shouldResumeQueue) {
           await this.recoverInterruptedDownloads();
@@ -170,6 +204,9 @@ export class PrintAgentService {
 
   public async pollPendingJobs(): Promise<{ success: boolean; newJobsCount: number; error?: string }> {
     if (this.pairingInProgress) return { success: false, newJobsCount: 0, error: 'Device pairing is in progress.' };
+    if (this.currentStatus === 'RESTRICTED' || this.currentStatus === 'UNAUTHORIZED') {
+      return { success: false, newJobsCount: 0, error: 'Shop account or subscription is currently restricted.' };
+    }
     if (this.pollingInProgress) return { success: false, newJobsCount: 0, error: 'A queue check is already running.' };
     this.pollingInProgress = true;
     const requestRevision = this.configRevision;

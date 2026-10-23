@@ -100,6 +100,51 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
     };
   }, [profileDropdownOpen]);
 
+  // Real-time Electron Print Agent status tracking
+  const [agentAvailability, setAgentAvailability] = useState<{
+    isAvailable: boolean;
+    agentOnline: boolean;
+    printerReady: boolean;
+    reason: string;
+  }>({
+    isAvailable: false,
+    agentOnline: false,
+    printerReady: false,
+    reason: 'Checking agent status...'
+  });
+
+  useEffect(() => {
+    let isMounted = true;
+    const checkAgentStatus = async () => {
+      if (!activeShop?.slug) return;
+      try {
+        const res = await fetch(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.availability && isMounted) {
+            setAgentAvailability(data.availability);
+          }
+        }
+      } catch {
+        if (isMounted) {
+          setAgentAvailability({
+            isAvailable: false,
+            agentOnline: false,
+            printerReady: false,
+            reason: 'Agent status unavailable'
+          });
+        }
+      }
+    };
+
+    void checkAgentStatus();
+    const interval = window.setInterval(() => void checkAgentStatus(), 8000);
+    return () => {
+      isMounted = false;
+      window.clearInterval(interval);
+    };
+  }, [activeShop?.slug]);
+
   const currentPlan = plans.find((p) => p.id === activeShop.planId) || plans[0];
 
   // Active pending jobs count for live sidebar badge
@@ -256,11 +301,32 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
             </div>
           </div>
 
-          {/* Connection / Sync Indicator */}
-          <div className="hidden md:flex items-center gap-1 text-[11px] text-slate-500 font-mono">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 ring-2 ring-emerald-100 animate-pulse" />
-            <span className="hidden xl:inline">Live Sync</span>
-          </div>
+          {/* Connection / Agent Status Indicator */}
+          <button
+            type="button"
+            onClick={() => navigate('/shop/print-agent')}
+            className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-50 border border-slate-200/90 text-xs font-medium hover:bg-slate-100 transition-colors cursor-pointer"
+            title={`Print Agent Status: ${agentAvailability.reason}. Click to open agent configuration.`}
+          >
+            {agentAvailability.agentOnline ? (
+              agentAvailability.printerReady ? (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-emerald-100 animate-pulse" />
+                  <span className="text-emerald-800 font-bold hidden xl:inline text-[11px]">Agent Online</span>
+                </>
+              ) : (
+                <>
+                  <span className="w-2 h-2 rounded-full bg-amber-500 ring-2 ring-amber-100" />
+                  <span className="text-amber-800 font-bold hidden xl:inline text-[11px]">Printer Offline</span>
+                </>
+              )
+            ) : (
+              <>
+                <span className="w-2 h-2 rounded-full bg-rose-500 ring-2 ring-rose-100 animate-pulse" />
+                <span className="text-rose-800 font-bold hidden xl:inline text-[11px]">Agent Disconnected</span>
+              </>
+            )}
+          </button>
         </div>
 
         {/* Right: Actions, Queue Indicator, and User Profile Menu */}

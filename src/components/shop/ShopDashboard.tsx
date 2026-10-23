@@ -45,6 +45,37 @@ export const ShopDashboard: React.FC = () => {
   const [copied, setCopied] = useState<boolean>(false);
   const [updatingJobId, setUpdatingJobId] = useState<string | null>(null);
 
+  const [agentStatus, setAgentStatus] = useState<{
+    isAvailable: boolean;
+    agentOnline: boolean;
+    printerReady: boolean;
+    reason: string;
+  } | null>(null);
+
+  React.useEffect(() => {
+    let isMounted = true;
+    const fetchStatus = async () => {
+      if (!activeShop?.slug) return;
+      try {
+        const res = await fetch(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`);
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.availability && isMounted) {
+            setAgentStatus(data.availability);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void fetchStatus();
+    const interval = window.setInterval(() => void fetchStatus(), 10000);
+    return () => {
+      isMounted = false;
+      window.clearInterval(interval);
+    };
+  }, [activeShop?.slug]);
+
   const currentPlan = plans.find((p) => p.id === activeShop.planId) || plans[0];
   const shopJobs = printJobs.filter((j) => j.shopId === activeShop.id);
   const queuedJobs = shopJobs.filter((j) => j.printStatus === 'QUEUED' || j.printStatus === 'ASSIGNED');
@@ -215,6 +246,31 @@ export const ShopDashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* AGENT DISCONNECTED ALERT BANNER */}
+      {agentStatus && !agentStatus.agentOnline && (
+        <div className="bg-amber-50 border border-amber-200/90 rounded-2xl p-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-amber-900 shadow-2xs">
+          <div className="flex items-center gap-3">
+            <div className="p-2.5 bg-amber-100/80 text-amber-800 rounded-xl shrink-0">
+              <AlertCircle className="w-5 h-5 text-amber-700" />
+            </div>
+            <div>
+              <p className="text-xs font-bold text-amber-950">Desktop Print Agent Offline</p>
+              <p className="text-[11px] text-amber-800 mt-0.5">
+                The Electron Print Agent on your counter PC is currently disconnected. Customers will see an offline banner and uploads will be blocked until the desktop agent connects.
+              </p>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => navigate('/shop/print-agent')}
+            className="bg-white hover:bg-amber-100 text-amber-900 border-amber-300 font-bold shrink-0 cursor-pointer"
+          >
+            Connect Agent →
+          </Button>
+        </div>
+      )}
 
       {/* 3. KPI SUMMARY CARDS */}
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">

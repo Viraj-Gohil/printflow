@@ -46,6 +46,7 @@ import {
   savePrintAgentPrinters,
   getShopPrinterEntitlements,
   getShopPrintAgentPrinters,
+  getShopAgentDetails,
   isNeonDatabaseConfigured,
   insertPrintAgentJob,
   getPrintAgentJob,
@@ -64,7 +65,9 @@ import {
   deleteShopPaymentIntegration,
   getPersistedUsers,
   persistNewShopAndUser,
-  requirePostgresPool
+  requirePostgresPool,
+  getShopAgentAvailability,
+  getCandidateShopIds
 } from './src/db/paymentStorage';
 import {
   maskKeyId,
@@ -2557,6 +2560,18 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
       targetMode = platformConfig.mode;
     } else {
       // Case 2: Customer Counter Print Job for a specific shop
+      // Enforce: Shop's Electron Print Agent must be online and ready before creating a payable print order
+      const orderAvailability = await getShopAgentAvailability(effectiveShopId);
+      if (!orderAvailability.isAvailable) {
+        return res.status(503).json({
+          success: false,
+          error: orderAvailability.message,
+          code: 'SHOP_OFFLINE',
+          reason: orderAvailability.reason,
+          availability: orderAvailability
+        });
+      }
+
       const shopIntegration = await getShopPaymentIntegration(effectiveShopId);
       if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
         targetKeyId = shopIntegration.keyId;
@@ -3177,6 +3192,18 @@ app.post('/api/upload', createRateLimiter(30), async (req: Request, res: Respons
     }
     if (!shopId || typeof shopId !== 'string') {
       return res.status(400).json({ success: false, error: 'Target shopId is required' });
+    }
+
+    // Authoritative check: Block upload if shop has no online agent with a ready printer
+    const uploadAvailability = await getShopAgentAvailability(shopId);
+    if (!uploadAvailability.isAvailable) {
+      return res.status(503).json({
+        success: false,
+        error: uploadAvailability.message,
+        code: 'SHOP_OFFLINE',
+        reason: uploadAvailability.reason,
+        availability: uploadAvailability
+      });
     }
 
     // Decode base64 payload safely
@@ -4359,7 +4386,19 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
       }
     }
     const created = storedJob.id === id;
-    return res.status(created ? 201 : 200).json({ success: true, job: storedJob, alreadyQueued: !created });
+    const availability = await getShopAgentAvailability(shopId);
+    const statusMessage = availability.isAvailable
+      ? 'Payment verified. Order queued for printing.'
+      : 'Payment received. Waiting for the print shop to reconnect.';
+
+    return res.status(created ? 201 : 200).json({
+      success: true,
+      job: storedJob,
+      alreadyQueued: !created,
+      agentOnline: availability.agentOnline,
+      printerReady: availability.printerReady,
+      statusMessage
+    });
   } catch (error) {
     logger.error('Could not persist print job in Neon', { shopId, jobId: id, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
@@ -4564,6 +4603,31 @@ app.get('/api/agent/printer-entitlements', async (req: Request, res: Response) =
   }
 });
 
+app.get('/api/agent/info', async (req: Request, res: Response) => {
+  const agentId = req.headers['x-agent-id'] as string;
+  const agentToken = req.headers['x-agent-token'] as string;
+
+  if (!agentId || !agentToken) {
+    return res.status(401).json({ success: false, error: 'Agent credentials headers (x-agent-id, x-agent-token) required' });
+  }
+
+  try {
+    const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken });
+    if (!agentCheck.valid || !agentCheck.shopId) {
+      return res.status(403).json({ success: false, error: agentCheck.error || 'Agent access unauthorized or revoked' });
+    }
+
+    const info = await getShopAgentDetails(agentId, agentCheck.shopId);
+    return res.json({
+      success: true,
+      ...info
+    });
+  } catch (error) {
+    logger.error('Print agent info retrieval failed', { error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Shop and subscription details could not be retrieved.' });
+  }
+});
+
 app.get('/api/shop/:shopId/live', requireShopOwnerRole, async (req: Request, res: Response) => {
   const shopId = req.params.shopId;
   const user = (req as any).authenticatedUser as ServerSession | undefined;
@@ -4652,7 +4716,11 @@ app.post('/api/agent/jobs/:id/claim', async (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ success: false, error: 'Print job not found.' });
   }
-  if (job.shopId !== agentCheck.shopId) {
+  const [canonJobShop, canonAgentShop] = await Promise.all([
+    resolvePrintFlowShopId(job.shopId),
+    resolvePrintFlowShopId(agentCheck.shopId)
+  ]);
+  if (job.shopId !== agentCheck.shopId && canonJobShop !== canonAgentShop) {
     return res.status(403).json({ success: false, error: 'Job belongs to another shop.' });
   }
   if (job.paymentStatus !== 'SUCCESS') {
@@ -4743,7 +4811,11 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ success: false, error: 'Print job not found.' });
   }
-  if (job.shopId !== agentCheck.shopId) {
+  const [canonJobShop, canonAgentShop] = await Promise.all([
+    resolvePrintFlowShopId(job.shopId),
+    resolvePrintFlowShopId(agentCheck.shopId)
+  ]);
+  if (job.shopId !== agentCheck.shopId && canonJobShop !== canonAgentShop) {
     return res.status(403).json({ success: false, error: 'Job belongs to another shop.' });
   }
   if (job.claimedBy !== agentId) {
@@ -4882,7 +4954,11 @@ app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ success: false, error: 'Print job not found.' });
   }
-  if (job.shopId !== agentCheck.shopId) {
+  const [canonJobShop, canonAgentShop] = await Promise.all([
+    resolvePrintFlowShopId(job.shopId),
+    resolvePrintFlowShopId(agentCheck.shopId)
+  ]);
+  if (job.shopId !== agentCheck.shopId && canonJobShop !== canonAgentShop) {
     return res.status(403).json({ success: false, error: 'Job belongs to another shop.' });
   }
   if (job.paymentStatus !== 'SUCCESS') {
@@ -5071,25 +5147,68 @@ app.get('/api/shops/:shopId', requireShopOwnerRole, requireNeonPool, async (req:
 app.get('/api/public/shops', requireNeonPool, async (req: Request, res: Response) => {
   try {
     const shops = await getBusinessRepository().listAllShops('ACTIVE');
+    const shopsWithStatus = await Promise.all(
+      shops.map(async (s) => {
+        let agentStatus = null;
+        try {
+          agentStatus = await getShopAgentAvailability(s.id);
+        } catch {
+          // Graceful fallback if availability check fails
+        }
+        return {
+          id: s.id,
+          slug: s.slug,
+          name: s.name,
+          tagline: s.tagline,
+          isOpen: s.isOpen,
+          businessHours: s.businessHours,
+          primaryColor: s.primaryColor,
+          logoUrl: s.logoUrl,
+          minOrderAmount: s.minOrderAmount,
+          autoAccept: s.autoAccept,
+          agentOnline: agentStatus?.agentOnline ?? false,
+          printerReady: agentStatus?.printerReady ?? false,
+          isAvailable: agentStatus?.isAvailable ?? false,
+          agentStatus
+        };
+      })
+    );
     return res.json({
       success: true,
-      shops: shops.map((s) => ({
-        id: s.id,
-        slug: s.slug,
-        name: s.name,
-        tagline: s.tagline,
-        isOpen: s.isOpen,
-        businessHours: s.businessHours,
-        primaryColor: s.primaryColor,
-        logoUrl: s.logoUrl,
-        minOrderAmount: s.minOrderAmount,
-        autoAccept: s.autoAccept
-      })),
-      total: shops.length
+      shops: shopsWithStatus,
+      total: shopsWithStatus.length
     });
   } catch (error) {
     logger.error('Failed to list public shops from Neon', { error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Shop directory is temporarily unavailable.' });
+  }
+});
+
+/**
+ * GET /api/public/shops/:slug/agent-status
+ * GET /api/public/shops/:slug/availability
+ * Public endpoint to query authoritative real-time shop print agent & printer availability.
+ */
+app.get(['/api/public/shops/:slug/agent-status', '/api/public/shops/:slug/availability', '/api/shops/:slug/availability'], async (req: Request, res: Response) => {
+  try {
+    const { slug } = req.params;
+    if (!slug) {
+      return res.status(400).json({ success: false, error: 'Shop slug or ID is required.' });
+    }
+    const availability = await getShopAgentAvailability(slug);
+    return res.json({
+      success: true,
+      shopId: slug,
+      availability,
+      isAvailable: availability.isAvailable,
+      agentOnline: availability.agentOnline,
+      printerReady: availability.printerReady,
+      reason: availability.reason,
+      message: availability.message
+    });
+  } catch (error) {
+    logger.error('Failed to get shop agent status', { slug: req.params.slug, error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Shop agent status is temporarily unavailable.' });
   }
 });
 
@@ -5104,7 +5223,13 @@ app.get('/api/public/shops/:slug', requireNeonPool, async (req: Request, res: Re
     const shop = await getBusinessRepository().findActiveShopBySlug(slug);
     if (!shop) return res.status(404).json({ success: false, error: 'Shop not found.' });
 
-    // Only expose safe public fields
+    let agentStatus = null;
+    try {
+      agentStatus = await getShopAgentAvailability(shop.id);
+    } catch (e) {
+      logger.warn('Could not check agent availability in public shop endpoint', { slug, error: deepRedact(e) });
+    }
+
     return res.json({
       success: true,
       shop: {
@@ -5118,6 +5243,13 @@ app.get('/api/public/shops/:slug', requireNeonPool, async (req: Request, res: Re
         logoUrl: shop.logoUrl,
         minOrderAmount: shop.minOrderAmount,
         autoAccept: shop.autoAccept
+      },
+      agentStatus: agentStatus || {
+        isAvailable: false,
+        reason: 'AGENT_OFFLINE',
+        message: 'This print shop is currently offline. Please try again later or select another available shop.',
+        agentOnline: false,
+        printerReady: false
       }
     });
   } catch (error) {
@@ -5472,6 +5604,17 @@ app.post('/api/guest/checkout/init', createRateLimiter(30), async (req: Request,
       return res.status(400).json({ success: false, error: 'Target shopId is required.' });
     }
 
+    const availability = await getShopAgentAvailability(shopId);
+    if (!availability.isAvailable) {
+      return res.status(503).json({
+        success: false,
+        error: availability.message,
+        code: 'SHOP_OFFLINE',
+        reason: availability.reason,
+        availability
+      });
+    }
+
     if (!isSharedPoolConfigured()) {
       return res.status(503).json({ success: false, error: 'Database is required for durable guest checkout.' });
     }
@@ -5521,6 +5664,17 @@ app.post('/api/guest/checkout/:jobId/upload', createRateLimiter(30), async (req:
     const auth = await getGuestCheckoutRepository().verifyGuestToken(jobId, trackingToken);
     if (!auth.valid) {
       return res.status(403).json({ success: false, error: 'Invalid or expired guest token.' });
+    }
+
+    const availability = await getShopAgentAvailability(auth.shopId);
+    if (!availability.isAvailable) {
+      return res.status(503).json({
+        success: false,
+        error: availability.message,
+        code: 'SHOP_OFFLINE',
+        reason: availability.reason,
+        availability
+      });
     }
 
     const buffer = Buffer.from(fileBase64, 'base64');

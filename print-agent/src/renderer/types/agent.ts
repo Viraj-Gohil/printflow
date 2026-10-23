@@ -1,4 +1,13 @@
-export type AgentConnectionStatus = 'ONLINE' | 'OFFLINE' | 'CONNECTING' | 'ERROR';
+export type AgentConnectionStatus =
+  | 'ONLINE'
+  | 'CONNECTED'
+  | 'OFFLINE'
+  | 'CONNECTING'
+  | 'RECONNECTING'
+  | 'UNAUTHORIZED'
+  | 'RESTRICTED'
+  | 'PRINTER_LIMIT_REACHED'
+  | 'ERROR';
 
 export type JobPrintStatus =
   | 'QUEUED'
@@ -10,6 +19,25 @@ export type JobPrintStatus =
   | 'CANCELLED'
   | 'MANUAL_ATTENTION'
   | 'REQUIRES_ATTENTION';
+
+export interface ShopDetails {
+  shopId: string;
+  shopName: string;
+  shopSlug: string;
+  shopStatus: 'ACTIVE' | 'SUSPENDED' | 'PENDING';
+  agentId: string;
+  deviceName: string;
+  planName: string;
+  planStatus: 'ACTIVE' | 'TRIAL' | 'EXPIRED' | 'SUSPENDED' | 'CANCELLED';
+  subscriptionPeriodStart: string | null;
+  subscriptionPeriodEnd: string | null;
+  printerLimit: number;
+  registeredCount: number;
+  agentRegisteredCount: number;
+  isOperational: boolean;
+  restrictionReason: string | null;
+  permissions: string[];
+}
 
 export interface AgentConfig {
   serverUrl: string;
@@ -29,6 +57,7 @@ export interface AgentConfig {
   hasStoredCredentials?: boolean;
   credentialStorageStatus?: 'SECURE' | 'LEGACY' | 'NONE';
   themePreference?: 'light' | 'dark' | 'system';
+  shopDetails?: ShopDetails;
 }
 
 export interface DiscoveredPrinter {
@@ -119,6 +148,7 @@ export interface ElectronAgentAPI {
   
   // Status & Metrics
   getStatus: () => Promise<{ status: AgentConnectionStatus; lastHeartbeat: string | null; error?: string }>;
+  getShopInfo: () => Promise<{ success: boolean; shopInfo?: ShopDetails; error?: string }>;
   getMetrics: () => Promise<QueueMetrics>;
   
   // Printers

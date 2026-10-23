@@ -13,7 +13,6 @@ import {
   Wifi,
   WifiOff,
   Laptop,
-  Globe,
   SlidersHorizontal,
   Printer,
   ArrowRight,
@@ -302,17 +301,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
               icon={<Store className="w-4 h-4" />}
             />
 
-            <ReadOnlyField
-              label="Cloud Host Endpoint"
-              value={config.serverUrl || 'Not Configured'}
-              badge={
-                <span className="text-[10px] font-semibold text-[var(--text-faint)] uppercase tracking-wider">
-                  TLS Host
-                </span>
-              }
-              description="Secure backend API URL for job polling and telemetry synchronization."
-              icon={<Globe className="w-4 h-4" />}
-            />
+
 
             {/* Editable Terminal Device Name */}
             <form onSubmit={handleSaveDeviceName} className="pt-2 border-t border-[var(--border-default)]">

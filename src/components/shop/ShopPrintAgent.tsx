@@ -68,8 +68,8 @@ export const ShopPrintAgent: React.FC = () => {
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Tab navigation: OVERVIEW, CREDENTIALS, INSTALL, API
-  const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CREDENTIALS' | 'INSTALL' | 'API'>('OVERVIEW');
+  // Tab navigation: OVERVIEW, CREDENTIALS, INSTALL
+  const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CREDENTIALS' | 'INSTALL'>('OVERVIEW');
 
   const visibleToken =
     (issuedToken?.shopId === shopAgent.shopId ? issuedToken.token : '') ||
@@ -316,8 +316,7 @@ export const ShopPrintAgent: React.FC = () => {
           {[
             { id: 'OVERVIEW', label: 'Overview' },
             { id: 'CREDENTIALS', label: 'Credentials & Token' },
-            { id: 'INSTALL', label: 'Installation Guide' },
-            { id: 'API', label: 'API Reference' }
+            { id: 'INSTALL', label: 'Installation Guide' }
           ].map((tab) => (
             <button
               key={tab.id}
@@ -533,54 +532,6 @@ export const ShopPrintAgent: React.FC = () => {
                 <span className="text-[11px] text-slate-400 font-mono">
                   SHA-256 verified • NSIS installer
                 </span>
-              </div>
-            </div>
-          )}
-
-          {/* TAB 4: API REFERENCE */}
-          {activeTab === 'API' && (
-            <div className="space-y-3 text-xs">
-              <div className="flex items-center justify-between">
-                <span className="font-semibold text-slate-900 font-mono">
-                  Electron Agent REST API Contract
-                </span>
-                <span className="text-[11px] text-slate-400 font-mono">
-                  Authorization: Bearer &lt;agent_token&gt;
-                </span>
-              </div>
-
-              <div className="rounded-xl border border-slate-200 overflow-hidden divide-y divide-slate-100 font-mono text-[11px]">
-                <div className="p-2.5 bg-slate-50 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Chip variant="success" size="sm">GET</Chip>
-                    <span className="text-slate-800 font-semibold">/api/agent/jobs?shopId={activeShop.id}</span>
-                  </div>
-                  <span className="text-slate-500">Poll pending printable jobs</span>
-                </div>
-
-                <div className="p-2.5 bg-white flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Chip variant="special" size="sm">POST</Chip>
-                    <span className="text-slate-800 font-semibold">/api/agent/jobs/:id/claim</span>
-                  </div>
-                  <span className="text-slate-500">Claim job with 5-min exclusive lease</span>
-                </div>
-
-                <div className="p-2.5 bg-slate-50 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Chip variant="special" size="sm">POST</Chip>
-                    <span className="text-slate-800 font-semibold">/api/agent/jobs/:id/status</span>
-                  </div>
-                  <span className="text-slate-500">Update spooler progress & outcome</span>
-                </div>
-
-                <div className="p-2.5 bg-white flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Chip variant="special" size="sm">POST</Chip>
-                    <span className="text-slate-800 font-semibold">/api/agent/devices/heartbeat</span>
-                  </div>
-                  <span className="text-slate-500">Ping device health & printer inventory</span>
-                </div>
               </div>
             </div>
           )}

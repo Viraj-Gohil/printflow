@@ -37,6 +37,67 @@ export const Dashboard: React.FC<DashboardProps> = ({
 
   return (
     <div className="space-y-6 animate-fade-in">
+      {/* SHOP & SUBSCRIPTION STATUS BANNER */}
+      {config.shopDetails && (
+        <div className="pf-card p-4 bg-gradient-to-r from-blue-500/10 via-[var(--bg-surface)] to-[var(--bg-surface)] border-l-4 border-l-blue-600 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold text-lg shrink-0 shadow-2xs">
+              {config.shopDetails.shopName.charAt(0).toUpperCase()}
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-sm font-bold text-[var(--text-primary)]">{config.shopDetails.shopName}</h2>
+                <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-blue-500/15 text-blue-700 dark:text-blue-300 border border-blue-500/30">
+                  {config.shopDetails.planName} Plan
+                </span>
+                <span
+                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                    config.shopDetails.shopStatus === 'ACTIVE' && (config.shopDetails.planStatus === 'ACTIVE' || config.shopDetails.planStatus === 'TRIAL')
+                      ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
+                      : 'bg-rose-500/15 text-rose-700 dark:text-rose-300 border-rose-500/30'
+                  }`}
+                >
+                  {config.shopDetails.planStatus}
+                </span>
+              </div>
+              <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono">
+                ID: {config.shopDetails.shopId} • Slug: /{config.shopDetails.shopSlug}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-4 text-xs">
+            <div className="text-right hidden sm:block">
+              <span className="text-[var(--text-muted)] text-[11px] block">Plan Printers</span>
+              <span className="font-mono font-bold text-[var(--text-primary)]">
+                {config.shopDetails.registeredCount} / {config.shopDetails.printerLimit} Registered
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigateTab('PRINTERS')}
+              className="secondary-button !py-1 !px-2.5 !text-xs font-semibold cursor-pointer"
+            >
+              Hardware →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* RESTRICTION WARNING BANNER */}
+      {((config.shopDetails && !config.shopDetails.isOperational) || status === 'RESTRICTED' || status === 'UNAUTHORIZED') && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-3 shadow-2xs">
+          <AlertTriangle className="w-5 h-5 text-amber-500 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <p className="font-bold text-sm">Shop Subsystem Restricted</p>
+            <p className="leading-relaxed">
+              {config.shopDetails?.restrictionReason ||
+                'Your shop account or subscription status requires attention in the Web Dashboard before processing new print jobs.'}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* 1. TOP METRICS CARDS */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {/* Card 1: Queue Backlog */}

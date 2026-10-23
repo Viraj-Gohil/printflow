@@ -143,10 +143,12 @@ export const App: React.FC = () => {
 
     const unsubStatus = api.onStatusChanged((newStatus) => {
       setStatus(newStatus);
-      void api
-        .getStatus()
-        .then((newDetails) => {
-          if (active) setLastHeartbeat(newDetails.lastHeartbeat);
+      void Promise.all([api.getStatus(), api.getConfig()])
+        .then(([newDetails, freshConfig]) => {
+          if (active) {
+            setLastHeartbeat(newDetails.lastHeartbeat);
+            setConfig(freshConfig);
+          }
         })
         .catch(() => undefined);
     });

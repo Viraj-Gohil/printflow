@@ -15,6 +15,8 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
   // Status & Metrics
   getStatus: (): Promise<{ status: AgentConnectionStatus; lastHeartbeat: string | null; error?: string }> =>
     ipcRenderer.invoke('agent:get-status'),
+  getShopInfo: (): Promise<{ success: boolean; shopInfo?: import('../renderer/types/agent.js').ShopDetails; error?: string }> =>
+    ipcRenderer.invoke('agent:get-shop-info'),
   getMetrics: (): Promise<QueueMetrics> => ipcRenderer.invoke('agent:get-metrics'),
 
   // Printers

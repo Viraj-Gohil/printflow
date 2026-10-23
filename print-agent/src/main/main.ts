@@ -247,6 +247,10 @@ ipcMain.handle('agent:get-status', () => {
   return agentService.getStatus();
 });
 
+ipcMain.handle('agent:get-shop-info', async () => {
+  return agentService.getShopInfo();
+});
+
 ipcMain.handle('agent:test-connection', async () => agentService.testConnection());
 
 ipcMain.handle('agent:reset-config', () => {

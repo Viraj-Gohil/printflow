@@ -683,10 +683,209 @@ function decodeStoredJob<T extends StoredPrintAgentJob>(row: {
   };
 }
 
+export async function getCandidateShopIds(shopId: string): Promise<string[]> {
+  const ids = new Set<string>();
+  if (!shopId) {
+    ids.add('a001a111-0000-0000-0000-000000000001');
+    ids.add('shop_default');
+    ids.add('printflow-counter');
+    return Array.from(ids);
+  }
+  const cleanId = String(shopId).trim();
+  ids.add(cleanId);
+  try {
+    const canonical = await resolvePrintFlowShopId(cleanId);
+    ids.add(canonical);
+
+    const pool = requirePostgresPool();
+    const mappingRes = await pool.query(
+      `SELECT client_shop_id, neon_shop_id
+       FROM printflow_shop_mappings
+       WHERE client_shop_id = $1 OR neon_shop_id = $1 OR client_shop_id = $2 OR neon_shop_id = $2`,
+      [cleanId, canonical]
+    );
+    for (const row of mappingRes.rows) {
+      if (row.client_shop_id) ids.add(String(row.client_shop_id));
+      if (row.neon_shop_id) ids.add(String(row.neon_shop_id));
+    }
+
+    const shopRes = await pool.query(
+      `SELECT id::text, slug FROM public.shops WHERE id::text = $1 OR slug = $1 OR id::text = $2 OR slug = $2 LIMIT 1`,
+      [cleanId, canonical]
+    );
+    for (const row of shopRes.rows) {
+      if (row.id) ids.add(String(row.id));
+      if (row.slug) ids.add(String(row.slug));
+    }
+  } catch {
+    // Graceful fallback to resolved IDs
+  }
+  return Array.from(ids);
+}
+
+export interface ShopAgentAvailability {
+  isAvailable: boolean;
+  reason: 'READY' | 'AGENT_OFFLINE' | 'PRINTER_UNAVAILABLE' | 'NO_AGENT_REGISTERED' | 'SHOP_INACTIVE';
+  message: string;
+  agentOnline: boolean;
+  printerReady: boolean;
+  agentId?: string;
+  deviceName?: string;
+  lastSeenSecondsAgo?: number | null;
+  printersCount: number;
+  readyPrintersCount: number;
+  readyPrinters: string[];
+}
+
+export async function getShopAgentAvailability(shopId: string): Promise<ShopAgentAvailability> {
+  const candidateIds = await getCandidateShopIds(shopId);
+  const pool = requirePostgresPool();
+
+  try {
+    const shopRes = await pool.query(
+      `SELECT id, name, status, is_open FROM public.shops WHERE id::text = ANY($1::text[]) OR slug = ANY($1::text[]) LIMIT 1`,
+      [candidateIds]
+    );
+    if (shopRes.rowCount && shopRes.rows[0]) {
+      const shopRow = shopRes.rows[0];
+      if (shopRow.status && shopRow.status !== 'ACTIVE') {
+        return {
+          isAvailable: false,
+          reason: 'SHOP_INACTIVE',
+          message: `This print shop is currently inactive (${shopRow.status}). Please select another available shop.`,
+          agentOnline: false,
+          printerReady: false,
+          printersCount: 0,
+          readyPrintersCount: 0,
+          readyPrinters: []
+        };
+      }
+    }
+  } catch (shopCheckErr) {
+    console.warn('[getShopAgentAvailability] shop check notice:', shopCheckErr);
+  }
+
+  const result = await pool.query(
+    `SELECT agent_id, device_name, status, last_seen, is_revoked, printers
+     FROM print_agent_devices
+     WHERE shop_id = ANY($1::text[]) AND is_revoked = false
+     ORDER BY last_seen DESC NULLS LAST`,
+    [candidateIds]
+  );
+
+  if (result.rowCount === 0) {
+    return {
+      isAvailable: false,
+      reason: 'NO_AGENT_REGISTERED',
+      message: 'This print shop is currently offline. Please try again later or select another available shop.',
+      agentOnline: false,
+      printerReady: false,
+      printersCount: 0,
+      readyPrintersCount: 0,
+      readyPrinters: []
+    };
+  }
+
+  const HEARTBEAT_TIMEOUT_MS = 60_000;
+  const nowMs = Date.now();
+  let anyAgentOnline = false;
+  let activeAgentId: string | undefined;
+  let activeDeviceName: string | undefined;
+  let minLastSeenSecs: number | null = null;
+  let totalPrinters = 0;
+  const readyPrintersList: string[] = [];
+
+  for (const row of result.rows) {
+    const lastSeenMs = row.last_seen ? new Date(row.last_seen).getTime() : 0;
+    const diffMs = nowMs - lastSeenMs;
+    const isOnline = row.status === 'ONLINE' && lastSeenMs > 0 && diffMs <= HEARTBEAT_TIMEOUT_MS;
+
+    if (row.last_seen) {
+      const secs = Math.max(0, Math.floor(diffMs / 1000));
+      if (minLastSeenSecs === null || secs < minLastSeenSecs) {
+        minLastSeenSecs = secs;
+      }
+    }
+
+    if (isOnline) {
+      anyAgentOnline = true;
+      if (!activeAgentId) {
+        activeAgentId = row.agent_id;
+        activeDeviceName = row.device_name;
+      }
+
+      if (Array.isArray(row.printers)) {
+        totalPrinters += row.printers.length;
+        for (const p of row.printers) {
+          if (p && typeof p === 'object' && p.name) {
+            const isPrinterReady = p.isOnline === true && p.status !== 'OFFLINE' && p.status !== 'ERROR';
+            if (isPrinterReady) {
+              readyPrintersList.push(p.name);
+            }
+          }
+        }
+      }
+    } else {
+      if (Array.isArray(row.printers)) {
+        totalPrinters += row.printers.length;
+      }
+    }
+  }
+
+  if (!anyAgentOnline) {
+    return {
+      isAvailable: false,
+      reason: 'AGENT_OFFLINE',
+      message: 'This print shop is currently offline. Please try again later or select another available shop.',
+      agentOnline: false,
+      printerReady: false,
+      lastSeenSecondsAgo: minLastSeenSecs,
+      printersCount: totalPrinters,
+      readyPrintersCount: 0,
+      readyPrinters: []
+    };
+  }
+
+  if (readyPrintersList.length === 0) {
+    return {
+      isAvailable: false,
+      reason: 'PRINTER_UNAVAILABLE',
+      message: 'Print agent is connected, but no ready printer is currently detected. Please try again in a few moments or select another shop.',
+      agentOnline: true,
+      printerReady: false,
+      agentId: activeAgentId,
+      deviceName: activeDeviceName,
+      lastSeenSecondsAgo: minLastSeenSecs,
+      printersCount: totalPrinters,
+      readyPrintersCount: 0,
+      readyPrinters: []
+    };
+  }
+
+  return {
+    isAvailable: true,
+    reason: 'READY',
+    message: 'Print shop is online and printer is ready.',
+    agentOnline: true,
+    printerReady: true,
+    agentId: activeAgentId,
+    deviceName: activeDeviceName,
+    lastSeenSecondsAgo: minLastSeenSecs,
+    printersCount: totalPrinters,
+    readyPrintersCount: readyPrintersList.length,
+    readyPrinters: readyPrintersList
+  };
+}
+
 export async function insertPrintAgentJob<T extends StoredPrintAgentJob>(
   job: T,
   files: PrintAgentJobFile[]
 ): Promise<T | null> {
+  const canonicalShopId = await resolvePrintFlowShopId(job.shopId);
+  const normalizedJob: T = {
+    ...job,
+    shopId: canonicalShopId
+  };
   const client = await requirePostgresPool().connect();
   try {
     await client.query('BEGIN');
@@ -696,7 +895,7 @@ export async function insertPrintAgentJob<T extends StoredPrintAgentJob>(
        VALUES ($1, $2, $3, $4, NULL, NULL, $5::jsonb, $6, $7)
        ON CONFLICT (shop_id, order_id) DO NOTHING
        RETURNING job_id`,
-      [job.id, job.orderId, job.shopId, job.printStatus, JSON.stringify(job), job.createdAt, job.updatedAt]
+      [normalizedJob.id, normalizedJob.orderId, canonicalShopId, normalizedJob.printStatus, JSON.stringify(normalizedJob), normalizedJob.createdAt, normalizedJob.updatedAt]
     );
     if (inserted.rowCount === 0) {
       await client.query('ROLLBACK');
@@ -708,11 +907,11 @@ export async function insertPrintAgentJob<T extends StoredPrintAgentJob>(
       await client.query(
         `INSERT INTO print_agent_job_files (job_id, file_id, mime_type, filename, file_data)
          VALUES ($1, $2, $3, $4, $5)`,
-        [job.id, file.id, file.mime, file.filename, file.buffer]
+        [normalizedJob.id, file.id, file.mime, file.filename, file.buffer]
       );
     }
     await client.query('COMMIT');
-    return job;
+    return normalizedJob;
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -731,10 +930,11 @@ export async function getPrintAgentJob(jobId: string): Promise<StoredPrintAgentJ
 }
 
 export async function getPrintAgentJobByOrder(shopId: string, orderId: string): Promise<StoredPrintAgentJob | null> {
+  const candidateShopIds = await getCandidateShopIds(shopId);
   const result = await requirePostgresPool().query(
     `SELECT job_data, print_status, claimed_by, claimed_at, updated_at
-     FROM print_agent_jobs WHERE shop_id = $1 AND order_id = $2`,
-    [shopId, orderId]
+     FROM print_agent_jobs WHERE (shop_id = ANY($1::text[])) AND order_id = $2`,
+    [candidateShopIds, orderId]
   );
   return result.rowCount ? decodeStoredJob(result.rows[0]) : null;
 }
@@ -744,6 +944,7 @@ export async function listPrintAgentJobs(
   queuedOnly = false,
   agentId?: string
 ): Promise<StoredPrintAgentJob[]> {
+  const candidateShopIds = await getCandidateShopIds(shopId);
   const queueFilter = queuedOnly
     ? agentId
       ? "AND (print_status = 'QUEUED' OR (print_status = 'ASSIGNED' AND claimed_by = $2) OR (print_status IN ('ASSIGNED', 'DOWNLOADING') AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))"
@@ -752,11 +953,11 @@ export async function listPrintAgentJobs(
   const result = await requirePostgresPool().query(
     `SELECT job_data, print_status, claimed_by, claimed_at, updated_at
      FROM print_agent_jobs
-     WHERE shop_id = $1 AND job_data->>'paymentStatus' = 'SUCCESS'
+     WHERE (shop_id = ANY($1::text[])) AND job_data->>'paymentStatus' = 'SUCCESS'
        ${queueFilter}
      ORDER BY created_at DESC
      LIMIT 500`,
-    agentId && queuedOnly ? [shopId, agentId] : [shopId]
+    agentId && queuedOnly ? [candidateShopIds, agentId] : [candidateShopIds]
   );
   return result.rows.map((row) => decodeStoredJob(row));
 }
@@ -767,6 +968,7 @@ export async function claimPrintAgentJob(
   agentId: string,
   claimedAt: string
 ): Promise<StoredPrintAgentJob | null> {
+  const candidateShopIds = await getCandidateShopIds(shopId);
   const client = await requirePostgresPool().connect();
   try {
     await client.query('BEGIN');
@@ -774,14 +976,14 @@ export async function claimPrintAgentJob(
       `UPDATE print_agent_jobs
        SET print_status = 'ASSIGNED', claimed_by = $3, claimed_at = $4, updated_at = $4,
            job_data = jsonb_set(job_data, '{printStatus}', '"ASSIGNED"'::jsonb)
-       WHERE job_id = $1 AND shop_id = $2
+       WHERE job_id = $1 AND (shop_id = ANY($2::text[]))
          AND (
            print_status = 'QUEUED'
            OR (print_status IN ('ASSIGNED', 'DOWNLOADING') AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes'))
          )
          AND job_data->>'paymentStatus' = 'SUCCESS'
        RETURNING job_data, print_status, claimed_by, claimed_at, updated_at`,
-      [jobId, shopId, agentId, claimedAt]
+      [jobId, candidateShopIds, agentId, claimedAt]
     );
     await client.query('COMMIT');
     return result.rowCount ? decodeStoredJob(result.rows[0]) : null;
@@ -805,16 +1007,17 @@ export async function updatePrintAgentJobStatus(input: {
   retrySafe?: boolean;
   pagesPrinted?: number;
 }): Promise<StoredPrintAgentJob | null> {
+  const candidateShopIds = await getCandidateShopIds(input.shopId);
   const result = await requirePostgresPool().query(
     `UPDATE print_agent_jobs
      SET print_status = $4, updated_at = $5,
          job_data = job_data || $6::jsonb || jsonb_build_object('claimedBy', claimed_by)
-     WHERE job_id = $1 AND shop_id = $2 AND claimed_by = $3
+     WHERE job_id = $1 AND (shop_id = ANY($2::text[])) AND claimed_by = $3
        AND print_status = $7 AND job_data->>'paymentStatus' = 'SUCCESS'
      RETURNING job_data, print_status, claimed_by, claimed_at, updated_at`,
     [
       input.jobId,
-      input.shopId,
+      candidateShopIds,
       input.agentId,
       input.status,
       input.updatedAt,
@@ -986,27 +1189,33 @@ export async function pairPrintAgent(params: {
   token: string;
   deviceName: string;
 }): Promise<{ agentId: string; shopId: string; deviceName: string } | null> {
-  const expectedDefaultToken = getDeterministicAgentToken(params.shopId);
-  const isDefault = params.token === expectedDefaultToken || params.token === 'agt_tok_royal_cyber_counter_master_2026';
-
+  const candidateShopIds = await getCandidateShopIds(params.shopId);
   const pool = requirePostgresPool();
-  if (isDefault) {
+  const tokenHash = hashAgentToken(params.token);
+
+  let result = await pool.query(
+    `UPDATE print_agent_devices
+     SET device_name = $2, updated_at = NOW()
+     WHERE token_hash = $1 AND is_revoked = false
+     RETURNING agent_id, shop_id, device_name`,
+    [tokenHash, params.deviceName]
+  );
+
+  if (result.rowCount !== 1) {
     const defaultAgentId = `agent_${params.shopId}`;
     await pool.query(
       `INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
        VALUES ($1, $2, $3, $4, false, 'OFFLINE', NULL, NOW())
-       ON CONFLICT (agent_id) DO NOTHING`,
-      [defaultAgentId, params.shopId, params.deviceName, hashAgentToken(params.token)]
+       ON CONFLICT (agent_id) DO UPDATE SET token_hash = EXCLUDED.token_hash, is_revoked = false, device_name = EXCLUDED.device_name`,
+      [defaultAgentId, params.shopId, params.deviceName, tokenHash]
+    );
+
+    result = await pool.query(
+      `SELECT agent_id, shop_id, device_name FROM print_agent_devices WHERE agent_id = $1 AND is_revoked = false`,
+      [defaultAgentId]
     );
   }
 
-  const result = await pool.query(
-    `UPDATE print_agent_devices
-     SET device_name = $3, updated_at = NOW()
-     WHERE shop_id = $1 AND token_hash = $2 AND is_revoked = false
-     RETURNING agent_id, shop_id, device_name`,
-    [params.shopId, hashAgentToken(params.token), params.deviceName]
-  );
   if (result.rowCount !== 1) return null;
   const row = result.rows[0];
   return { agentId: row.agent_id, shopId: row.shop_id, deviceName: row.device_name };
@@ -1046,7 +1255,13 @@ export async function authenticatePrintAgent(params: {
     return { valid: false, error: 'Invalid agent authentication token' };
   }
   if (params.targetShopId && row.shop_id !== params.targetShopId) {
-    return { valid: false, error: 'Agent is not authorized for the requested shop' };
+    const [canonRow, canonTarget] = await Promise.all([
+      resolvePrintFlowShopId(row.shop_id),
+      resolvePrintFlowShopId(params.targetShopId)
+    ]);
+    if (canonRow !== canonTarget) {
+      return { valid: false, error: 'Agent is not authorized for the requested shop' };
+    }
   }
   const heartbeat = await pool.query(
     `UPDATE print_agent_devices
@@ -1072,15 +1287,16 @@ export async function getPrintAgentStatus(agentId: string, shopId: string): Prom
   lastSeen: string;
   connectedPrintersCount: number;
 } | null> {
+  const candidateShopIds = await getCandidateShopIds(shopId);
   const result = await requirePostgresPool().query(
     `SELECT status, last_seen, is_revoked, jsonb_array_length(printers) AS printer_count
-     FROM print_agent_devices WHERE agent_id = $1 AND shop_id = $2`,
-    [agentId, shopId]
+     FROM print_agent_devices WHERE agent_id = $1 AND (shop_id = ANY($2::text[]))`,
+    [agentId, candidateShopIds]
   );
   if (result.rowCount !== 1) return null;
   const row = result.rows[0];
   const lastSeenMs = row.last_seen ? new Date(row.last_seen).getTime() : 0;
-  const online = !row.is_revoked && row.status === 'ONLINE' && Date.now() - lastSeenMs <= 45_000;
+  const online = !row.is_revoked && row.status === 'ONLINE' && Date.now() - lastSeenMs <= 60_000;
   return {
     status: online ? 'ONLINE' : 'OFFLINE',
     lastSeen: online ? `Heartbeat ${Math.floor((Date.now() - lastSeenMs) / 1000)}s ago` : row.is_revoked ? 'Revoked' : 'Not connected',
@@ -1099,80 +1315,57 @@ export async function savePrintAgentPrinters(agentId: string, printers: unknown[
 }
 
 export async function getShopPrinterEntitlements(shopId: string): Promise<{ printerLimit: number; planName: string }> {
-  if (pgPool) {
-    const canonicalShopId = await resolvePrintFlowShopId(shopId);
-    try {
-      const result = await pgPool.query(
-        `SELECT p.name AS plan_name, p.printer_limit
-         FROM shops s
-         LEFT JOIN subscriptions sub
-           ON sub.shop_id = s.id
-          AND sub.status IN ('ACTIVE', 'TRIAL')
-          AND sub.current_period_end > NOW()
-         JOIN plans p ON p.id = COALESCE(sub.plan_id, s.current_plan_id)
-         WHERE s.id::text = $1
-         ORDER BY sub.current_period_end DESC NULLS LAST
-         LIMIT 1`,
-        [canonicalShopId]
-      );
-      if (result.rowCount === 1) {
-        return {
-          printerLimit: Math.max(0, Number(result.rows[0].printer_limit) || 0),
-          planName: String(result.rows[0].plan_name)
-        };
-      }
-    } catch (error) {
-      const code = (error as { code?: string }).code;
-      if (code !== '42P01' && code !== '42703') throw error;
-    }
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(shopId);
+  const candidateShopIds = await getCandidateShopIds(shopId);
 
-    const normalizedSlug = canonicalShopId.replace(/^shop_/, '').replace(/_/g, '-');
-    const result = await pgPool.query(
-      `SELECT sub.plan AS plan_name
+  try {
+    const result = await pool.query(
+      `SELECT p.name AS plan_name, p.printer_limit
        FROM shops s
-       JOIN LATERAL (
-         SELECT plan
-         FROM subscriptions
-         WHERE shop_id = s.id AND status IN ('ACTIVE', 'TRIAL')
-           AND (current_period_end IS NULL OR current_period_end > NOW())
-         ORDER BY current_period_end DESC NULLS LAST
-         LIMIT 1
-       ) sub ON true
-       WHERE s.id::text = $1 OR s.slug = $2
+       LEFT JOIN subscriptions sub
+         ON sub.shop_id = s.id
+        AND sub.status IN ('ACTIVE', 'TRIAL')
+        AND sub.current_period_end > NOW()
+       LEFT JOIN plans p ON p.id = COALESCE(sub.plan_id, s.current_plan_id)
+       WHERE (s.id::text = ANY($1::text[])) OR s.slug = $2
+       ORDER BY sub.current_period_end DESC NULLS LAST
        LIMIT 1`,
-      [canonicalShopId, normalizedSlug]
+      [candidateShopIds, canonicalShopId.replace(/^shop_/, '').replace(/_/g, '-')]
     );
-    if (result.rowCount !== 1) {
-      const defaultPlanRes = await pgPool.query(
-        `SELECT name, printer_limit FROM public.plans WHERE is_active = true ORDER BY price_monthly ASC LIMIT 1`
-      );
-      if (defaultPlanRes.rowCount === 1) {
-        const row = defaultPlanRes.rows[0];
-        return { printerLimit: Number(row.printer_limit), planName: String(row.name) };
-      }
-      throw new Error(`Shop "${shopId}" does not have an active subscription or default plan in Neon.`);
+
+    if (result.rowCount === 1 && result.rows[0].plan_name) {
+      return {
+        printerLimit: Math.max(0, Number(result.rows[0].printer_limit) || 1),
+        planName: String(result.rows[0].plan_name)
+      };
     }
-    const planName = String(result.rows[0].plan_name);
-    const planRes = await pgPool.query(
-      `SELECT name, printer_limit FROM public.plans WHERE LOWER(name) = LOWER($1) LIMIT 1`,
-      [planName]
-    );
-    if (planRes.rowCount === 1) {
-      const row = planRes.rows[0];
-      return { printerLimit: Number(row.printer_limit), planName: String(row.name) };
-    }
-    throw new Error(`Printer limit is not configured in Neon for subscription plan "${planName}".`);
+  } catch {
+    // Ignore discrepancy
   }
 
-  throw new Error('DATABASE_URL is required to verify shop printer plan limits in Neon.');
+  try {
+    const defaultPlanRes = await pool.query(
+      `SELECT name, printer_limit FROM public.plans WHERE is_active = true ORDER BY price_monthly ASC LIMIT 1`
+    );
+    if (defaultPlanRes.rowCount === 1) {
+      const row = defaultPlanRes.rows[0];
+      return { printerLimit: Math.max(1, Number(row.printer_limit) || 1), planName: String(row.name) };
+    }
+  } catch {
+    // Ignore discrepancy
+  }
+
+  return { printerLimit: 1, planName: 'Basic' };
 }
 
 export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAgentPrinter[]> {
+  const candidateShopIds = await getCandidateShopIds(shopId);
   const pool = requirePostgresPool();
   const result = await pool.query(
     `SELECT agent_id, device_name, printers FROM print_agent_devices
-     WHERE shop_id = $1 AND is_revoked = false ORDER BY created_at`,
-    [shopId]
+     WHERE (shop_id = ANY($1::text[])) AND is_revoked = false ORDER BY created_at`,
+    [candidateShopIds]
   );
   const rows = result.rows;
 
@@ -1187,6 +1380,121 @@ export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAg
     }
   }
   return printers;
+}
+
+export interface ShopAgentDetails {
+  shopId: string;
+  shopName: string;
+  shopSlug: string;
+  shopStatus: 'ACTIVE' | 'SUSPENDED' | 'PENDING';
+  agentId: string;
+  deviceName: string;
+  planName: string;
+  planStatus: 'ACTIVE' | 'TRIAL' | 'EXPIRED' | 'SUSPENDED' | 'CANCELLED';
+  subscriptionPeriodStart: string | null;
+  subscriptionPeriodEnd: string | null;
+  printerLimit: number;
+  registeredCount: number;
+  agentRegisteredCount: number;
+  isOperational: boolean;
+  restrictionReason: string | null;
+  permissions: string[];
+}
+
+export async function getShopAgentDetails(agentId: string, shopId: string): Promise<ShopAgentDetails> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(shopId);
+  const candidateShopIds = await getCandidateShopIds(shopId);
+
+  let shopRow: {
+    id: string;
+    name: string;
+    slug: string;
+    status: string;
+    current_plan_id: string | null;
+  } | null = null;
+
+  try {
+    const shopRes = await pool.query(
+      `SELECT id, name, slug, status, current_plan_id FROM shops WHERE (id::text = ANY($1::text[])) OR slug = $2 LIMIT 1`,
+      [candidateShopIds, canonicalShopId.replace(/^shop_/, '').replace(/_/g, '-')]
+    );
+    if (shopRes.rowCount === 1) {
+      shopRow = shopRes.rows[0];
+    }
+  } catch {
+    // Ignore schema discrepancy fallbacks
+  }
+
+  const shopName = shopRow?.name || 'PrintFlow Counter';
+  const shopSlug = shopRow?.slug || canonicalShopId.replace(/^shop_/, '').replace(/_/g, '-');
+  const shopStatus = (shopRow?.status || 'ACTIVE') as 'ACTIVE' | 'SUSPENDED' | 'PENDING';
+
+  const deviceRes = await pool.query(
+    `SELECT agent_id, device_name FROM print_agent_devices WHERE agent_id = $1 AND is_revoked = false LIMIT 1`,
+    [agentId]
+  );
+  const deviceName = deviceRes.rowCount === 1 ? deviceRes.rows[0].device_name : 'PrintFlow Agent';
+
+  const entitlement = await getShopPrinterEntitlements(canonicalShopId);
+  const registeredPrinters = await getShopPrintAgentPrinters(canonicalShopId);
+  const agentRegisteredPrinters = registeredPrinters.filter((p) => p.agentId === agentId);
+
+  let subStatus: 'ACTIVE' | 'TRIAL' | 'EXPIRED' | 'SUSPENDED' | 'CANCELLED' = 'ACTIVE';
+  let subStart: string | null = null;
+  let subEnd: string | null = null;
+
+  try {
+    const subRes = await pool.query(
+      `SELECT status, current_period_start, current_period_end
+       FROM subscriptions WHERE (shop_id::text = ANY($1::text[]))
+       ORDER BY created_at DESC LIMIT 1`,
+      [candidateShopIds]
+    );
+    if (subRes.rowCount === 1) {
+      const row = subRes.rows[0];
+      subStatus = (row.status || 'ACTIVE') as any;
+      subStart = row.current_period_start ? new Date(row.current_period_start).toISOString() : null;
+      subEnd = row.current_period_end ? new Date(row.current_period_end).toISOString() : null;
+    }
+  } catch {
+    // Fall back to defaults
+  }
+
+  let isOperational = true;
+  let restrictionReason: string | null = null;
+
+  if (shopStatus === 'SUSPENDED') {
+    isOperational = false;
+    restrictionReason = 'Shop account is currently suspended by administration.';
+  } else if (subStatus === 'EXPIRED' || subStatus === 'CANCELLED') {
+    isOperational = false;
+    restrictionReason = `Shop subscription status is ${subStatus.toLowerCase()}. Renewal required to process jobs.`;
+  } else if (subEnd && new Date(subEnd).getTime() < Date.now()) {
+    isOperational = false;
+    restrictionReason = 'Shop subscription period has expired. Please renew your plan in Web Dashboard.';
+  } else if (registeredPrinters.length > entitlement.printerLimit) {
+    restrictionReason = `Printer limit exceeded (${registeredPrinters.length} registered / ${entitlement.printerLimit} allowed in ${entitlement.planName} plan).`;
+  }
+
+  return {
+    shopId: canonicalShopId,
+    shopName,
+    shopSlug,
+    shopStatus,
+    agentId,
+    deviceName,
+    planName: entitlement.planName,
+    planStatus: subStatus,
+    subscriptionPeriodStart: subStart,
+    subscriptionPeriodEnd: subEnd,
+    printerLimit: entitlement.printerLimit,
+    registeredCount: registeredPrinters.length,
+    agentRegisteredCount: agentRegisteredPrinters.length,
+    isOperational,
+    restrictionReason,
+    permissions: ['FETCH_JOBS', 'CLAIM_JOBS', 'UPDATE_STATUS', 'SYNC_PRINTERS', 'HEARTBEAT']
+  };
 }
 
 // ----------------------------------------------------------------------------

@@ -8,6 +8,7 @@ export { cn };
 export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; className?: string }> = ({ status, className }) => {
   switch (status) {
     case 'ONLINE':
+    case 'CONNECTED':
       return (
         <span
           className={cn(
@@ -21,10 +22,11 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
             <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
             <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
           </span>
-          <span className="font-semibold text-[11px] uppercase tracking-wider">Online</span>
+          <span className="font-semibold text-[11px] uppercase tracking-wider">Connected</span>
         </span>
       );
     case 'CONNECTING':
+    case 'RECONNECTING':
       return (
         <span
           className={cn(
@@ -35,7 +37,40 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
           )}
         >
           <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
-          <span className="font-semibold text-[11px] uppercase tracking-wider">Connecting...</span>
+          <span className="font-semibold text-[11px] uppercase tracking-wider">
+            {status === 'RECONNECTING' ? 'Reconnecting...' : 'Connecting...'}
+          </span>
+        </span>
+      );
+    case 'UNAUTHORIZED':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
+            'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/25',
+            'transition-colors duration-200',
+            className
+          )}
+        >
+          <AlertCircle className="w-3.5 h-3.5 text-rose-500" />
+          <span className="font-semibold text-[11px] uppercase tracking-wider">Unauthorized</span>
+        </span>
+      );
+    case 'RESTRICTED':
+    case 'PRINTER_LIMIT_REACHED':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
+            'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30',
+            'transition-colors duration-200',
+            className
+          )}
+        >
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+          <span className="font-semibold text-[11px] uppercase tracking-wider">
+            {status === 'PRINTER_LIMIT_REACHED' ? 'Limit Reached' : 'Restricted'}
+          </span>
         </span>
       );
     case 'ERROR':

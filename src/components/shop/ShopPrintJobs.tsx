@@ -13,7 +13,8 @@ import {
   Phone,
   Eye,
   ArrowRight,
-  Sparkles
+  Sparkles,
+  RotateCw
 } from 'lucide-react';
 import { PrintJob, PrintStatus } from '../../types';
 
@@ -23,6 +24,105 @@ export const ShopPrintJobs: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [activeJobModal, setActiveJobModal] = useState<PrintJob | null>(null);
+
+  const getPaymentStatusBadge = (paymentStatus?: string) => {
+    const status = (paymentStatus || 'PENDING').toUpperCase();
+    if (status === 'SUCCESS' || status === 'DEMO_SUCCESS' || status === 'PAID') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200/80 rounded-full text-[10px] font-bold shadow-2xs">
+          <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+          <span>Payment Verified</span>
+        </span>
+      );
+    }
+    if (status === 'FAILED' || status === 'CANCELLED' || status === 'REFUNDED') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-rose-50 text-rose-800 border border-rose-200/80 rounded-full text-[10px] font-bold shadow-2xs">
+          <AlertCircle className="w-3 h-3 text-rose-600 shrink-0" />
+          <span>Payment {status === 'CANCELLED' ? 'Cancelled' : status === 'REFUNDED' ? 'Refunded' : 'Failed'}</span>
+        </span>
+      );
+    }
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200/80 rounded-full text-[10px] font-bold shadow-2xs">
+        <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+        <span>Awaiting Payment</span>
+      </span>
+    );
+  };
+
+  const getPrintStatusBadge = (job: PrintJob) => {
+    const printStatus = job.printStatus;
+    const paymentStatus = (job.paymentStatus || '').toUpperCase();
+
+    if (paymentStatus !== 'SUCCESS' && paymentStatus !== 'DEMO_SUCCESS' && paymentStatus !== 'PAID') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-200 rounded-full text-[10px] font-bold shadow-2xs">
+          <Clock className="w-3 h-3 text-amber-600 shrink-0" />
+          <span>Awaiting Payment</span>
+        </span>
+      );
+    }
+
+    switch (printStatus) {
+      case 'QUEUED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-sky-50 text-sky-800 border border-sky-200/90 rounded-full text-[10px] font-bold shadow-2xs">
+            <Clock className="w-3 h-3 text-sky-600 shrink-0" />
+            <span>Queued</span>
+          </span>
+        );
+      case 'ASSIGNED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-indigo-50 text-indigo-800 border border-indigo-200 rounded-full text-[10px] font-bold shadow-2xs">
+            <Printer className="w-3 h-3 text-indigo-600 shrink-0" />
+            <span>Accepted by Agent</span>
+          </span>
+        );
+      case 'DOWNLOADING':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-blue-50 text-blue-800 border border-blue-200 rounded-full text-[10px] font-bold shadow-2xs">
+            <RotateCw className="w-3 h-3 text-blue-600 animate-spin shrink-0" />
+            <span>Downloading Files</span>
+          </span>
+        );
+      case 'PRINTING':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-blue-50 text-blue-800 border border-blue-300 rounded-full text-[10px] font-bold shadow-2xs animate-pulse">
+            <Printer className="w-3 h-3 text-blue-600 shrink-0" />
+            <span>Printing...</span>
+          </span>
+        );
+      case 'COMPLETED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[10px] font-bold shadow-2xs">
+            <CheckCircle2 className="w-3 h-3 text-emerald-600 shrink-0" />
+            <span>Completed</span>
+          </span>
+        );
+      case 'FAILED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-full text-[10px] font-bold shadow-2xs">
+            <AlertCircle className="w-3 h-3 text-rose-600 shrink-0" />
+            <span>Print Failed</span>
+          </span>
+        );
+      case 'REQUIRES_ATTENTION':
+      case 'PRINT_INTERRUPTED':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded-full text-[10px] font-bold shadow-2xs">
+            <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
+            <span>Waiting for Shop</span>
+          </span>
+        );
+      default:
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-slate-100 text-slate-700 border border-slate-200 rounded-full text-[10px] font-bold">
+            {printStatus}
+          </span>
+        );
+    }
+  };
 
   const shopJobs = printJobs.filter((j) => j.shopId === activeShop.id);
 
@@ -159,23 +259,11 @@ export const ShopPrintJobs: React.FC = () => {
                       {job.assignedPrinterName || 'Auto-Queue'}
                     </td>
                     <td className="py-3.5 px-4">
-                      <span className="font-mono font-bold text-slate-900 block">₹{job.totalAmount.toFixed(2)}</span>
-                      <span className="text-[10px] text-emerald-600 font-semibold">{job.paymentStatus}</span>
+                      <span className="font-mono font-bold text-slate-900 block mb-0.5">₹{job.totalAmount.toFixed(2)}</span>
+                      {getPaymentStatusBadge(job.paymentStatus)}
                     </td>
                     <td className="py-3.5 px-4">
-                      <span
-                        className={`inline-flex px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                          job.printStatus === 'COMPLETED'
-                            ? 'bg-emerald-50 text-emerald-700'
-                            : job.printStatus === 'PRINTING'
-                            ? 'bg-blue-50 text-blue-700 animate-pulse'
-                            : job.printStatus === 'QUEUED'
-                            ? 'bg-amber-50 text-amber-700'
-                            : 'bg-red-50 text-red-700'
-                        }`}
-                      >
-                        {job.printStatus}
-                      </span>
+                      {getPrintStatusBadge(job)}
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
@@ -236,6 +324,14 @@ export const ShopPrintJobs: React.FC = () => {
                 <div>
                   <span className="text-slate-400 block text-[11px]">Mobile Phone</span>
                   <span className="font-bold text-slate-900">{activeJobModal.customerPhone || 'N/A'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Payment Status</span>
+                  <div className="mt-0.5">{getPaymentStatusBadge(activeJobModal.paymentStatus)}</div>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[11px]">Print Job Status</span>
+                  <div className="mt-0.5">{getPrintStatusBadge(activeJobModal)}</div>
                 </div>
                 <div>
                   <span className="text-slate-400 block text-[11px]">Tracking Token</span>

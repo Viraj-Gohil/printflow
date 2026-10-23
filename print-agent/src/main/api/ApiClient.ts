@@ -112,6 +112,49 @@ export class ApiClient {
   }
 
   /**
+   * Fetches shop, plan, subscription, and entitlement details
+   */
+  public async getShopInfo(): Promise<{
+    success: boolean;
+    shopInfo?: import('../../renderer/types/agent.js').ShopDetails;
+    error?: string;
+  }> {
+    try {
+      const response = await fetch(`${this.getBaseUrl()}/api/agent/info`, {
+        method: 'GET',
+        headers: this.getHeaders()
+      });
+      const data = (await response.json().catch(() => ({}))) as any;
+      if (!response.ok || !data.success) {
+        return { success: false, error: data.error || `HTTP ${response.status}: Failed to retrieve shop details.` };
+      }
+      return {
+        success: true,
+        shopInfo: {
+          shopId: data.shopId,
+          shopName: data.shopName,
+          shopSlug: data.shopSlug,
+          shopStatus: data.shopStatus,
+          agentId: data.agentId,
+          deviceName: data.deviceName,
+          planName: data.planName,
+          planStatus: data.planStatus,
+          subscriptionPeriodStart: data.subscriptionPeriodStart,
+          subscriptionPeriodEnd: data.subscriptionPeriodEnd,
+          printerLimit: data.printerLimit,
+          registeredCount: data.registeredCount,
+          agentRegisteredCount: data.agentRegisteredCount,
+          isOperational: data.isOperational,
+          restrictionReason: data.restrictionReason,
+          permissions: data.permissions || []
+        }
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
    * Pushes discovered Windows printers to shop inventory
    */
   public async getPrinterEntitlements(): Promise<{
