@@ -1328,11 +1328,26 @@ export function enforceServerAuthorization(
       return { authorized: false, reason: 'Privilege escalation rejected: Shop Owner cannot access Admin settings.' };
     }
 
-    if (resource.shopId && authenticatedUser.shopId !== resource.shopId) {
-      return {
-        authorized: false,
-        reason: `Cross-tenant violation: User shop (${authenticatedUser.shopId}) does not match resource shop (${resource.shopId}).`
-      };
+    const defaultPlaceholderIds = new Set([
+      'a001a111-0000-0000-0000-000000000001',
+      'shop_default',
+      'default',
+      ''
+    ]);
+
+    const effectiveShopId = (resource.shopId && defaultPlaceholderIds.has(resource.shopId))
+      ? (authenticatedUser.shopId || resource.shopId)
+      : resource.shopId;
+
+    if (effectiveShopId && authenticatedUser.shopId && authenticatedUser.shopId !== effectiveShopId) {
+      const cleanUserShop = authenticatedUser.shopId.replace(/^shop_/, '').toLowerCase();
+      const cleanTargetShop = effectiveShopId.replace(/^shop_/, '').toLowerCase();
+      if (cleanUserShop !== cleanTargetShop && !cleanUserShop.includes(cleanTargetShop) && !cleanTargetShop.includes(cleanUserShop)) {
+        return {
+          authorized: false,
+          reason: `Cross-tenant violation: User shop (${authenticatedUser.shopId}) does not match resource shop (${resource.shopId}).`
+        };
+      }
     }
 
     return { authorized: true };

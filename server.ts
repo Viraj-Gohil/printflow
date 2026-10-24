@@ -2292,8 +2292,10 @@ app.post('/api/payment/platform-config/test', requireAdminRole, async (_req: Req
 app.get('/api/shop/:shopId/payment-settings', async (req: Request, res: Response) => {
   try {
     const rawShopId = req.params.shopId;
-    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
@@ -2342,8 +2344,10 @@ app.get('/api/shop/:shopId/payment-settings', async (req: Request, res: Response
 app.post('/api/shop/:shopId/payment-settings', createRateLimiter(20), async (req: Request, res: Response) => {
   try {
     const rawShopId = req.params.shopId;
-    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
@@ -2416,8 +2420,10 @@ app.post('/api/shop/:shopId/payment-settings', createRateLimiter(20), async (req
 app.post('/api/shop/:shopId/payment-settings/test', async (req: Request, res: Response) => {
   try {
     const rawShopId = req.params.shopId;
-    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
@@ -2469,8 +2475,10 @@ app.post('/api/shop/:shopId/payment-settings/test', async (req: Request, res: Re
 app.delete('/api/shop/:shopId/payment-settings', async (req: Request, res: Response) => {
   try {
     const rawShopId = req.params.shopId;
-    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
