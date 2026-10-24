@@ -2293,11 +2293,13 @@ app.get('/api/shop/:shopId/payment-settings', async (req: Request, res: Response
   try {
     const rawShopId = req.params.shopId;
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const userCanonicalShopId = user?.shopId ? await resolvePrintFlowShopId(user.shopId).catch(() => user.shopId) : undefined;
     const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
-    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && userCanonicalShopId) ? userCanonicalShopId : rawShopId;
     const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
-    const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
+    const authorizedUserCtx = user ? { ...user, shopId: userCanonicalShopId || user.shopId } : user;
+    const authz = enforceServerAuthorization(authorizedUserCtx, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
       return res.status(403).json({ success: false, error: authz.reason || 'Access denied' });
     }
@@ -2345,11 +2347,13 @@ app.post('/api/shop/:shopId/payment-settings', createRateLimiter(20), async (req
   try {
     const rawShopId = req.params.shopId;
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const userCanonicalShopId = user?.shopId ? await resolvePrintFlowShopId(user.shopId).catch(() => user.shopId) : undefined;
     const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
-    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && userCanonicalShopId) ? userCanonicalShopId : rawShopId;
     const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
-    const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
+    const authorizedUserCtx = user ? { ...user, shopId: userCanonicalShopId || user.shopId } : user;
+    const authz = enforceServerAuthorization(authorizedUserCtx, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
       return res.status(403).json({ success: false, error: authz.reason || 'Access denied' });
     }
@@ -2421,11 +2425,13 @@ app.post('/api/shop/:shopId/payment-settings/test', async (req: Request, res: Re
   try {
     const rawShopId = req.params.shopId;
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const userCanonicalShopId = user?.shopId ? await resolvePrintFlowShopId(user.shopId).catch(() => user.shopId) : undefined;
     const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
-    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && userCanonicalShopId) ? userCanonicalShopId : rawShopId;
     const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
-    const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
+    const authorizedUserCtx = user ? { ...user, shopId: userCanonicalShopId || user.shopId } : user;
+    const authz = enforceServerAuthorization(authorizedUserCtx, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
       return res.status(403).json({ success: false, error: authz.reason || 'Access denied' });
     }
@@ -2476,11 +2482,13 @@ app.delete('/api/shop/:shopId/payment-settings', async (req: Request, res: Respo
   try {
     const rawShopId = req.params.shopId;
     const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const userCanonicalShopId = user?.shopId ? await resolvePrintFlowShopId(user.shopId).catch(() => user.shopId) : undefined;
     const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
-    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && user?.shopId) ? user.shopId : rawShopId;
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && userCanonicalShopId) ? userCanonicalShopId : rawShopId;
     const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
 
-    const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
+    const authorizedUserCtx = user ? { ...user, shopId: userCanonicalShopId || user.shopId } : user;
+    const authz = enforceServerAuthorization(authorizedUserCtx, { resourceType: 'SHOP', shopId });
     if (!authz.authorized) {
       return res.status(403).json({ success: false, error: authz.reason || 'Access denied' });
     }

@@ -560,6 +560,23 @@ export async function initializePaymentTables(maxRetries = 3): Promise<void> {
           ('shop_default', 'a001a111-0000-0000-0000-000000000001', NOW()),
           ('printflow-counter', 'a001a111-0000-0000-0000-000000000001', NOW())
         ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id;
+
+        -- Safe backfill for public.shop_members table from existing profiles and shops
+        INSERT INTO public.shop_members (id, shop_id, user_id, role, created_at)
+        SELECT gen_random_uuid(), s.id, p.id, 'SHOP_OWNER', NOW()
+        FROM public.shops s
+        JOIN public.profiles p ON LOWER(p.email) = LOWER(s.email)
+        WHERE p.role = 'SHOP_OWNER'
+        ON CONFLICT (shop_id, user_id) DO NOTHING;
+
+        INSERT INTO public.shop_members (id, shop_id, user_id, role, created_at)
+        SELECT gen_random_uuid(), m.neon_shop_id::uuid, u.id::uuid, 'SHOP_OWNER', NOW()
+        FROM public.printflow_users u
+        JOIN public.printflow_shop_mappings m ON m.client_shop_id = u.shop_id
+        WHERE u.role = 'SHOP_OWNER'
+          AND u.id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+          AND m.neon_shop_id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        ON CONFLICT (shop_id, user_id) DO NOTHING;
       `);
 
       console.log('[PaymentStorage] Supabase PostgreSQL payment and PrintFlow Agent tables verified successfully.');
@@ -2002,6 +2019,12 @@ export async function persistNewShopAndUser(input: PersistShopUserInput): Promis
         VALUES ($1, $2, NOW())
         ON CONFLICT (client_shop_id) DO UPDATE SET neon_shop_id = EXCLUDED.neon_shop_id
       `, [shop.id, effectiveShopUuid]);
+
+      await client.query(`
+        INSERT INTO public.shop_members (id, shop_id, user_id, role, created_at)
+        VALUES (gen_random_uuid(), $1, $2, 'SHOP_OWNER', NOW())
+        ON CONFLICT (shop_id, user_id) DO UPDATE SET role = EXCLUDED.role
+      `, [effectiveShopUuid, userUuid]);
 
       // 5. Also insert pricing rules into public.pricing_rules
       const VALID_PAPER_SIZES = new Set(['A4', 'A3', 'A5', 'Letter', 'Legal']);
