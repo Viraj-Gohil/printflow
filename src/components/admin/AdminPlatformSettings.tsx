@@ -142,15 +142,6 @@ export const AdminPlatformSettings: React.FC = () => {
             Manage white-label branding, tenant lifecycle policies, notification gateways, and maintenance status.
           </p>
         </div>
-
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => navigate('/admin/settings')}
-        >
-          <Key className="w-3.5 h-3.5 text-purple-600" />
-          <span>Master Razorpay Settings</span>
-        </Button>
       </div>
 
       <form onSubmit={handleSavePolicies} className="space-y-6">

@@ -54,7 +54,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab })
     navigate,
     currentUser,
     logout,
-    switchRole,
     adminRazorpay,
     supportTickets,
     printJobs,
@@ -208,12 +207,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab })
           label: 'Platform Settings',
           icon: Sliders,
           path: '/admin/platform-settings'
-        },
-        {
-          id: 'settings',
-          label: 'Admin Settings',
-          icon: Settings,
-          path: '/admin/settings'
         }
       ]
     }
@@ -445,15 +438,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab })
             </div>
 
             <div className="flex items-center gap-1 shrink-0">
-              {/* Quick switch to Shop Portal */}
-              <button
-                onClick={() => switchRole('SHOP_OWNER')}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-purple-700 hover:bg-white transition-colors cursor-pointer"
-                title="Switch to Shop Portal"
-              >
-                <Store className="w-3.5 h-3.5" />
-              </button>
-
               {/* Logout */}
               <button
                 onClick={() => logout()}

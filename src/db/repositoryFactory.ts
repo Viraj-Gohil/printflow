@@ -10,6 +10,12 @@
  */
 import { Pool } from 'pg';
 import dotenv from 'dotenv';
+import dns from 'dns';
+
+try {
+  dns.setDefaultResultOrder('ipv4first');
+} catch {}
+
 import { NeonBusinessRepository } from './neonRepositories';
 import { DurableCheckoutRepository } from './durableCheckoutRepository';
 import { DurableGuestCheckoutRepository } from './guestCheckoutRepository';
@@ -57,30 +63,12 @@ export function isValidDatabaseUrl(rawUrl?: string): boolean {
 
 dotenv.config({ override: true });
 
-const DEFAULT_SUPABASE_DATABASE_URL = 'postgresql://postgres:wAz7k6AQBmfQ0QjG@db.rikchucpmlhvkfkmtojl.supabase.co:5432/postgres';
+const DEFAULT_SUPABASE_DATABASE_URL = 'postgresql://postgres.rikchucpmlhvkfkmtojl:diWAZPkB69oP7tm2@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres';
 const rawDatabaseUrl = (process.env.DATABASE_URL || DEFAULT_SUPABASE_DATABASE_URL).trim();
 const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : DEFAULT_SUPABASE_DATABASE_URL;
 
 let _sharedPool: Pool | null = null;
 let _overridePoolConfigured: boolean | null = null;
-
-if (DATABASE_URL && DATABASE_URL.length > 0) {
-  try {
-    _sharedPool = new Pool({
-      connectionString: DATABASE_URL,
-      max: 5,
-      idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
-      ssl: DATABASE_URL.includes('localhost') ? false : { rejectUnauthorized: false }
-    });
-    _sharedPool.on('error', (err) => {
-      console.warn('[repositoryFactory] Idle PostgreSQL client warning (handled):', err?.message || err);
-    });
-  } catch (err) {
-    console.warn('[repositoryFactory] Failed to create shared PostgreSQL pool:', err);
-    _sharedPool = null;
-  }
-}
 
 /**
  * Returns true when the shared Neon pool is available.
@@ -97,8 +85,11 @@ export const isSharedPoolConfigured = (): boolean => {
           max: 5,
           idleTimeoutMillis: 30_000,
           connectionTimeoutMillis: 10_000,
-          ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false }
-        });
+          ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false },
+          lookup: (hostname: string, options: any, callback: any) => {
+            dns.lookup(hostname, { ...options, family: 4 }, callback);
+          }
+        } as any);
         _sharedPool.on('error', (err) => {
           console.warn('[repositoryFactory] Idle PostgreSQL client warning (handled):', err?.message || err);
         });

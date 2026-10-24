@@ -56,8 +56,7 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
     currentUser,
     logout,
     plans,
-    simulateCustomerPrintJob,
-    switchRole
+    simulateCustomerPrintJob
   } = useApp();
 
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);

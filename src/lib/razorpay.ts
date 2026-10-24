@@ -99,7 +99,7 @@ export const isRealRazorpayKey = (key?: string): boolean => {
     return false;
   }
   // Standard Razorpay key pattern: rzp_test_xxxxxxxxxxxxxx or rzp_live_xxxxxxxxxxxxxx
-  return /^rzp_(test|live)_[a-zA-Z0-9]{10,24}$/.test(trimmed);
+  return /^rzp_(test|live)_[a-zA-Z0-9_]{6,36}$/.test(trimmed);
 };
 
 /**

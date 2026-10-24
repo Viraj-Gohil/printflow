@@ -17,9 +17,9 @@ import {
 export const INITIAL_ADMIN_RAZORPAY_SETTINGS: AdminRazorpaySettings = {
   enabled: true,
   isTestMode: false,
-  keyId: 'rzp_live_TmtCNk0tJgUAQP',
-  keySecret: 'ty0U7NK7wsEz8lEXasUBr2vl',
-  webhookSecret: 'whsec_admin_platform_live_events',
+  keyId: '',
+  keySecret: '',
+  webhookSecret: '',
   currency: 'INR',
   platformFeePercent: 2.0,
   lastVerifiedAt: '2026-10-12T00:00:00Z'

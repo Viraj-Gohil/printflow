@@ -28,7 +28,7 @@ interface AdminCommandPaletteProps {
 }
 
 export const AdminCommandPalette: React.FC<AdminCommandPaletteProps> = ({ isOpen, onClose }) => {
-  const { navigate, shops, printJobs, supportTickets, agents, switchRole } = useApp();
+  const { navigate, shops, printJobs, supportTickets, agents } = useApp();
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -166,15 +166,6 @@ export const AdminCommandPalette: React.FC<AdminCommandPaletteProps> = ({ isOpen
         path: '/admin/platform-settings',
         keywords: ['settings', 'platform', 'branding', 'policies', 'maintenance', 'gateways']
       },
-      {
-        id: 'nav-admin-settings',
-        title: 'Admin Settings & Gateway API',
-        category: 'Navigation',
-        section: 'Configuration',
-        icon: Settings,
-        path: '/admin/settings',
-        keywords: ['razorpay', 'credentials', 'keys', 'webhook', 'security', 'admin']
-      },
 
       // Quick Actions
       {
@@ -196,18 +187,9 @@ export const AdminCommandPalette: React.FC<AdminCommandPaletteProps> = ({ isOpen
         path: '/admin/support',
         action: () => navigate('/admin/support'),
         keywords: ['open tickets', 'unresolved', 'support', 'sla']
-      },
-      {
-        id: 'act-switch-shop',
-        title: 'Switch to Shop Owner Portal',
-        category: 'Quick Action',
-        section: 'Actions',
-        icon: Store,
-        action: () => switchRole('SHOP_OWNER'),
-        keywords: ['switch', 'shop', 'owner', 'preview', 'kiosk']
       }
     ];
-  }, [queuedJobsCount, offlineAgentsCount, openTicketsCount, navigate, switchRole]);
+  }, [queuedJobsCount, offlineAgentsCount, openTicketsCount, navigate]);
 
   const filteredCommands = useMemo(() => {
     if (!query.trim()) return commands;

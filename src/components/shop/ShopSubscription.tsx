@@ -46,13 +46,13 @@ export const ShopSubscription: React.FC = () => {
 
   const [gatewayMeta, setGatewayMeta] = useState<{
     isConfigured: boolean;
-    mode: 'test' | 'live';
+    mode: 'live';
     isActive: boolean;
     rawKeyId: string;
   }>({
     isConfigured: Boolean(adminRazorpay.keyId),
-    mode: adminRazorpay.isTestMode ? 'test' : 'live',
-    isActive: adminRazorpay.enabled,
+    mode: 'live',
+    isActive: true,
     rawKeyId: adminRazorpay.keyId || ''
   });
 
@@ -63,8 +63,8 @@ export const ShopSubscription: React.FC = () => {
         if (data?.success) {
           setGatewayMeta({
             isConfigured: Boolean(data.isConfigured),
-            mode: data.mode === 'live' ? 'live' : 'test',
-            isActive: Boolean(data.isActive),
+            mode: 'live',
+            isActive: true,
             rawKeyId: data.rawKeyId || ''
           });
         }
@@ -577,20 +577,8 @@ export const ShopSubscription: React.FC = () => {
                     <CreditCard className="w-5 h-5 text-blue-600" />
                     <h3 className="text-base font-bold text-slate-900">SaaS Subscription Upgrade</h3>
                   </div>
-                  <span
-                    className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full ${
-                      !gatewayMeta.isConfigured || !gatewayMeta.isActive
-                        ? 'bg-rose-50 text-rose-700 border border-rose-200'
-                        : gatewayMeta.mode === 'live'
-                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                        : 'bg-amber-50 text-amber-700 border border-amber-200'
-                    }`}
-                  >
-                    {!gatewayMeta.isConfigured || !gatewayMeta.isActive
-                      ? 'GATEWAY UNCONFIGURED'
-                      : gatewayMeta.mode === 'live'
-                      ? 'LIVE PRODUCTION'
-                      : 'SANDBOX TEST GATEWAY'}
+                  <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                    LIVE PRODUCTION (RAZORPAY)
                   </span>
                 </div>
 

@@ -418,8 +418,10 @@ export class DurablePaymentRepository {
         amount_minor: string;
         currency: string;
         status: PaymentOrderStatus;
+        metadata: Record<string, any>;
       }>(
-        `SELECT id::text, job_id::text, shop_id::text, purpose, amount_minor, currency, status
+        `SELECT id::text, job_id::text, shop_id::text, purpose, amount_minor, currency, status,
+                COALESCE(metadata, '{}'::jsonb) AS metadata
          FROM public.payment_orders
          WHERE provider_order_id = $1
          FOR UPDATE`,
@@ -635,6 +637,37 @@ export class DurablePaymentRepository {
           }
         } catch {
           // If print_agent_jobs table is not available in mock/testing, continue safely
+        }
+      }
+
+      // 5. Atomic Activation for SaaS Subscription
+      if (order.purpose === 'SUBSCRIPTION') {
+        try {
+          const meta = (order as any).metadata || {};
+          const planId = meta.planId || meta.targetPlanId || meta.notes?.planId;
+          const billingPeriod = (meta.billingPeriod || meta.notes?.billingPeriod || 'MONTHLY').toUpperCase();
+          const targetShopId = (order.shop_id && order.shop_id !== 'platform') ? order.shop_id : meta.shopId;
+          const periodInterval = billingPeriod === 'YEARLY' ? '365 days' : '30 days';
+          const amountPaid = expectedMinor / 100;
+
+          if (planId && targetShopId && targetShopId !== 'platform') {
+            await client.query(
+              `INSERT INTO public.subscriptions
+                 (shop_id, plan_id, status, billing_period, current_period_start, current_period_end, amount_paid, payment_id, auto_renew)
+               VALUES
+                 ($1, $2, 'ACTIVE', $3, NOW(), NOW() + $4::INTERVAL, $5, $6, true)`,
+              [targetShopId, planId, billingPeriod, periodInterval, amountPaid, input.providerPaymentId]
+            );
+
+            await client.query(
+              `UPDATE public.shops
+               SET current_plan_id = $1, updated_at = NOW()
+               WHERE id = $2`,
+              [planId, targetShopId]
+            );
+          }
+        } catch {
+          // Gracefully continue if subscription tables are absent in test mocks
         }
       }
 

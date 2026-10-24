@@ -150,7 +150,7 @@ export function isValidDatabaseUrl(rawUrl?: string): boolean {
 }
 
 // PostgreSQL Connection Pool (Supabase / Neon PostgreSQL when DATABASE_URL is configured)
-const DEFAULT_SUPABASE_DATABASE_URL = 'postgresql://postgres:wAz7k6AQBmfQ0QjG@db.rikchucpmlhvkfkmtojl.supabase.co:5432/postgres';
+const DEFAULT_SUPABASE_DATABASE_URL = 'postgresql://postgres.rikchucpmlhvkfkmtojl:diWAZPkB69oP7tm2@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres';
 let pgPool: Pool | null = null;
 const rawDatabaseUrl = (process.env.DATABASE_URL || DEFAULT_SUPABASE_DATABASE_URL).trim();
 const DATABASE_URL = isValidDatabaseUrl(rawDatabaseUrl) ? rawDatabaseUrl.replace(/^['"]|['"]$/g, '').trim() : DEFAULT_SUPABASE_DATABASE_URL;
@@ -167,8 +167,11 @@ export const isNeonDatabaseConfigured = (): boolean => {
         max: 5,
         idleTimeoutMillis: 30_000,
         connectionTimeoutMillis: 5_000,
-        ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false }
-      });
+        ssl: activeUrl.includes('localhost') ? false : { rejectUnauthorized: false },
+        lookup: (hostname: string, options: any, callback: any) => {
+          dns.lookup(hostname, { ...options, family: 4 }, callback);
+        }
+      } as any);
       pgPool.on('error', (err) => {
         console.warn('[PaymentStorage] Idle PostgreSQL client warning (handled):', err?.message || err);
       });
@@ -778,17 +781,36 @@ export async function getShopAgentAvailability(shopId: string): Promise<ShopAgen
         };
       }
     }
-  } catch (shopCheckErr) {
-    console.warn('[getShopAgentAvailability] shop check notice:', shopCheckErr);
+  } catch (shopCheckErr: any) {
+    if (!shopCheckErr?.message?.includes('ECONNREFUSED') && !shopCheckErr?.message?.includes('ENETUNREACH')) {
+      console.warn('[getShopAgentAvailability] shop check notice:', shopCheckErr);
+    }
   }
 
-  const result = await pool.query(
-    `SELECT agent_id, device_name, status, last_seen, is_revoked, printers
-     FROM print_agent_devices
-     WHERE shop_id = ANY($1::text[]) AND is_revoked = false
-     ORDER BY last_seen DESC NULLS LAST`,
-    [candidateIds]
-  );
+  let result;
+  try {
+    result = await pool.query(
+      `SELECT agent_id, device_name, status, last_seen, is_revoked, printers
+       FROM print_agent_devices
+       WHERE shop_id = ANY($1::text[]) AND is_revoked = false
+       ORDER BY last_seen DESC NULLS LAST`,
+      [candidateIds]
+    );
+  } catch (err: any) {
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      console.warn('[getShopAgentAvailability] error:', err);
+    }
+    return {
+      isAvailable: false,
+      reason: 'NO_AGENT_REGISTERED',
+      message: 'This print shop is currently offline. Please try again later.',
+      agentOnline: false,
+      printerReady: false,
+      printersCount: 0,
+      readyPrintersCount: 0,
+      readyPrinters: []
+    };
+  }
 
   if (result.rowCount === 0) {
     return {
@@ -961,22 +983,29 @@ export async function listPrintAgentJobs(
   queuedOnly = false,
   agentId?: string
 ): Promise<StoredPrintAgentJob[]> {
-  const candidateShopIds = await getCandidateShopIds(shopId);
-  const queueFilter = queuedOnly
-    ? agentId
-      ? "AND (print_status = 'QUEUED' OR (print_status = 'ASSIGNED' AND claimed_by = $2) OR (print_status IN ('ASSIGNED', 'DOWNLOADING') AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))"
-      : "AND (print_status = 'QUEUED' OR (print_status IN ('ASSIGNED', 'DOWNLOADING') AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))"
-    : '';
-  const result = await requirePostgresPool().query(
-    `SELECT job_data, print_status, claimed_by, claimed_at, updated_at
-     FROM print_agent_jobs
-     WHERE (shop_id = ANY($1::text[])) AND job_data->>'paymentStatus' = 'SUCCESS'
-       ${queueFilter}
-     ORDER BY created_at DESC
-     LIMIT 500`,
-    agentId && queuedOnly ? [candidateShopIds, agentId] : [candidateShopIds]
-  );
-  return result.rows.map((row) => decodeStoredJob(row));
+  try {
+    const candidateShopIds = await getCandidateShopIds(shopId);
+    const queueFilter = queuedOnly
+      ? agentId
+        ? "AND (print_status = 'QUEUED' OR (print_status = 'ASSIGNED' AND claimed_by = $2) OR (print_status IN ('ASSIGNED', 'DOWNLOADING') AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))"
+        : "AND (print_status = 'QUEUED' OR (print_status IN ('ASSIGNED', 'DOWNLOADING') AND (claimed_at IS NULL OR claimed_at < NOW() - INTERVAL '5 minutes')))"
+      : '';
+    const result = await requirePostgresPool().query(
+      `SELECT job_data, print_status, claimed_by, claimed_at, updated_at
+       FROM print_agent_jobs
+       WHERE (shop_id = ANY($1::text[])) AND job_data->>'paymentStatus' = 'SUCCESS'
+         ${queueFilter}
+       ORDER BY created_at DESC
+       LIMIT 500`,
+      agentId && queuedOnly ? [candidateShopIds, agentId] : [candidateShopIds]
+    );
+    return result.rows.map((row) => decodeStoredJob(row));
+  } catch (err: any) {
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      console.warn('[listPrintAgentJobs] error:', err);
+    }
+    return [];
+  }
 }
 
 export async function claimPrintAgentJob(
@@ -1072,11 +1101,18 @@ export async function getPrintAgentJobFile(
 }
 
 export async function getPrintFlowAppState(scopeId: string): Promise<Record<string, unknown>> {
-  const result = await requirePostgresPool().query(
-    `SELECT data_key, COALESCE(state_data, payload) AS state_data FROM printflow_app_state WHERE scope_id = $1`,
-    [scopeId]
-  );
-  return Object.fromEntries(result.rows.map((row) => [row.data_key, row.state_data]));
+  try {
+    const result = await requirePostgresPool().query(
+      `SELECT data_key, COALESCE(state_data, payload) AS state_data FROM printflow_app_state WHERE scope_id = $1`,
+      [scopeId]
+    );
+    return Object.fromEntries(result.rows.map((row) => [row.data_key, row.state_data]));
+  } catch (err: any) {
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      console.warn('[getPrintFlowAppState] error:', err);
+    }
+    return {};
+  }
 }
 
 export async function savePrintFlowAppState(
@@ -1159,8 +1195,10 @@ export async function resolvePrintFlowShopId(shopId: string): Promise<string> {
     if (defaultRes.rowCount && defaultRes.rows[0].id) {
       return String(defaultRes.rows[0].id);
     }
-  } catch (err) {
-    console.warn('[resolvePrintFlowShopId] Warning during shop resolution:', err);
+  } catch (err: any) {
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      console.warn('[resolvePrintFlowShopId] Warning during shop resolution:', err);
+    }
   }
 
   return 'a001a111-0000-0000-0000-000000000001';
@@ -1377,26 +1415,33 @@ export async function getShopPrinterEntitlements(shopId: string): Promise<{ prin
 }
 
 export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAgentPrinter[]> {
-  const candidateShopIds = await getCandidateShopIds(shopId);
-  const pool = requirePostgresPool();
-  const result = await pool.query(
-    `SELECT agent_id, device_name, printers FROM print_agent_devices
-     WHERE (shop_id = ANY($1::text[])) AND is_revoked = false ORDER BY created_at`,
-    [candidateShopIds]
-  );
-  const rows = result.rows;
+  try {
+    const candidateShopIds = await getCandidateShopIds(shopId);
+    const pool = requirePostgresPool();
+    const result = await pool.query(
+      `SELECT agent_id, device_name, printers FROM print_agent_devices
+       WHERE (shop_id = ANY($1::text[])) AND is_revoked = false ORDER BY created_at`,
+      [candidateShopIds]
+    );
+    const rows = result.rows;
 
-  const printers: PrintAgentPrinter[] = [];
-  for (const row of rows) {
-    if (!Array.isArray(row.printers)) continue;
-    for (const value of row.printers) {
-      if (!value || typeof value !== 'object') continue;
-      const printer = value as PrintAgentPrinter['printer'];
-      if (typeof printer.name !== 'string' || !printer.name) continue;
-      printers.push({ agentId: row.agent_id, deviceName: row.device_name, printer });
+    const printers: PrintAgentPrinter[] = [];
+    for (const row of rows) {
+      if (!Array.isArray(row.printers)) continue;
+      for (const value of row.printers) {
+        if (!value || typeof value !== 'object') continue;
+        const printer = value as PrintAgentPrinter['printer'];
+        if (typeof printer.name !== 'string' || !printer.name) continue;
+        printers.push({ agentId: row.agent_id, deviceName: row.device_name, printer });
+      }
     }
+    return printers;
+  } catch (err: any) {
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      console.warn('[getShopPrintAgentPrinters] error:', err);
+    }
+    return [];
   }
-  return printers;
 }
 
 export interface ShopAgentDetails {
@@ -1549,6 +1594,30 @@ export async function getPlatformPaymentConfig(): Promise<{
   isConfigured: boolean;
   updatedAt: string;
 } | null> {
+  // 1. In-memory override (used in unit test suites)
+  if (inMemoryPlatformConfig) {
+    return inMemoryPlatformConfig;
+  }
+
+  // 2. Authoritative: server-side environment variables
+  const envKeyId = (process.env.RAZORPAY_KEY_ID || process.env.ADMIN_RAZORPAY_KEY_ID)?.trim();
+  const envKeySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.ADMIN_RAZORPAY_KEY_SECRET)?.trim();
+  const envWebhookSecret = (process.env.RAZORPAY_WEBHOOK_SECRET)?.trim();
+
+  if (envKeyId && envKeySecret) {
+    const isLive = envKeyId.startsWith('rzp_live_');
+    return {
+      keyId: envKeyId,
+      keySecret: envKeySecret,
+      mode: isLive ? 'live' : 'test',
+      webhookSecret: envWebhookSecret,
+      isActive: true,
+      isConfigured: true,
+      updatedAt: new Date().toISOString()
+    };
+  }
+
+  // 3. Database stored configuration fallback
   if (isNeonDatabaseConfigured()) {
     try {
       const pool = requirePostgresPool();
@@ -1572,30 +1641,11 @@ export async function getPlatformPaymentConfig(): Promise<{
           console.error('[PaymentStorage] Platform secret decryption failed:', decryptErr);
         }
       }
-    } catch (dbErr) {
-      console.warn('[PaymentStorage] Failed to query platform_payment_configs from DB:', dbErr);
+    } catch (dbErr: any) {
+      if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
+        console.warn('[PaymentStorage] Failed to query platform_payment_configs from DB:', dbErr);
+      }
     }
-  }
-
-  if (inMemoryPlatformConfig) {
-    return inMemoryPlatformConfig;
-  }
-
-  // Fallback to server-side environment variables if not yet set in database
-  const envKeyId = process.env.ADMIN_RAZORPAY_KEY_ID || process.env.RAZORPAY_KEY_ID;
-  const envKeySecret = process.env.ADMIN_RAZORPAY_KEY_SECRET || process.env.RAZORPAY_KEY_SECRET;
-
-  if (envKeyId && envKeySecret) {
-    const isLive = envKeyId.startsWith('rzp_live_');
-    return {
-      keyId: envKeyId.trim(),
-      keySecret: envKeySecret.trim(),
-      mode: isLive ? 'live' : 'test',
-      webhookSecret: process.env.RAZORPAY_WEBHOOK_SECRET,
-      isActive: true,
-      isConfigured: true,
-      updatedAt: new Date().toISOString()
-    };
   }
 
   return null;
@@ -1678,6 +1728,13 @@ export async function getShopPaymentIntegration(shopId: string): Promise<{
 } | null> {
   if (!shopId) return null;
 
+  // 1. Direct in-memory check
+  const inMem = inMemoryShopIntegrations.get(shopId);
+  if (inMem && inMem.isActive) {
+    return inMem;
+  }
+
+  // 2. Direct database query
   if (isNeonDatabaseConfigured()) {
     try {
       const pool = requirePostgresPool();
@@ -1707,11 +1764,6 @@ export async function getShopPaymentIntegration(shopId: string): Promise<{
     } catch (err) {
       console.warn(`[PaymentStorage] Failed to query shop_payment_integrations for shop ${shopId}:`, err);
     }
-  }
-
-  const inMem = inMemoryShopIntegrations.get(shopId);
-  if (inMem && inMem.isActive) {
-    return inMem;
   }
 
   return null;

@@ -782,12 +782,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     navigate('/');
   };
 
-  // Role navigation helper
+  // Role navigation helper - strictly enforces RBAC and authentic session destinations
   const switchRole = (role: Role) => {
     if (role === 'ADMIN') {
-      navigate('/admin/dashboard');
+      if (currentUser?.role === 'ADMIN') {
+        navigate('/admin/dashboard');
+      } else {
+        navigate('/admin/login');
+      }
     } else {
-      navigate('/shop/dashboard');
+      if (currentUser?.role === 'SHOP_OWNER') {
+        navigate('/shop/dashboard');
+      } else if (currentUser?.role === 'ADMIN') {
+        showToast('Access Denied', 'Super Admin accounts cannot directly access the Shop Portal.', 'error', 4000);
+        navigate('/admin/dashboard');
+      } else {
+        navigate('/auth/login');
+      }
     }
   };
 

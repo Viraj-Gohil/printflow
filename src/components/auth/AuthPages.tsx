@@ -35,7 +35,7 @@ interface AuthPagesProps {
 }
 
 export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) => {
-  const { login, registerShop, forgotPassword, resetPassword, navigate, currentUser, plans } = useApp();
+  const { login, registerShop, forgotPassword, resetPassword, navigate, currentUser, plans, logout } = useApp();
   const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : new URLSearchParams();
   const resetTokenParam = urlParams.get('token');
   const effectiveInitialView = resetTokenParam ? 'reset-password' : initialView;
@@ -74,7 +74,43 @@ export const AuthPages: React.FC<AuthPagesProps> = ({ initialView = 'login' }) =
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // If already logged in, offer quick dashboard jump
+  // If already logged in, offer appropriate dashboard navigation
+  if (currentUser?.role === 'ADMIN') {
+    return (
+      <div className="min-h-[80vh] flex items-center justify-center p-4 bg-[#f8fafc]">
+        <div className="max-w-md w-full bg-white p-7 sm:p-8 rounded-2xl border border-slate-200/90 shadow-2xs text-center space-y-4">
+          <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto">
+            <Shield className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-xl font-bold text-slate-900">Signed In as Platform Admin</h2>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1">
+              You are signed in as Master Admin (<strong className="text-slate-800">{currentUser.fullName}</strong>). Administrator accounts cannot register or operate individual shops.
+            </p>
+          </div>
+          <div className="pt-2 flex flex-col gap-2">
+            <Button
+              variant="solid"
+              size="md"
+              onClick={() => navigate('/admin/dashboard')}
+              className="w-full"
+            >
+              Go to Admin Dashboard
+            </Button>
+            <Button
+              variant="outline"
+              size="md"
+              onClick={() => logout()}
+              className="w-full"
+            >
+              Sign Out
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (currentUser?.role === 'SHOP_OWNER') {
     return (
       <div className="min-h-[80vh] flex items-center justify-center p-4 bg-[#f8fafc]">

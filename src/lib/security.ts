@@ -1296,7 +1296,7 @@ export function destroyAllSessionsForUser(userId: string): number {
 export function enforceServerAuthorization(
   authenticatedUser: ServerSession | null | undefined,
   resource: {
-    resourceType: 'SHOP' | 'JOB' | 'PRINTER' | 'TRANSACTION' | 'TICKET' | 'ADMIN_SETTINGS';
+    resourceType: 'SHOP' | 'JOB' | 'PRINTER' | 'TRANSACTION' | 'TICKET' | 'ADMIN_SETTINGS' | 'SHOP_PORTAL';
     shopId?: string;
     customerId?: string;
     action?: string;
@@ -1307,8 +1307,18 @@ export function enforceServerAuthorization(
     return { authorized: false, reason: 'Authentication required. No valid session.' };
   }
 
-  // Super Admin has authorized platform-wide oversight
+  // Super Admin has platform-wide oversight, but is strictly prohibited from direct Shop Portal access
   if (authenticatedUser.role === 'ADMIN') {
+    if (
+      resource.resourceType === 'SHOP_PORTAL' ||
+      resource.action === 'SHOP_PORTAL_ACCESS' ||
+      resource.action === 'SHOP_OWNER_ACTION'
+    ) {
+      return {
+        authorized: false,
+        reason: 'Super Admin Access Denied: Administrator accounts cannot directly access or operate individual Shop Portals.'
+      };
+    }
     return { authorized: true };
   }
 

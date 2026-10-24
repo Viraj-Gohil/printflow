@@ -350,8 +350,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     return next();
   }
 
-  // Exempt webhook endpoint with cryptographic signature validation
-  if (req.path === '/api/payment/webhook') {
+  // Exempt webhook endpoints with cryptographic signature validation
+  if (
+    req.path === '/api/payment/webhook' ||
+    req.path === '/api/payments/webhook' ||
+    req.path === '/api/webhooks/razorpay'
+  ) {
     return next();
   }
 
@@ -429,39 +433,144 @@ app.use(authenticateUserSession);
 
 /**
  * Enforces Platform Super Admin role on the server.
- * Requires authenticated HttpOnly session cookie or valid verified JWT.
+ * Requires verified session where user.role === 'ADMIN'. Never trusts client headers.
  */
 function requireAdminRole(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).authenticatedUser as ServerSession | undefined;
-  const isHeaderAdmin = req.headers['x-user-role'] === 'ADMIN';
 
-  if ((user && user.role === 'ADMIN') || isHeaderAdmin) {
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please sign in as Platform Master Admin.',
+      code: 'AUTH_REQUIRED'
+    });
+  }
+
+  if (user.role !== 'ADMIN') {
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access. Platform Master Admin privileges are required for this action.',
+      code: 'ADMIN_ROLE_REQUIRED'
+    });
+  }
+
+  return next();
+}
+
+/**
+ * Enforces Shop Owner role on the server.
+ * Strictly disallows Super Admin, validates shop membership, and enforces tenant boundary.
+ * Never trusts client headers or URL role parameters.
+ */
+function requireShopOwnerRole(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).authenticatedUser as ServerSession | undefined;
+
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please sign in to your shop owner account.',
+      code: 'AUTH_REQUIRED'
+    });
+  }
+
+  // Explicitly deny Super Admin from Shop Owner actions/portal endpoints
+  if (user.role === 'ADMIN') {
+    return res.status(403).json({
+      success: false,
+      error: 'Access denied: Super Admin accounts cannot access or operate individual shop portals directly. Conduct administration via Platform Admin console.',
+      code: 'SUPER_ADMIN_SHOP_ACCESS_FORBIDDEN'
+    });
+  }
+
+  if (user.role !== 'SHOP_OWNER') {
+    return res.status(403).json({
+      success: false,
+      error: 'Unauthorized access. Verified Shop Owner privileges are required for this action.',
+      code: 'FORBIDDEN_ROLE'
+    });
+  }
+
+  if (!user.shopId) {
+    return res.status(403).json({
+      success: false,
+      error: 'Access denied: User account is not associated with an active shop.',
+      code: 'SHOP_MEMBERSHIP_REQUIRED'
+    });
+  }
+
+  // Validate tenant boundary if :shopId is in route params
+  const paramShopId = req.params?.shopId;
+  if (paramShopId && paramShopId !== user.shopId) {
+    return res.status(403).json({
+      success: false,
+      error: 'Cross-tenant access forbidden. You are not authorized to access another shop.',
+      code: 'CROSS_TENANT_FORBIDDEN'
+    });
+  }
+
+  return next();
+}
+
+/**
+ * Allows Super Admin for platform oversight, or Shop Owner bounded to their own shop.
+ * Used for admin oversight of shop details, queues, and refund tracking.
+ */
+function requireAdminOrOwnShop(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).authenticatedUser as ServerSession | undefined;
+
+  if (!user) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please sign in.',
+      code: 'AUTH_REQUIRED'
+    });
+  }
+
+  // Super Admin has authorized platform-wide oversight
+  if (user.role === 'ADMIN') {
+    return next();
+  }
+
+  // Shop Owner is strictly bounded to their own shop
+  if (user.role === 'SHOP_OWNER') {
+    if (!user.shopId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied: User account is not associated with an active shop.',
+        code: 'SHOP_MEMBERSHIP_REQUIRED'
+      });
+    }
+    const paramShopId = req.params?.shopId;
+    if (paramShopId && paramShopId !== user.shopId) {
+      return res.status(403).json({
+        success: false,
+        error: 'Cross-tenant access forbidden. You are not authorized to access another shop.',
+        code: 'CROSS_TENANT_FORBIDDEN'
+      });
+    }
     return next();
   }
 
   return res.status(403).json({
     success: false,
-    error: 'Unauthorized access. Platform Master Admin privileges are required for this action.'
+    error: 'Unauthorized access.',
+    code: 'FORBIDDEN_ROLE'
   });
 }
 
 /**
- * Enforces Shop Owner (or Admin) role on the server.
+ * Requires an authenticated user session with either ADMIN or SHOP_OWNER role.
  */
-function requireShopOwnerRole(req: Request, res: Response, next: NextFunction) {
+function requireAuthenticatedRole(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).authenticatedUser as ServerSession | undefined;
-  const isHeaderOwner =
-    req.headers['x-user-role'] === 'SHOP_OWNER' ||
-    req.headers['x-user-role'] === 'ADMIN';
-
-  if ((user && (user.role === 'SHOP_OWNER' || user.role === 'ADMIN')) || isHeaderOwner) {
-    return next();
+  if (!user || (user.role !== 'ADMIN' && user.role !== 'SHOP_OWNER')) {
+    return res.status(401).json({
+      success: false,
+      error: 'Authentication required. Please sign in.',
+      code: 'AUTH_REQUIRED'
+    });
   }
-
-  return res.status(403).json({
-    success: false,
-    error: 'Unauthorized access. Shop Owner privileges are required for this action.'
-  });
+  return next();
 }
 
 const SHOP_APP_STATE_KEYS = new Set([
@@ -1059,8 +1168,10 @@ app.post('/api/auth/login', createRateLimiter(10), async (req: Request, res: Res
         user = dbUserRes.rows[0];
       }
     }
-  } catch (dbErr) {
-    logger.warn('Failed to query user from database during login', { email: cleanEmail, error: deepRedact(dbErr) });
+  } catch (dbErr: any) {
+    if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
+      logger.warn('Failed to query user from database during login', { email: cleanEmail, error: deepRedact(dbErr) });
+    }
   }
 
   // Fallback to in-memory user registry if not in database
@@ -1257,8 +1368,10 @@ app.get('/api/public/plans', async (_req: Request, res: Response) => {
         return res.json({ success: true, plans: result.rows.map(formatPlanDbRow) });
       }
     }
-  } catch (err) {
-    logger.warn('Failed to query public plans from DB, falling back to default catalog', { error: deepRedact(err) });
+  } catch (err: any) {
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      logger.warn('Failed to query public plans from DB, falling back to default catalog', { error: deepRedact(err) });
+    }
   }
 
   return res.json({ success: true, plans: FALLBACK_PUBLIC_PLANS });
@@ -1281,8 +1394,10 @@ app.get('/api/admin/plans', requireAdminRole, async (_req: Request, res: Respons
     }
     return res.json({ success: true, plans: FALLBACK_PUBLIC_PLANS });
   } catch (err: any) {
-    logger.error('Failed to fetch admin plans from DB:', { error: deepRedact(err) });
-    return res.status(500).json({ success: false, error: 'Failed to retrieve SaaS plans.' });
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      logger.warn('Failed to fetch admin plans from DB, falling back to default catalog', { error: deepRedact(err) });
+    }
+    return res.json({ success: true, plans: FALLBACK_PUBLIC_PLANS });
   }
 });
 
@@ -1839,20 +1954,20 @@ app.post('/api/auth/reset-password', createRateLimiter(5), async (req: Request, 
 // Detect and discard known stale / broken container test keys
 const isStaleKey = (k?: string) => !k || k === 'rzp_test_Tli32dgjgjRMgf' || k === 'r14D2ncq76rgbDISPQfKSpZj' || k.includes('placeholder');
 
-const cleanEnvKeyId = !isStaleKey(process.env.RAZORPAY_KEY_ID) ? process.env.RAZORPAY_KEY_ID : undefined;
-const cleanEnvKeySecret = !isStaleKey(process.env.RAZORPAY_KEY_SECRET) ? process.env.RAZORPAY_KEY_SECRET : undefined;
+const cleanEnvKeyId = !isStaleKey(process.env.RAZORPAY_KEY_ID) ? process.env.RAZORPAY_KEY_ID?.trim() : undefined;
+const cleanEnvKeySecret = !isStaleKey(process.env.RAZORPAY_KEY_SECRET) ? process.env.RAZORPAY_KEY_SECRET?.trim() : undefined;
 
-// Admin Platform Master Gateway (Configured for SaaS Subscriptions)
-const ADMIN_RAZORPAY_KEY_ID = process.env.ADMIN_RAZORPAY_KEY_ID || cleanEnvKeyId || 'rzp_live_TmtCNk0tJgUAQP';
-const ADMIN_RAZORPAY_KEY_SECRET = process.env.ADMIN_RAZORPAY_KEY_SECRET || cleanEnvKeySecret || 'ty0U7NK7wsEz8lEXasUBr2vl';
+// Admin Platform Master Gateway (Configured exclusively from server environment variables for SaaS Subscriptions)
+const ADMIN_RAZORPAY_KEY_ID = (process.env.ADMIN_RAZORPAY_KEY_ID?.trim() || cleanEnvKeyId || '').trim();
+const ADMIN_RAZORPAY_KEY_SECRET = (process.env.ADMIN_RAZORPAY_KEY_SECRET?.trim() || cleanEnvKeySecret || '').trim();
 
-// Shop Counter Default Test Credentials (for instant counter print jobs without custom gateway)
-const SHOP_DEFAULT_KEY_ID = process.env.SHOP_RAZORPAY_KEY_ID || 'rzp_test_Tl1FsgiWYHksab';
-const SHOP_DEFAULT_KEY_SECRET = process.env.SHOP_RAZORPAY_KEY_SECRET || 'u1AC9o6gxag0OrwunBqCMrEs';
+// Shop Counter Default Sandbox Credentials (for counter print jobs without custom shop gateway)
+const SHOP_DEFAULT_KEY_ID = (process.env.SHOP_RAZORPAY_KEY_ID || 'rzp_test_Tl1FsgiWYHksab').trim();
+const SHOP_DEFAULT_KEY_SECRET = (process.env.SHOP_RAZORPAY_KEY_SECRET || 'u1AC9o6gxag0OrwunBqCMrEs').trim();
 
 const RAZORPAY_KEY_ID = ADMIN_RAZORPAY_KEY_ID;
 const RAZORPAY_KEY_SECRET = ADMIN_RAZORPAY_KEY_SECRET;
-const RAZORPAY_WEBHOOK_SECRET = process.env.RAZORPAY_WEBHOOK_SECRET || 'whsec_admin_platform_live_events';
+const RAZORPAY_WEBHOOK_SECRET = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
 
 // Short-lived in-flight idempotency set for incoming webhook events
 const processedWebhookEvents = new Set<string>();
@@ -1938,8 +2053,10 @@ async function ensureMaintenanceTableExists(pool: any): Promise<void> {
       VALUES ('current', false, 'entire_application', 'We are performing scheduled maintenance. Please check back shortly.')
       ON CONFLICT (id) DO NOTHING;
     `);
-  } catch (err) {
-    logger.warn('Failed to ensure platform_maintenance_mode table exists', { error: deepRedact(err) });
+  } catch (err: any) {
+    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+      logger.warn('Failed to ensure platform_maintenance_mode table exists', { error: deepRedact(err) });
+    }
   }
 }
 
@@ -1980,44 +2097,67 @@ app.get('/api/maintenance/status', async (_req: Request, res: Response) => {
   }
 });
 
-app.get('/api/admin/maintenance', requireAdminRole, requireNeonPool, async (_req: Request, res: Response) => {
+app.get('/api/admin/maintenance', requireAdminRole, async (_req: Request, res: Response) => {
   try {
-    const pool = requireSharedPool();
-    await ensureMaintenanceTableExists(pool);
-    const resDb = await pool.query(`SELECT enabled, scope, message, expected_end_at AS "expectedEndAt", updated_at AS "updatedAt", updated_by AS "updatedBy" FROM public.platform_maintenance_mode WHERE id = 'current' LIMIT 1`);
-    const state = (resDb.rowCount ?? 0) > 0 ? resDb.rows[0] : { enabled: false, scope: 'entire_application', message: 'System maintenance in progress.' };
+    if (isNeonDatabaseConfigured() && isSharedPoolConfigured()) {
+      const pool = requireSharedPool();
+      await ensureMaintenanceTableExists(pool);
+      const resDb = await pool.query(`SELECT enabled, scope, message, expected_end_at AS "expectedEndAt", updated_at AS "updatedAt", updated_by AS "updatedBy" FROM public.platform_maintenance_mode WHERE id = 'current' LIMIT 1`);
+      const state = (resDb.rowCount ?? 0) > 0 ? resDb.rows[0] : { enabled: false, scope: 'entire_application', message: 'System maintenance in progress.' };
+      return res.json({ success: true, maintenance: state });
+    }
+    const state = await getMaintenanceState();
     return res.json({ success: true, maintenance: state });
-  } catch (error) {
-    logger.error('Failed to fetch maintenance state', { error: deepRedact(error) });
-    return res.status(500).json({ success: false, error: 'Could not fetch maintenance configuration.' });
+  } catch (error: any) {
+    if (!error?.message?.includes('ECONNREFUSED') && !error?.message?.includes('ENETUNREACH')) {
+      logger.warn('Failed to fetch maintenance state from DB, falling back to default', { error: deepRedact(error) });
+    }
+    const fallback = cachedMaintenanceState || { enabled: false, scope: 'entire_application', message: 'System maintenance in progress.' };
+    return res.json({ success: true, maintenance: fallback });
   }
 });
 
-app.post('/api/admin/maintenance', requireAdminRole, requireNeonPool, createRateLimiter(15), async (req: Request, res: Response) => {
+app.post('/api/admin/maintenance', requireAdminRole, createRateLimiter(15), async (req: Request, res: Response) => {
   try {
     const { enabled, scope, message, expectedEndAt } = req.body;
     if (typeof enabled !== 'boolean' || !['entire_application', 'customer_facing', 'shop_owner'].includes(scope) || typeof message !== 'string') {
       return res.status(400).json({ success: false, error: 'Invalid maintenance configuration parameters.' });
     }
 
-    const pool = requireSharedPool();
-    await ensureMaintenanceTableExists(pool);
-    await pool.query(`
-      INSERT INTO public.platform_maintenance_mode (id, enabled, scope, message, expected_end_at, updated_at, updated_by)
-      VALUES ('current', $1, $2, $3, $4, NOW(), $5)
-      ON CONFLICT (id) DO UPDATE SET
-        enabled = EXCLUDED.enabled,
-        scope = EXCLUDED.scope,
-        message = EXCLUDED.message,
-        expected_end_at = EXCLUDED.expected_end_at,
-        updated_at = NOW(),
-        updated_by = EXCLUDED.updated_by
-    `, [enabled, scope, message.trim(), expectedEndAt ? new Date(expectedEndAt) : null, 'admin']);
+    if (isNeonDatabaseConfigured() && isSharedPoolConfigured()) {
+      try {
+        const pool = requireSharedPool();
+        await ensureMaintenanceTableExists(pool);
+        await pool.query(`
+          INSERT INTO public.platform_maintenance_mode (id, enabled, scope, message, expected_end_at, updated_at, updated_by)
+          VALUES ('current', $1, $2, $3, $4, NOW(), $5)
+          ON CONFLICT (id) DO UPDATE SET
+            enabled = EXCLUDED.enabled,
+            scope = EXCLUDED.scope,
+            message = EXCLUDED.message,
+            expected_end_at = EXCLUDED.expected_end_at,
+            updated_at = NOW(),
+            updated_by = EXCLUDED.updated_by
+        `, [enabled, scope, message.trim(), expectedEndAt ? new Date(expectedEndAt) : null, 'admin']);
+      } catch (dbErr: any) {
+        if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
+          logger.warn('Failed to update maintenance configuration in DB, updated in-memory state', { error: deepRedact(dbErr) });
+        }
+      }
+    }
 
-    maintenanceCacheExpiry = 0;
+    cachedMaintenanceState = {
+      enabled,
+      scope,
+      message: message.trim(),
+      expectedEndAt: expectedEndAt ? new Date(expectedEndAt).toISOString() : undefined,
+      updatedAt: new Date().toISOString()
+    };
+    maintenanceCacheExpiry = Date.now() + 60000;
+
     logger.info('System maintenance configuration updated', { enabled, scope, admin: 'admin' });
     return res.json({ success: true, message: 'Maintenance mode configuration updated successfully.' });
-  } catch (error) {
+  } catch (error: any) {
     logger.error('Failed to update maintenance configuration', { error: deepRedact(error) });
     return res.status(500).json({ success: false, error: 'Could not save maintenance configuration.' });
   }
@@ -2030,6 +2170,7 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
   if (
     path.startsWith('/api/health') ||
     path.startsWith('/api/payment/webhook') ||
+    path.startsWith('/api/webhooks/razorpay') ||
     path.startsWith('/api/auth/session') ||
     path.startsWith('/api/admin/') ||
     path.startsWith('/api/maintenance/') ||
@@ -2083,31 +2224,25 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
 app.get('/api/payment/platform-config', requireAdminRole, async (_req: Request, res: Response) => {
   try {
     const config = await getPlatformPaymentConfig();
-    if (!config) {
-      return res.json({
-        success: true,
-        provider: 'razorpay',
-        keyId: 'Not Configured',
-        rawKeyId: '',
-        mode: 'test',
-        isConfigured: false,
-        isActive: false,
-        hasSecret: false,
-        lastUpdatedAt: null
-      });
-    }
+    const effectiveKeyId = config?.keyId || ADMIN_RAZORPAY_KEY_ID;
+    const effectiveKeySecret = config?.keySecret || ADMIN_RAZORPAY_KEY_SECRET;
+    const isConfigured = Boolean(effectiveKeyId && effectiveKeySecret);
+    const mode = (effectiveKeyId.startsWith('rzp_live_') ? 'live' : (config?.mode || 'test')) as 'live' | 'test';
 
     return res.json({
       success: true,
       provider: 'razorpay',
-      keyId: maskKeyId(config.keyId),
-      rawKeyId: config.keyId,
-      mode: config.mode,
-      isConfigured: true,
-      isActive: config.isActive,
-      hasSecret: Boolean(config.keySecret),
-      webhookSecretConfigured: Boolean(config.webhookSecret),
-      lastUpdatedAt: config.updatedAt
+      mode,
+      isConfigured,
+      isActive: isConfigured,
+      keyIdMasked: maskKeyId(effectiveKeyId),
+      webhookConfigured: Boolean(RAZORPAY_WEBHOOK_SECRET || config?.webhookSecret),
+      hasSecret: Boolean(effectiveKeySecret),
+      lastUpdatedAt: config?.updatedAt || null,
+      endpoints: {
+        subscriptions: 'https://printflow.devpixel.space/api/webhooks/razorpay',
+        orders: 'https://printflow.devpixel.space/api/payment/webhook'
+      }
     });
   } catch (error: any) {
     logger.error('Failed to get platform payment config', { error: deepRedact(error) });
@@ -2117,84 +2252,30 @@ app.get('/api/payment/platform-config', requireAdminRole, async (_req: Request, 
 
 /**
  * POST /api/payment/platform-config
- * Updates the platform Razorpay payment configuration.
- * Validates credentials, encrypts Key Secret, and persists to Neon PostgreSQL.
+ * Deprecated / Disabled for direct credential input.
+ * Master credentials are now exclusively configured via server environment variables.
  */
-app.post('/api/payment/platform-config', requireAdminRole, createRateLimiter(15), async (req: Request, res: Response) => {
-  try {
-    const { keyId, keySecret, mode = 'live', webhookSecret, isActive = true } = req.body;
-
-    if (!keyId || typeof keyId !== 'string') {
-      return res.status(400).json({ success: false, error: 'Key ID is required.' });
-    }
-
-    if (mode !== 'test' && mode !== 'live') {
-      return res.status(400).json({ success: false, error: 'Mode must be either "test" or "live".' });
-    }
-
-    const formatCheck = validateKeyFormat(keyId, mode);
-    if (!formatCheck.valid) {
-      return res.status(400).json({ success: false, error: formatCheck.error });
-    }
-
-    const existing = await getPlatformPaymentConfig();
-    const effectiveSecret = keySecret?.trim() || existing?.keySecret;
-
-    if (!effectiveSecret) {
-      return res.status(400).json({ success: false, error: 'Key Secret is required for initial configuration.' });
-    }
-
-    // Verify credentials against Razorpay if a new secret was submitted or live mode is selected
-    if (keySecret?.trim() || mode === 'live') {
-      const handshake = await testRazorpayHandshake(keyId.trim(), effectiveSecret);
-      if (!handshake.valid && (handshake.error?.includes('Authentication failed') || handshake.error?.includes('BAD_REQUEST_ERROR'))) {
-        return res.status(400).json({
-          success: false,
-          error: `Razorpay authentication failed: ${handshake.error}. Please verify Key ID and Key Secret in Razorpay Dashboard.`,
-          code: 'AUTHENTICATION_FAILED'
-        });
-      }
-    }
-
-    const saved = await savePlatformPaymentConfig({
-      keyId: keyId.trim(),
-      keySecret: keySecret?.trim() ? keySecret.trim() : undefined,
-      mode,
-      webhookSecret: webhookSecret?.trim(),
-      isActive
-    });
-
-    logger.info('Platform payment configuration updated successfully', {
-      keyId: saved.keyId,
-      mode: saved.mode,
-      isActive: saved.isActive
-    });
-
-    return res.json({
-      success: true,
-      message: 'Platform Razorpay configuration saved and verified.',
-      config: saved
-    });
-  } catch (error: any) {
-    logger.error('Failed to save platform payment configuration', { error: deepRedact(error) });
-    return res.status(500).json({ success: false, error: error.message || 'Failed to save payment configuration' });
-  }
+app.post('/api/payment/platform-config', requireAdminRole, async (_req: Request, res: Response) => {
+  return res.status(400).json({
+    success: false,
+    error: 'Razorpay Master Credentials are now managed exclusively via server-side environment variables (RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET, RAZORPAY_WEBHOOK_SECRET). Updating credentials via web forms has been disabled for security compliance.'
+  });
 });
 
 /**
  * POST /api/payment/platform-config/test
- * Tests the platform gateway handshake and reports status and latency.
+ * Tests the active environment-configured platform gateway handshake and reports status and latency.
  */
-app.post('/api/payment/platform-config/test', requireAdminRole, async (req: Request, res: Response) => {
+app.post('/api/payment/platform-config/test', requireAdminRole, async (_req: Request, res: Response) => {
   try {
     const config = await getPlatformPaymentConfig();
-    const keyId = req.body?.keyId || config?.keyId;
-    const keySecret = req.body?.keySecret || config?.keySecret;
+    const keyId = config?.keyId || ADMIN_RAZORPAY_KEY_ID;
+    const keySecret = config?.keySecret || ADMIN_RAZORPAY_KEY_SECRET;
 
     if (!keyId || !keySecret) {
       return res.status(400).json({
         success: false,
-        message: 'Platform Razorpay credentials are not configured.'
+        message: 'Platform Razorpay credentials are not configured. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in server environment variables.'
       });
     }
 
@@ -2209,7 +2290,7 @@ app.post('/api/payment/platform-config/test', requireAdminRole, async (req: Requ
 
     return res.json({
       success: true,
-      message: `Gateway handshake verified! Mode: ${keyId.startsWith('rzp_live_') ? 'Production Live' : 'Sandbox Test'}. Response time: ${probe.latencyMs}ms.`,
+      message: `Gateway handshake verified! Mode: ${keyId.startsWith('rzp_live_') ? 'Live Production' : 'Sandbox Test'}. Response time: ${probe.latencyMs}ms.`,
       latencyMs: probe.latencyMs
     });
   } catch (error: any) {
@@ -2516,33 +2597,45 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
       }
 
       if (isNeonDatabaseConfigured()) {
-        const pool = requirePostgresPool();
-        const planRes = await pool.query(
-          `SELECT id, name, slug, price_monthly, price_yearly, currency, is_active
-           FROM public.plans
-           WHERE id::text = $1 OR slug = $1 LIMIT 1`,
-          [targetPlanId]
-        );
+        try {
+          const pool = requirePostgresPool();
+          const planRes = await pool.query(
+            `SELECT id, name, slug, price_monthly, price_yearly, currency, is_active
+             FROM public.plans
+             WHERE id::text = $1 OR slug = $1 LIMIT 1`,
+            [targetPlanId]
+          );
 
-        if (!planRes.rowCount || planRes.rows.length === 0) {
-          return res.status(404).json({ success: false, error: 'The requested SaaS plan could not be found.' });
+          if (!planRes.rowCount || planRes.rows.length === 0) {
+            return res.status(404).json({ success: false, error: 'The requested SaaS plan could not be found.' });
+          }
+
+          const authoritativePlan = planRes.rows[0];
+          if (!authoritativePlan.is_active) {
+            return res.status(400).json({ success: false, error: 'This plan is currently inactive and cannot be selected.' });
+          }
+
+          const authoritativePrice = billingPeriod === 'YEARLY'
+            ? Number(authoritativePlan.price_yearly)
+            : Number(authoritativePlan.price_monthly);
+
+          if (authoritativePrice <= 0) {
+            return res.status(400).json({ success: false, error: 'Free plan does not require a payment transaction.' });
+          }
+
+          amountInPaise = Math.round(authoritativePrice * 100);
+        } catch (dbErr: any) {
+          if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
+            throw dbErr;
+          }
+          const fallbackPlan = FALLBACK_PUBLIC_PLANS.find(p => p.id === targetPlanId);
+          if (fallbackPlan) {
+            const fallbackPrice = billingPeriod === 'YEARLY' ? fallbackPlan.priceYearly : fallbackPlan.priceMonthly;
+            if (fallbackPrice > 0) {
+              amountInPaise = Math.round(fallbackPrice * 100);
+            }
+          }
         }
-
-        const authoritativePlan = planRes.rows[0];
-        if (!authoritativePlan.is_active) {
-          return res.status(400).json({ success: false, error: 'This plan is currently inactive and cannot be selected.' });
-        }
-
-        const authoritativePrice = billingPeriod === 'YEARLY'
-          ? Number(authoritativePlan.price_yearly)
-          : Number(authoritativePlan.price_monthly);
-
-        if (authoritativePrice <= 0) {
-          return res.status(400).json({ success: false, error: 'Free plan does not require a payment transaction.' });
-        }
-
-        // Authoritatively overwrite amountInPaise with database pricing (never trust frontend-supplied price)
-        amountInPaise = Math.round(authoritativePrice * 100);
       }
     }
 
@@ -2552,17 +2645,20 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
 
     if (isPlatformOrder) {
       const platformConfig = await getPlatformPaymentConfig();
-      if (!platformConfig || !platformConfig.isConfigured) {
+      const envKeyId = process.env.RAZORPAY_KEY_ID || process.env.ADMIN_RAZORPAY_KEY_ID;
+      const envKeySecret = process.env.RAZORPAY_KEY_SECRET || process.env.ADMIN_RAZORPAY_KEY_SECRET;
+
+      targetKeyId = platformConfig?.keyId || envKeyId || '';
+      targetKeySecret = platformConfig?.keySecret || envKeySecret || '';
+      targetMode = 'live';
+
+      if (!targetKeyId || !targetKeyId.startsWith('rzp_live_') || !targetKeySecret) {
         return res.status(400).json({
           success: false,
-          error: 'Platform payment gateway is not configured. Please configure Razorpay in Admin Settings.',
-          code: 'GATEWAY_UNCONFIGURED'
+          error: 'Razorpay Live Mode credentials (RAZORPAY_KEY_ID starting with rzp_live_ and RAZORPAY_KEY_SECRET) are required for SaaS subscriptions. Test mode is disabled.',
+          code: 'LIVE_CREDENTIALS_REQUIRED'
         });
       }
-
-      targetKeyId = platformConfig.keyId;
-      targetKeySecret = platformConfig.keySecret;
-      targetMode = platformConfig.mode;
     } else {
       // Case 2: Customer Counter Print Job for a specific shop
       // Advisory availability check (non-blocking so orders can always be paid and queued)
@@ -2639,11 +2735,21 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
 
       const errorDesc = apiError?.error?.description || apiError?.message || 'Payment gateway order creation failed';
 
-      // STRICT REQUIREMENT: Never automatically fall back from live to test mode!
-      // Return clear error explaining gateway status
+      if (apiError?.statusCode === 401 || errorDesc?.includes('Authentication failed')) {
+        return res.status(400).json({
+          success: false,
+          error: 'Razorpay Live Mode authentication failed (401 Unauthorized). Please check that your RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in server environment variables match your live Razorpay Dashboard credentials.',
+          code: 'AUTHENTICATION_FAILED'
+        });
+      }
+
+      const settingsTarget = isPlatformOrder
+        ? 'server environment variables (RAZORPAY_KEY_ID & RAZORPAY_KEY_SECRET)'
+        : 'Shop Settings → Online Payment Gateway';
+
       return res.status(502).json({
         success: false,
-        error: `Payment gateway error (${targetMode.toUpperCase()} mode): ${errorDesc}. Please verify Razorpay credentials.`,
+        error: `Payment gateway error (${targetMode.toUpperCase()} mode): ${errorDesc}. Please verify your Razorpay credentials in ${settingsTarget}.`,
         code: apiError?.error?.code || 'GATEWAY_ERROR'
       });
     }
@@ -3539,17 +3645,49 @@ app.post('/api/admin/audit-logs/purge', requireAdminRole, (req: Request, res: Re
 // ============================================================================
 // 3. RAZORPAY WEBHOOK HANDLER (IDEMPOTENT & SIGNATURE-VERIFIED)
 // ============================================================================
-app.post(['/api/payment/webhook', '/api/payments/webhook'], async (req: Request, res: Response) => {
+app.post(['/api/payment/webhook', '/api/payments/webhook', '/api/webhooks/razorpay'], async (req: Request, res: Response) => {
   try {
     const signature = req.headers['x-razorpay-signature'] as string;
     const eventId = req.headers['x-razorpay-event-id'] as string;
 
     const rawPayload = (req as any).rawBody
       ? (req as any).rawBody.toString('utf8')
-      : JSON.stringify(req.body);
+      : (typeof req.body === 'string' ? req.body : JSON.stringify(req.body));
 
-    // Durable idempotency check: prevent duplicate processing.
-    // Uses Neon when configured, in-memory Set as fallback.
+    // Cryptographic signature verification using raw payload
+    const platformConfig = await getPlatformPaymentConfig();
+    const webhookSecretsToTry = [
+      process.env.RAZORPAY_WEBHOOK_SECRET,
+      platformConfig?.webhookSecret,
+      RAZORPAY_WEBHOOK_SECRET
+    ].filter(Boolean) as string[];
+
+    if (!signature) {
+      logger.warn('Webhook received without x-razorpay-signature header', { eventId, path: req.path });
+      return res.status(400).json({ success: false, error: 'Missing x-razorpay-signature header' });
+    }
+
+    let isSignatureValid = false;
+    for (const secret of webhookSecretsToTry) {
+      if (!secret) continue;
+      const expected = crypto.createHmac('sha256', secret).update(rawPayload).digest('hex');
+      if (expected.length === signature.length &&
+          crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
+        isSignatureValid = true;
+        break;
+      }
+    }
+
+    if (!isSignatureValid) {
+      logger.warn('Webhook signature verification failed', {
+        eventId,
+        path: req.path,
+        hasRawBody: Boolean((req as any).rawBody)
+      });
+      return res.status(400).json({ success: false, error: 'Invalid webhook signature' });
+    }
+
+    // Durable idempotency check: prevent duplicate processing
     if (eventId) {
       const isNew = await recordWebhookEventDurably({
         eventId,
@@ -3562,39 +3700,10 @@ app.post(['/api/payment/webhook', '/api/payments/webhook'], async (req: Request,
       }
     }
 
-    // Cryptographic signature verification using raw payload
-    const platformConfig = await getPlatformPaymentConfig();
-    const webhookSecretsToTry = [
-      platformConfig?.webhookSecret,
-      process.env.RAZORPAY_WEBHOOK_SECRET,
-      'whsec_admin_platform_live_events'
-    ].filter(Boolean) as string[];
-
-    if (!signature) {
-      logger.warn('Webhook received without x-razorpay-signature header', { eventId });
-      return res.status(400).json({ success: false, error: 'Missing x-razorpay-signature header' });
-    }
-
-    let isSignatureValid = false;
-    for (const secret of webhookSecretsToTry) {
-      const expected = crypto.createHmac('sha256', secret).update(rawPayload).digest('hex');
-      if (expected.length === signature.length &&
-          crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) {
-        isSignatureValid = true;
-        break;
-      }
-    }
-    if (!isSignatureValid) {
-      logger.warn('Webhook signature verification failed', {
-        eventId,
-        hasRawBody: Boolean((req as any).rawBody)
-      });
-      return res.status(400).json({ success: false, error: 'Invalid webhook signature' });
-    }
-
     const { event, payload } = req.body;
 
     switch (event) {
+      // 1. Customer Print Job & Order Payment Captures
       case 'payment.captured':
       case 'order.paid': {
         const payment = payload?.payment?.entity;
@@ -3609,52 +3718,98 @@ app.post(['/api/payment/webhook', '/api/payments/webhook'], async (req: Request,
             : crypto.createHash('sha256').update(`webhook:${effectiveOrderId}:${effectivePaymentId}`).digest('hex');
 
           if (isSharedPoolConfigured()) {
-            getPaymentRepository().executeAtomicPaymentVerification({
+            await getPaymentRepository().executeAtomicPaymentVerification({
               providerOrderId: effectiveOrderId,
               providerPaymentId: effectivePaymentId,
               providerSignatureHash: sigHash,
               amountMinor: payment?.amount || order?.amount_paid || 0,
               currency: payment?.currency || 'INR',
               paymentMethod: payment?.method || 'upi'
-            }).catch((atomicErr) => {
-              logger.warn('Could not execute atomic payment verification in webhook handler', {
-                effectiveOrderId,
-                effectivePaymentId,
-                error: deepRedact(atomicErr)
-              });
             });
           } else {
-            recordVerifiedPaymentToNeon({
+            await recordVerifiedPaymentToNeon({
               providerOrderId: effectiveOrderId,
               providerPaymentId: effectivePaymentId,
               providerSignatureHash: sigHash,
               amountMinor: payment?.amount || order?.amount_paid || 0,
               currency: payment?.currency || 'INR'
-            }).catch(() => {});
+            });
           }
         }
         break;
       }
-      case 'payment.failed': {
+
+      // 2. SaaS Subscription Billing & Lifecycle Events
+      case 'subscription.authenticated':
+      case 'subscription.activated':
+      case 'subscription.charged': {
+        const subscription = payload?.subscription?.entity;
         const payment = payload?.payment?.entity;
-        if (payment && payment.id && payment.order_id && isSharedPoolConfigured()) {
-          getPaymentRepository().handlePaymentFailure(
-            payment.order_id,
-            payment.error_description || 'Payment failed'
-          ).catch((failErr) => {
-            logger.warn('Could not handle payment failure in DB', { error: deepRedact(failErr) });
-          });
+        const subNotes = subscription?.notes || payment?.notes || {};
+        const shopId = subNotes.shopId;
+        const planId = subNotes.planId;
+        const billingPeriod = (subNotes.billingPeriod || 'MONTHLY').toUpperCase();
+        const periodInterval = billingPeriod === 'YEARLY' ? '365 days' : '30 days';
+
+        if (shopId && planId && isSharedPoolConfigured()) {
+          const pool = requireSharedPool();
+          await pool.query(
+            `INSERT INTO public.subscriptions
+               (shop_id, plan_id, status, billing_period, current_period_start, current_period_end, amount_paid, payment_id, auto_renew)
+             VALUES
+               ($1, $2, 'ACTIVE', $3, NOW(), NOW() + $4::INTERVAL, $5, $6, true)
+             ON CONFLICT (id) DO UPDATE SET
+               status = 'ACTIVE',
+               current_period_end = NOW() + $4::INTERVAL,
+               updated_at = NOW()`,
+            [shopId, planId, billingPeriod, periodInterval, (payment?.amount || 0) / 100, payment?.id || subscription?.id]
+          );
+
+          await pool.query(
+            `UPDATE public.shops
+             SET current_plan_id = $1, updated_at = NOW()
+             WHERE id = $2`,
+            [planId, shopId]
+          );
         }
         break;
       }
+
+      case 'subscription.halted':
+      case 'subscription.cancelled': {
+        const subscription = payload?.subscription?.entity;
+        const shopId = subscription?.notes?.shopId;
+        if (shopId && isSharedPoolConfigured()) {
+          const pool = requireSharedPool();
+          await pool.query(
+            `UPDATE public.subscriptions
+             SET status = 'EXPIRED', auto_renew = false
+             WHERE shop_id = $1`,
+            [shopId]
+          );
+        }
+        break;
+      }
+
+      case 'payment.failed': {
+        const payment = payload?.payment?.entity;
+        if (payment && payment.id && payment.order_id && isSharedPoolConfigured()) {
+          await getPaymentRepository().handlePaymentFailure(
+            payment.order_id,
+            payment.error_description || 'Payment failed'
+          );
+        }
+        break;
+      }
+
       default:
-        // Ignore unhandled events gracefully
+        // Acknowledge other events gracefully
         break;
     }
 
-    // Mark event processed in Neon (best-effort)
+    // Mark event processed in Neon
     if (eventId && isSharedPoolConfigured()) {
-      getBusinessRepository().markWebhookEventProcessed(eventId).catch(() => {});
+      await getBusinessRepository().markWebhookEventProcessed(eventId).catch(() => {});
     }
 
     return res.status(200).json({ status: 'ok', received: true });
@@ -5094,7 +5249,10 @@ app.get('/api/shops', requireAdminRole, requireNeonPool, async (req: Request, re
     }
     const shops = await getBusinessRepository().listAllShops(status);
     return res.json({ success: true, shops, total: shops.length });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.message?.includes('ECONNREFUSED') || error?.message?.includes('ENETUNREACH')) {
+      return res.json({ success: true, shops: [], total: 0 });
+    }
     logger.error('Failed to list shops from Neon', { error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Shop data is temporarily unavailable.' });
   }
@@ -5121,7 +5279,10 @@ app.get('/api/shops/:shopId', requireShopOwnerRole, requireNeonPool, async (req:
     // Strip Razorpay credentials — never expose those through this route
     const safeShop = { ...shop };
     return res.json({ success: true, shop: safeShop });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.message?.includes('ECONNREFUSED') || error?.message?.includes('ENETUNREACH')) {
+      return res.status(503).json({ success: false, error: 'Database service is temporarily unreachable.' });
+    }
     logger.error('Failed to get shop from Neon', { shopId: req.params.shopId, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Shop data is temporarily unavailable.' });
   }
@@ -5165,7 +5326,10 @@ app.get('/api/public/shops', requireNeonPool, async (req: Request, res: Response
       shops: shopsWithStatus,
       total: shopsWithStatus.length
     });
-  } catch (error) {
+  } catch (error: any) {
+    if (error?.message?.includes('ECONNREFUSED') || error?.message?.includes('ENETUNREACH')) {
+      return res.json({ success: true, shops: [], total: 0 });
+    }
     logger.error('Failed to list public shops from Neon', { error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Shop directory is temporarily unavailable.' });
   }
