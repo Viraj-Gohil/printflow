@@ -1599,10 +1599,10 @@ export async function getPlatformPaymentConfig(): Promise<{
     return inMemoryPlatformConfig;
   }
 
-  // 2. Authoritative: server-side environment variables
-  const envKeyId = (process.env.RAZORPAY_KEY_ID || process.env.ADMIN_RAZORPAY_KEY_ID)?.trim();
-  const envKeySecret = (process.env.RAZORPAY_KEY_SECRET || process.env.ADMIN_RAZORPAY_KEY_SECRET)?.trim();
-  const envWebhookSecret = (process.env.RAZORPAY_WEBHOOK_SECRET)?.trim();
+  // 2. Authoritative: server-side environment variables exclusively
+  const envKeyId = process.env.RAZORPAY_KEY_ID?.trim();
+  const envKeySecret = process.env.RAZORPAY_KEY_SECRET?.trim();
+  const envWebhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET?.trim();
 
   if (envKeyId && envKeySecret) {
     const isLive = envKeyId.startsWith('rzp_live_');
@@ -1615,37 +1615,6 @@ export async function getPlatformPaymentConfig(): Promise<{
       isConfigured: true,
       updatedAt: new Date().toISOString()
     };
-  }
-
-  // 3. Database stored configuration fallback
-  if (isNeonDatabaseConfigured()) {
-    try {
-      const pool = requirePostgresPool();
-      const res = await pool.query(
-        `SELECT * FROM platform_payment_configs WHERE id = 'platform_master' LIMIT 1`
-      );
-      if (res.rows.length > 0) {
-        const row = res.rows[0];
-        try {
-          const secret = decryptSecret(row.encrypted_key_secret);
-          return {
-            keyId: row.key_id,
-            keySecret: secret,
-            mode: row.mode as 'test' | 'live',
-            webhookSecret: row.webhook_secret,
-            isActive: Boolean(row.is_active),
-            isConfigured: true,
-            updatedAt: new Date(row.updated_at).toISOString()
-          };
-        } catch (decryptErr) {
-          console.error('[PaymentStorage] Platform secret decryption failed:', decryptErr);
-        }
-      }
-    } catch (dbErr: any) {
-      if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
-        console.warn('[PaymentStorage] Failed to query platform_payment_configs from DB:', dbErr);
-      }
-    }
   }
 
   return null;

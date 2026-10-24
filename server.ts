@@ -660,7 +660,7 @@ async function resolveAppStateScope(req: Request, res: Response): Promise<{
   }
 }
 
-app.get('/api/app-data', requireShopOwnerRole, async (req: Request, res: Response) => {
+app.get('/api/app-data', requireAdminOrOwnShop, async (req: Request, res: Response) => {
   const context = await resolveAppStateScope(req, res);
   if (!context) return;
   try {
@@ -706,7 +706,7 @@ app.get('/api/app-data', requireShopOwnerRole, async (req: Request, res: Respons
   }
 });
 
-app.put('/api/app-data/:key', requireShopOwnerRole, async (req: Request, res: Response) => {
+app.put('/api/app-data/:key', requireAdminOrOwnShop, async (req: Request, res: Response) => {
   const context = await resolveAppStateScope(req, res);
   if (!context) return;
   const key = req.params.key;
@@ -1954,19 +1954,8 @@ app.post('/api/auth/reset-password', createRateLimiter(5), async (req: Request, 
 // Detect and discard known stale / broken container test keys
 const isStaleKey = (k?: string) => !k || k === 'rzp_test_Tli32dgjgjRMgf' || k === 'r14D2ncq76rgbDISPQfKSpZj' || k.includes('placeholder');
 
-const cleanEnvKeyId = !isStaleKey(process.env.RAZORPAY_KEY_ID) ? process.env.RAZORPAY_KEY_ID?.trim() : undefined;
-const cleanEnvKeySecret = !isStaleKey(process.env.RAZORPAY_KEY_SECRET) ? process.env.RAZORPAY_KEY_SECRET?.trim() : undefined;
-
-// Admin Platform Master Gateway (Configured exclusively from server environment variables for SaaS Subscriptions)
-const ADMIN_RAZORPAY_KEY_ID = (process.env.ADMIN_RAZORPAY_KEY_ID?.trim() || cleanEnvKeyId || '').trim();
-const ADMIN_RAZORPAY_KEY_SECRET = (process.env.ADMIN_RAZORPAY_KEY_SECRET?.trim() || cleanEnvKeySecret || '').trim();
-
-// Shop Counter Default Sandbox Credentials (for counter print jobs without custom shop gateway)
-const SHOP_DEFAULT_KEY_ID = (process.env.SHOP_RAZORPAY_KEY_ID || 'rzp_test_Tl1FsgiWYHksab').trim();
-const SHOP_DEFAULT_KEY_SECRET = (process.env.SHOP_RAZORPAY_KEY_SECRET || 'u1AC9o6gxag0OrwunBqCMrEs').trim();
-
-const RAZORPAY_KEY_ID = ADMIN_RAZORPAY_KEY_ID;
-const RAZORPAY_KEY_SECRET = ADMIN_RAZORPAY_KEY_SECRET;
+const RAZORPAY_KEY_ID = (process.env.RAZORPAY_KEY_ID || '').trim();
+const RAZORPAY_KEY_SECRET = (process.env.RAZORPAY_KEY_SECRET || '').trim();
 const RAZORPAY_WEBHOOK_SECRET = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
 
 // Short-lived in-flight idempotency set for incoming webhook events
@@ -2223,11 +2212,8 @@ app.use(async (req: Request, res: Response, next: NextFunction) => {
  */
 app.get('/api/payment/platform-config', requireAdminRole, async (_req: Request, res: Response) => {
   try {
-    const config = await getPlatformPaymentConfig();
-    const effectiveKeyId = config?.keyId || ADMIN_RAZORPAY_KEY_ID;
-    const effectiveKeySecret = config?.keySecret || ADMIN_RAZORPAY_KEY_SECRET;
-    const isConfigured = Boolean(effectiveKeyId && effectiveKeySecret);
-    const mode = (effectiveKeyId.startsWith('rzp_live_') ? 'live' : (config?.mode || 'test')) as 'live' | 'test';
+    const isConfigured = Boolean(RAZORPAY_KEY_ID && RAZORPAY_KEY_SECRET);
+    const mode = (RAZORPAY_KEY_ID.startsWith('rzp_live_') ? 'live' : 'test') as 'live' | 'test';
 
     return res.json({
       success: true,
@@ -2235,10 +2221,10 @@ app.get('/api/payment/platform-config', requireAdminRole, async (_req: Request, 
       mode,
       isConfigured,
       isActive: isConfigured,
-      keyIdMasked: maskKeyId(effectiveKeyId),
-      webhookConfigured: Boolean(RAZORPAY_WEBHOOK_SECRET || config?.webhookSecret),
-      hasSecret: Boolean(effectiveKeySecret),
-      lastUpdatedAt: config?.updatedAt || null,
+      keyIdMasked: maskKeyId(RAZORPAY_KEY_ID),
+      webhookConfigured: Boolean(RAZORPAY_WEBHOOK_SECRET),
+      hasSecret: Boolean(RAZORPAY_KEY_SECRET),
+      lastUpdatedAt: new Date().toISOString(),
       endpoints: {
         subscriptions: 'https://printflow.devpixel.space/api/webhooks/razorpay',
         orders: 'https://printflow.devpixel.space/api/payment/webhook'
@@ -2268,18 +2254,14 @@ app.post('/api/payment/platform-config', requireAdminRole, async (_req: Request,
  */
 app.post('/api/payment/platform-config/test', requireAdminRole, async (_req: Request, res: Response) => {
   try {
-    const config = await getPlatformPaymentConfig();
-    const keyId = config?.keyId || ADMIN_RAZORPAY_KEY_ID;
-    const keySecret = config?.keySecret || ADMIN_RAZORPAY_KEY_SECRET;
-
-    if (!keyId || !keySecret) {
+    if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
       return res.status(400).json({
         success: false,
         message: 'Platform Razorpay credentials are not configured. Please set RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in server environment variables.'
       });
     }
 
-    const probe = await testRazorpayHandshake(keyId, keySecret);
+    const probe = await testRazorpayHandshake(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET);
     if (!probe.valid) {
       return res.status(400).json({
         success: false,
@@ -2290,7 +2272,7 @@ app.post('/api/payment/platform-config/test', requireAdminRole, async (_req: Req
 
     return res.json({
       success: true,
-      message: `Gateway handshake verified! Mode: ${keyId.startsWith('rzp_live_') ? 'Live Production' : 'Sandbox Test'}. Response time: ${probe.latencyMs}ms.`,
+      message: `Gateway handshake verified! Mode: ${RAZORPAY_KEY_ID.startsWith('rzp_live_') ? 'Live Production' : 'Sandbox Test'}. Response time: ${probe.latencyMs}ms.`,
       latencyMs: probe.latencyMs
     });
   } catch (error: any) {
@@ -2585,7 +2567,7 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
 
     // Determine target payment configuration:
     // Case 1: SaaS Subscription / Platform payment (funds collected by Platform Admin)
-    const isPlatformOrder = !effectiveShopId || effectiveShopId === 'platform' || flow === 'subscription' || keyId === ADMIN_RAZORPAY_KEY_ID;
+    const isPlatformOrder = !effectiveShopId || effectiveShopId === 'platform' || flow === 'subscription';
 
     // Authoritatively validate SaaS Subscription orders against public.plans in database
     if (flow === 'subscription' || (isPlatformOrder && (req.body.planId || notes?.planId))) {
@@ -2644,37 +2626,32 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
     let targetMode: 'test' | 'live';
 
     if (isPlatformOrder) {
-      const platformConfig = await getPlatformPaymentConfig();
-      const envKeyId = process.env.RAZORPAY_KEY_ID || process.env.ADMIN_RAZORPAY_KEY_ID;
-      const envKeySecret = process.env.RAZORPAY_KEY_SECRET || process.env.ADMIN_RAZORPAY_KEY_SECRET;
+      targetKeyId = RAZORPAY_KEY_ID;
+      targetKeySecret = RAZORPAY_KEY_SECRET;
+      targetMode = targetKeyId.startsWith('rzp_live_') ? 'live' : 'test';
 
-      targetKeyId = platformConfig?.keyId || envKeyId || '';
-      targetKeySecret = platformConfig?.keySecret || envKeySecret || '';
-      targetMode = 'live';
-
-      if (!targetKeyId || !targetKeyId.startsWith('rzp_live_') || !targetKeySecret) {
+      if (!targetKeyId || !targetKeySecret) {
         return res.status(400).json({
           success: false,
-          error: 'Razorpay Live Mode credentials (RAZORPAY_KEY_ID starting with rzp_live_ and RAZORPAY_KEY_SECRET) are required for SaaS subscriptions. Test mode is disabled.',
-          code: 'LIVE_CREDENTIALS_REQUIRED'
+          error: 'Platform Razorpay credentials (RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET) are missing from server environment variables.',
+          code: 'PLATFORM_CREDENTIALS_REQUIRED'
         });
       }
     } else {
       // Case 2: Customer Counter Print Job for a specific shop
-      // Advisory availability check (non-blocking so orders can always be paid and queued)
       const orderAvailability = await getShopAgentAvailability(effectiveShopId).catch(() => null);
 
       const shopIntegration = await getShopPaymentIntegration(effectiveShopId);
-      if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
-        targetKeyId = shopIntegration.keyId;
-        targetKeySecret = shopIntegration.keySecret;
-        targetMode = shopIntegration.mode;
-      } else {
-        // Fall back to the verified counter print sandbox gateway
-        targetKeyId = SHOP_DEFAULT_KEY_ID;
-        targetKeySecret = SHOP_DEFAULT_KEY_SECRET;
-        targetMode = 'test';
+      if (!shopIntegration || !shopIntegration.isConfigured || !shopIntegration.isActive || !shopIntegration.keyId || !shopIntegration.keySecret) {
+        return res.status(400).json({
+          success: false,
+          error: 'Shop payment gateway is not configured or is inactive. Please configure Razorpay in Shop Settings.',
+          code: 'SHOP_PAYMENT_NOT_CONFIGURED'
+        });
       }
+      targetKeyId = shopIntegration.keyId;
+      targetKeySecret = shopIntegration.keySecret;
+      targetMode = shopIntegration.mode;
     }
 
     // Initialize authenticated Razorpay SDK instance
@@ -2730,6 +2707,8 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
         requestId: (req as any).requestId,
         targetKeyId: maskKeyId(targetKeyId),
         mode: targetMode,
+        gatewayErrorCode: apiError?.error?.code || apiError?.statusCode,
+        gatewayErrorDescription: apiError?.error?.description || apiError?.message,
         error: deepRedact(apiError)
       });
 
@@ -2813,25 +2792,18 @@ app.post(['/api/verify-payment', '/api/payment/verify'], createRateLimiter(45), 
 
     if (dbOrder) {
       if (dbOrder.purpose === 'SUBSCRIPTION' || dbOrder.shopId === 'platform') {
-        const platformConfig = await getPlatformPaymentConfig();
-        if (platformConfig?.keySecret) candidateSecrets.push(platformConfig.keySecret);
-        candidateSecrets.push(ADMIN_RAZORPAY_KEY_SECRET);
+        if (RAZORPAY_KEY_SECRET) candidateSecrets.push(RAZORPAY_KEY_SECRET);
       } else {
         const shopIntegration = await getShopPaymentIntegration(dbOrder.shopId);
         if (shopIntegration?.keySecret) candidateSecrets.push(shopIntegration.keySecret);
-        candidateSecrets.push(SHOP_DEFAULT_KEY_SECRET);
       }
     } else {
       const effectiveShopId = reqShopId || (flow === 'subscription' ? 'platform' : undefined);
       if (effectiveShopId && effectiveShopId !== 'platform') {
         const shopIntegration = await getShopPaymentIntegration(effectiveShopId);
         if (shopIntegration?.keySecret) candidateSecrets.push(shopIntegration.keySecret);
-        candidateSecrets.push(SHOP_DEFAULT_KEY_SECRET);
       } else {
-        const platformConfig = await getPlatformPaymentConfig();
-        if (platformConfig?.keySecret) candidateSecrets.push(platformConfig.keySecret);
-        candidateSecrets.push(ADMIN_RAZORPAY_KEY_SECRET);
-        candidateSecrets.push(SHOP_DEFAULT_KEY_SECRET);
+        if (RAZORPAY_KEY_SECRET) candidateSecrets.push(RAZORPAY_KEY_SECRET);
       }
     }
 
@@ -2994,22 +2966,17 @@ app.all(['/api/payment/check-status', '/api/payment/order-status/:orderId?'], cr
 
     if (shopId && shopId !== 'platform') {
       const shopIntegration = await getShopPaymentIntegration(shopId);
-      if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
-        targetKeyId = shopIntegration.keyId;
-        targetKeySecret = shopIntegration.keySecret;
-      } else {
-        targetKeyId = SHOP_DEFAULT_KEY_ID;
-        targetKeySecret = SHOP_DEFAULT_KEY_SECRET;
+      if (!shopIntegration || !shopIntegration.isConfigured || !shopIntegration.isActive || !shopIntegration.keyId || !shopIntegration.keySecret) {
+        return res.status(400).json({ success: false, error: 'Shop payment gateway is not configured or is inactive.' });
       }
+      targetKeyId = shopIntegration.keyId;
+      targetKeySecret = shopIntegration.keySecret;
     } else {
-      const platformConfig = await getPlatformPaymentConfig();
-      if (platformConfig?.isConfigured) {
-        targetKeyId = platformConfig.keyId;
-        targetKeySecret = platformConfig.keySecret;
-      } else {
-        targetKeyId = ADMIN_RAZORPAY_KEY_ID;
-        targetKeySecret = ADMIN_RAZORPAY_KEY_SECRET;
+      if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+        return res.status(400).json({ success: false, error: 'Platform Razorpay credentials are not configured.' });
       }
+      targetKeyId = RAZORPAY_KEY_ID;
+      targetKeySecret = RAZORPAY_KEY_SECRET;
     }
 
     // 3. Query Razorpay API for live payment status
@@ -3159,22 +3126,17 @@ app.post('/api/payment/reconcile', createRateLimiter(45), async (req: Request, r
 
     if (shopId && shopId !== 'platform') {
       const shopIntegration = await getShopPaymentIntegration(shopId);
-      if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive) {
-        targetKeyId = shopIntegration.keyId;
-        targetKeySecret = shopIntegration.keySecret;
-      } else {
-        targetKeyId = SHOP_DEFAULT_KEY_ID;
-        targetKeySecret = SHOP_DEFAULT_KEY_SECRET;
+      if (!shopIntegration || !shopIntegration.isConfigured || !shopIntegration.isActive || !shopIntegration.keyId || !shopIntegration.keySecret) {
+        return res.status(400).json({ success: false, error: 'Shop payment gateway is not configured or is inactive.' });
       }
+      targetKeyId = shopIntegration.keyId;
+      targetKeySecret = shopIntegration.keySecret;
     } else {
-      const platformConfig = await getPlatformPaymentConfig();
-      if (platformConfig?.isConfigured) {
-        targetKeyId = platformConfig.keyId;
-        targetKeySecret = platformConfig.keySecret;
-      } else {
-        targetKeyId = ADMIN_RAZORPAY_KEY_ID;
-        targetKeySecret = ADMIN_RAZORPAY_KEY_SECRET;
+      if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+        return res.status(400).json({ success: false, error: 'Platform Razorpay credentials are not configured.' });
       }
+      targetKeyId = RAZORPAY_KEY_ID;
+      targetKeySecret = RAZORPAY_KEY_SECRET;
     }
 
     const activeRzp = new Razorpay({
@@ -4298,33 +4260,31 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
   if (!isPaymentVerified && paymentId && orderId) {
     try {
       const shopIntegration = await getShopPaymentIntegration(shopId);
-      const targetKeyId = (shopIntegration?.isConfigured && shopIntegration?.isActive)
-        ? shopIntegration.keyId
-        : SHOP_DEFAULT_KEY_ID;
-      const targetKeySecret = (shopIntegration?.isConfigured && shopIntegration?.isActive)
-        ? shopIntegration.keySecret
-        : SHOP_DEFAULT_KEY_SECRET;
+      if (shopIntegration && shopIntegration.isConfigured && shopIntegration.isActive && shopIntegration.keyId && shopIntegration.keySecret) {
+        const targetKeyId = shopIntegration.keyId;
+        const targetKeySecret = shopIntegration.keySecret;
 
-      const activeRzp = new Razorpay({
-        key_id: targetKeyId,
-        key_secret: targetKeySecret
-      });
-      const payEntity: any = await activeRzp.payments.fetch(paymentId);
-      if (payEntity && (payEntity.status === 'captured' || payEntity.status === 'authorized')) {
-        isPaymentVerified = true;
-        verifiedAmountMinor = payEntity.amount;
-        if (isSharedPoolConfigured()) {
-          const sigHash = crypto.createHash('sha256').update(`dispatch:${orderId}:${paymentId}`).digest('hex');
-          getPaymentRepository().executeAtomicPaymentVerification({
-            providerOrderId: orderId,
-            providerPaymentId: paymentId,
-            providerSignatureHash: sigHash,
-            amountMinor: payEntity.amount,
-            currency: payEntity.currency || 'INR',
-            paymentMethod: payEntity.method || 'upi'
-          }).catch((err) => {
-            logger.warn('Failed to atomically verify during print job dispatch', { orderId, error: deepRedact(err) });
-          });
+        const activeRzp = new Razorpay({
+          key_id: targetKeyId,
+          key_secret: targetKeySecret
+        });
+        const payEntity: any = await activeRzp.payments.fetch(paymentId);
+        if (payEntity && (payEntity.status === 'captured' || payEntity.status === 'authorized')) {
+          isPaymentVerified = true;
+          verifiedAmountMinor = payEntity.amount;
+          if (isSharedPoolConfigured()) {
+            const sigHash = crypto.createHash('sha256').update(`dispatch:${orderId}:${paymentId}`).digest('hex');
+            getPaymentRepository().executeAtomicPaymentVerification({
+              providerOrderId: orderId,
+              providerPaymentId: paymentId,
+              providerSignatureHash: sigHash,
+              amountMinor: payEntity.amount,
+              currency: payEntity.currency || 'INR',
+              paymentMethod: payEntity.method || 'upi'
+            }).catch((err) => {
+              logger.warn('Failed to atomically verify during print job dispatch', { orderId, error: deepRedact(err) });
+            });
+          }
         }
       }
     } catch (rzpErr) {
@@ -4799,10 +4759,28 @@ app.get('/api/shop/:shopId/live', requireShopOwnerRole, async (req: Request, res
   try {
     const printers = await getShopPrintAgentPrinters(shopId);
     const jobs = await listPrintAgentJobs(shopId);
-    return res.json({ success: true, printers, jobs, updatedAt: new Date().toISOString() });
-  } catch (error) {
-    logger.error('Shop live data lookup failed', { shopId, error: deepRedact(error) });
-    return res.status(503).json({ success: false, error: 'Shop live data is temporarily unavailable.' });
+
+    let isOnline = false;
+    try {
+      const candidateShopIds = await getCandidateShopIds(shopId);
+      const pool = requirePostgresPool();
+      const deviceCheck = await pool.query(
+        `SELECT status, last_seen FROM print_agent_devices WHERE (shop_id = ANY($1::text[])) AND is_revoked = false`,
+        [candidateShopIds]
+      );
+      if (deviceCheck.rowCount && deviceCheck.rowCount > 0) {
+        isOnline = deviceCheck.rows.some(d => d.status === 'ONLINE' || (d.last_seen && new Date(d.last_seen).getTime() > Date.now() - 15 * 60 * 1000));
+      }
+    } catch {}
+
+    return res.json({ success: true, printers, jobs, isOnline, updatedAt: new Date().toISOString() });
+  } catch (error: any) {
+    const errMessage = error?.message || String(error);
+    if (errMessage.includes('ECONNREFUSED') || errMessage.includes('ENETUNREACH') || errMessage.includes('timeout')) {
+      logger.error('Shop live data database infrastructure failure', { shopId, error: deepRedact(error) });
+      return res.status(503).json({ success: false, error: 'Shop live data storage is temporarily unavailable.' });
+    }
+    return res.json({ success: true, printers: [], jobs: [], isOnline: false, updatedAt: new Date().toISOString() });
   }
 });
 
@@ -6033,13 +6011,18 @@ app.post('/api/admin/payments/:orderId/reconcile', requireAdminRole, async (req:
     let targetKeyId: string;
     let targetKeySecret: string;
     if (dbOrder.purpose === 'SUBSCRIPTION' || dbOrder.shopId === 'platform') {
-      const platformConfig = await getPlatformPaymentConfig();
-      targetKeyId = platformConfig?.keyId || ADMIN_RAZORPAY_KEY_ID;
-      targetKeySecret = platformConfig?.keySecret || ADMIN_RAZORPAY_KEY_SECRET;
+      if (!RAZORPAY_KEY_ID || !RAZORPAY_KEY_SECRET) {
+        return res.status(400).json({ success: false, error: 'Platform Razorpay credentials are not configured.' });
+      }
+      targetKeyId = RAZORPAY_KEY_ID;
+      targetKeySecret = RAZORPAY_KEY_SECRET;
     } else {
       const shopIntegration = await getShopPaymentIntegration(dbOrder.shopId);
-      targetKeyId = (shopIntegration?.isConfigured && shopIntegration?.keyId) ? shopIntegration.keyId : SHOP_DEFAULT_KEY_ID;
-      targetKeySecret = (shopIntegration?.isConfigured && shopIntegration?.keySecret) ? shopIntegration.keySecret : SHOP_DEFAULT_KEY_SECRET;
+      if (!shopIntegration || !shopIntegration.isConfigured || !shopIntegration.isActive || !shopIntegration.keyId || !shopIntegration.keySecret) {
+        return res.status(400).json({ success: false, error: 'Shop payment gateway is not configured or is inactive.' });
+      }
+      targetKeyId = shopIntegration.keyId;
+      targetKeySecret = shopIntegration.keySecret;
     }
 
     const rzp = new Razorpay({ key_id: targetKeyId, key_secret: targetKeySecret });
