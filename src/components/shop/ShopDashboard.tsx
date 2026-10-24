@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useApp } from '../../lib/store';
+import { apiUrl } from '../../lib/apiConfig';
 import {
   Printer,
   Clock,
@@ -57,7 +58,7 @@ export const ShopDashboard: React.FC = () => {
     const fetchStatus = async () => {
       if (!activeShop?.slug) return;
       try {
-        const res = await fetch(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`);
+        const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`));
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.availability && isMounted) {

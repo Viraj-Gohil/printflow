@@ -65,7 +65,6 @@ export const ShopSettings: React.FC = () => {
   const [upiId, setUpiId] = useState(activeShop.razorpaySettings?.upiId || '');
   const [autoCapture, setAutoCapture] = useState(activeShop.razorpaySettings?.autoCapture ?? true);
   const [receiptPrefix, setReceiptPrefix] = useState(activeShop.razorpaySettings?.receiptPrefix || 'SGX-');
-  const [webhookSecret, setWebhookSecret] = useState(activeShop.razorpaySettings?.webhookSecret || '');
   const [isEnabled, setIsEnabled] = useState(activeShop.razorpaySettings?.enabled ?? true);
 
   const [showSecret, setShowSecret] = useState(false);
@@ -98,7 +97,7 @@ export const ShopSettings: React.FC = () => {
   // Load shop payment integration from backend
   useEffect(() => {
     if (!activeShop?.id) return;
-    fetch(`/api/shop/${activeShop.id}/payment-settings`, {
+    fetch(apiUrl(`/api/shop/${encodeURIComponent(activeShop.id)}/payment-settings`), {
       headers: {
         'Authorization': 'Bearer admin_token_active',
         'X-Shop-Id': activeShop.id,
@@ -302,7 +301,7 @@ export const ShopSettings: React.FC = () => {
 
     setIsSavingGateway(true);
     try {
-      const res = await fetch(`/api/shop/${activeShop.id}/payment-settings`, {
+      const res = await fetch(apiUrl(`/api/shop/${encodeURIComponent(activeShop.id)}/payment-settings`), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -901,23 +900,7 @@ export const ShopSettings: React.FC = () => {
                 </p>
               </div>
 
-              {/* Webhook Secret (Optional) */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>Webhook Secret (Optional)</span>
-                  <span className="text-[10px] text-slate-400">Signature verification</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="whsec_xxxxxxxxxxxxx"
-                  value={webhookSecret}
-                  onChange={(e) => setWebhookSecret(e.target.value)}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="text-[11px] text-slate-400">
-                  Cryptographically validates incoming Razorpay status webhooks.
-                </p>
-              </div>
+
 
               {/* Auto Capture setting */}
               <div className="space-y-1.5 pt-2">

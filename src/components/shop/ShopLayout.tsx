@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '../../lib/store';
+import { apiUrl } from '../../lib/apiConfig';
 import {
   LayoutDashboard,
   Printer,
@@ -117,7 +118,7 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
     const checkAgentStatus = async () => {
       if (!activeShop?.slug) return;
       try {
-        const res = await fetch(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`);
+        const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`));
         if (res.ok) {
           const data = await res.json();
           if (data.success && data.availability && isMounted) {

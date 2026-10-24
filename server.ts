@@ -2291,7 +2291,8 @@ app.post('/api/payment/platform-config/test', requireAdminRole, async (_req: Req
  */
 app.get('/api/shop/:shopId/payment-settings', async (req: Request, res: Response) => {
   try {
-    const { shopId } = req.params;
+    const rawShopId = req.params.shopId;
+    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
@@ -2340,7 +2341,8 @@ app.get('/api/shop/:shopId/payment-settings', async (req: Request, res: Response
  */
 app.post('/api/shop/:shopId/payment-settings', createRateLimiter(20), async (req: Request, res: Response) => {
   try {
-    const { shopId } = req.params;
+    const rawShopId = req.params.shopId;
+    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
@@ -2413,7 +2415,8 @@ app.post('/api/shop/:shopId/payment-settings', createRateLimiter(20), async (req
  */
 app.post('/api/shop/:shopId/payment-settings/test', async (req: Request, res: Response) => {
   try {
-    const { shopId } = req.params;
+    const rawShopId = req.params.shopId;
+    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
@@ -2465,7 +2468,8 @@ app.post('/api/shop/:shopId/payment-settings/test', async (req: Request, res: Re
  */
 app.delete('/api/shop/:shopId/payment-settings', async (req: Request, res: Response) => {
   try {
-    const { shopId } = req.params;
+    const rawShopId = req.params.shopId;
+    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
     const user = (req as any).authenticatedUser as ServerSession | undefined;
 
     const authz = enforceServerAuthorization(user, { resourceType: 'SHOP', shopId });
@@ -6264,7 +6268,11 @@ process.on('unhandledRejection', (reason) => {
   console.error('[Process] Unhandled Rejection:', reason);
 });
 
-startServer().catch((err) => {
-  console.error('Failed to start server:', err);
-  process.exit(1);
-});
+if (process.env.NODE_ENV !== 'production' || process.argv[1]?.endsWith('server.js') || process.argv[1]?.endsWith('server.ts') || !process.env.VERCEL) {
+  startServer().catch((err) => {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  });
+}
+
+export default app;
