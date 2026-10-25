@@ -14,7 +14,6 @@ import {
   Settings,
   Menu,
   X,
-  ChevronRight,
   Zap,
   LogOut,
   ExternalLink,
@@ -356,17 +355,6 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
             </button>
           )}
 
-          {/* Customer View Quick Action */}
-          <button
-            type="button"
-            onClick={() => navigate(`/s/${activeShop.slug}`)}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:text-blue-700 bg-white hover:bg-slate-50 border border-slate-200 rounded-lg transition-colors cursor-pointer"
-            title="View customer upload page for this counter"
-          >
-            <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
-            <span className="hidden sm:inline">Customer View</span>
-          </button>
-
           {/* User Profile Menu */}
           <div className="relative" ref={profileMenuRef}>
             <button
@@ -647,41 +635,6 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
 
         {/* Content Viewport */}
         <main className="flex-1 min-w-0 p-4 sm:p-6 lg:p-8 overflow-y-auto">
-          {/* Breadcrumb Header for pages that do not have their own bespoke header */}
-          {activeTab !== 'pricing' && activeTab !== 'dashboard' && (
-            <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
-              <div>
-                <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-                  <span className="font-medium text-slate-600">Console</span>
-                  <ChevronRight className="w-3 h-3 text-slate-400" />
-                  <span className="font-semibold text-blue-700">{currentTabMeta?.label || activeTab}</span>
-                </div>
-                <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-                  {currentTabMeta?.label || 'Shop Console'}
-                </h1>
-              </div>
-
-              {/* Quick Actions */}
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => navigate(`/s/${activeShop.slug}`)}
-                >
-                  <ExternalLink className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Customer View</span>
-                </Button>
-                <Button
-                  variant="soft"
-                  size="sm"
-                  onClick={() => navigate('/shop/qr-codes')}
-                >
-                  <QrCode className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Counter QR</span>
-                </Button>
-              </div>
-            </div>
-          )}
 
           {/* Animated Tab Content Switcher */}
           <AnimatePresence mode="wait">

@@ -971,21 +971,15 @@ export const ShopPricing: React.FC = () => {
                 </span>
               </div>
               <div className="flex items-center justify-between pt-2">
-                <span className="text-slate-600">Subtotal:</span>
+                <span className="text-slate-600">Subtotal (Printing Charges):</span>
                 <span className="font-mono font-semibold text-slate-900 tabular-nums">
                   ₹{simDocumentTotal.toFixed(2)}
-                </span>
-              </div>
-              <div className="flex items-center justify-between pt-2">
-                <span className="text-slate-600">Platform Convenience Fee:</span>
-                <span className="font-mono font-semibold text-slate-900 tabular-nums">
-                  ₹2.00
                 </span>
               </div>
               <div className="pt-3 border-t-2 border-slate-200 flex items-center justify-between">
                 <span className="font-bold text-slate-900 text-sm">Customer Checkout Total:</span>
                 <span className="text-lg font-bold font-mono text-emerald-700 tabular-nums">
-                  ₹{(simDocumentTotal + 2).toFixed(2)}
+                  ₹{simDocumentTotal.toFixed(2)}
                 </span>
               </div>
             </div>

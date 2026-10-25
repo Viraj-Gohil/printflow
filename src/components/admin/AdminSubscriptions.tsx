@@ -32,7 +32,6 @@ import {
   FileText,
   Check,
   ChevronDown,
-  ChevronRight,
   Zap,
   Building2,
   HelpCircle,
@@ -706,13 +705,6 @@ export const AdminSubscriptions: React.FC = () => {
       {/* 1. ENTERPRISE PAGE HEADER */}
       <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <span>Platform</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span>Billing & Revenue</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span className="font-semibold text-purple-700">SaaS Plans & Pricing</span>
-          </div>
           <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
             SaaS Plans & Pricing
           </h1>

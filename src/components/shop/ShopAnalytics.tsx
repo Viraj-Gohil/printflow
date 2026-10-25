@@ -63,12 +63,15 @@ export const ShopAnalytics: React.FC = () => {
     pages: number;
     x: number;
     y: number;
+    index?: number;
   } | null>(null);
 
   const [hoveredVolumeBar, setHoveredVolumeBar] = useState<{
     date: string;
+    fullDate?: string;
     orders: number;
     pages: number;
+    index?: number;
   } | null>(null);
 
   // Filter jobs strictly belonging to active shop (Tenant isolation)
@@ -285,62 +288,260 @@ export const ShopAnalytics: React.FC = () => {
 
   // Time-Series for Revenue and Volume Charts
   const timeSeriesData = useMemo(() => {
-    const { currentStart, daysCount } = dateRangeBounds;
-    const numPoints = Math.min(daysCount, 30);
+    const { currentStart, currentEnd, daysCount } = dateRangeBounds;
     const points: Array<{
+      key: string;
       dateKey: string;
-      displayLabel: string;
+      label: string;          // Centered label below bar (e.g. "12", "15", "Jan", etc.)
+      displayLabel: string;   // Short axis tick label (e.g. "Oct 12")
+      fullDateLabel: string;  // Complete date for tooltip (e.g. "Sunday, October 12, 2026")
       revenue: number;
       orders: number;
       pages: number;
       bwPages: number;
       colorPages: number;
+      isLabelVisible: boolean; // Whether date label is visible below bar in volume chart
     }> = [];
 
-    for (let i = 0; i < numPoints; i++) {
-      const dayDate = new Date(currentStart.getTime() + i * (24 * 60 * 60 * 1000));
-      const year = dayDate.getFullYear();
-      const month = String(dayDate.getMonth() + 1).padStart(2, '0');
-      const day = String(dayDate.getDate()).padStart(2, '0');
-      const dateKey = `${year}-${month}-${day}`;
-      const displayLabel = dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    const aggregateJobs = (filterFn: (job: typeof currentPeriodJobs[0]) => boolean) => {
+      const bucketJobs = currentPeriodJobs.filter(filterFn);
+      let revenue = 0;
+      let pages = 0;
+      let bwPages = 0;
+      let colorPages = 0;
 
-      const dayJobs = currentPeriodJobs.filter((job) => {
-        if (!job.createdAt) return false;
-        return job.createdAt.startsWith(dateKey);
-      });
-
-      let dayRev = 0;
-      let dayPages = 0;
-      let dayBw = 0;
-      let dayColor = 0;
-
-      dayJobs.forEach((j) => {
+      bucketJobs.forEach((j) => {
         const isPaid = j.paymentStatus === 'SUCCESS' || j.paymentStatus === 'DEMO_SUCCESS' || j.printStatus === 'COMPLETED';
-        if (isPaid) dayRev += Number(j.totalAmount) || 0;
+        if (isPaid) revenue += Number(j.totalAmount) || 0;
         if (Array.isArray(j.files)) {
           j.files.forEach((f) => {
             const p = (Number(f.estimatedPages) || 1) * (Number(f.copies) || 1);
-            dayPages += p;
-            if (f.color === 'COLOR' || f.colorMode === 'COLOR') dayColor += p;
-            else dayBw += p;
+            pages += p;
+            if (f.color === 'COLOR' || f.colorMode === 'COLOR') colorPages += p;
+            else bwPages += p;
           });
         }
       });
 
-      points.push({
-        dateKey,
-        displayLabel,
-        revenue: dayRev,
-        orders: dayJobs.length,
-        pages: dayPages,
-        bwPages: dayBw,
-        colorPages: dayColor
+      return { revenue, orders: bucketJobs.length, pages, bwPages, colorPages };
+    };
+
+    if (dateRange === 'TODAY') {
+      const todaySlots = [
+        { label: '8 AM', minH: 8, maxH: 10, display: '8:00 AM - 10:00 AM' },
+        { label: '10 AM', minH: 10, maxH: 12, display: '10:00 AM - 12:00 PM' },
+        { label: '12 PM', minH: 12, maxH: 14, display: '12:00 PM - 2:00 PM' },
+        { label: '2 PM', minH: 14, maxH: 16, display: '2:00 PM - 4:00 PM' },
+        { label: '4 PM', minH: 16, maxH: 18, display: '4:00 PM - 6:00 PM' },
+        { label: '6 PM', minH: 18, maxH: 20, display: '6:00 PM - 8:00 PM' },
+        { label: '8 PM', minH: 20, maxH: 22, display: '8:00 PM - 10:00 PM' }
+      ];
+
+      todaySlots.forEach((slot, idx) => {
+        const agg = aggregateJobs((job) => {
+          if (!job.createdAt) return false;
+          const d = new Date(job.createdAt);
+          const h = d.getHours();
+          return h >= slot.minH && h < slot.maxH;
+        });
+
+        points.push({
+          key: `today_${idx}`,
+          dateKey: `today_${slot.label}`,
+          label: slot.label,
+          displayLabel: slot.label,
+          fullDateLabel: `${currentStart.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })} (${slot.display})`,
+          ...agg,
+          isLabelVisible: true
+        });
       });
+    } else if (dateRange === '7DAYS') {
+      for (let i = 0; i < 7; i++) {
+        const dayDate = new Date(currentStart.getTime() + i * (24 * 60 * 60 * 1000));
+        const year = dayDate.getFullYear();
+        const month = String(dayDate.getMonth() + 1).padStart(2, '0');
+        const day = String(dayDate.getDate()).padStart(2, '0');
+        const dateKey = `${year}-${month}-${day}`;
+
+        const agg = aggregateJobs((job) => {
+          if (!job.createdAt) return false;
+          return job.createdAt.startsWith(dateKey);
+        });
+
+        points.push({
+          key: dateKey,
+          dateKey,
+          label: String(dayDate.getDate()),
+          displayLabel: dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          fullDateLabel: dayDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+          ...agg,
+          isLabelVisible: true
+        });
+      }
+    } else if (dateRange === '30DAYS') {
+      for (let i = 0; i < 30; i++) {
+        const dayDate = new Date(currentStart.getTime() + i * (24 * 60 * 60 * 1000));
+        const year = dayDate.getFullYear();
+        const month = String(dayDate.getMonth() + 1).padStart(2, '0');
+        const day = String(dayDate.getDate()).padStart(2, '0');
+        const dateKey = `${year}-${month}-${day}`;
+
+        const agg = aggregateJobs((job) => {
+          if (!job.createdAt) return false;
+          return job.createdAt.startsWith(dateKey);
+        });
+
+        // Show labels at sensible intervals (approx every 3-5 days, plus the last day)
+        const isLabelVisible = i % 4 === 0 || i === 29;
+
+        points.push({
+          key: dateKey,
+          dateKey,
+          label: String(dayDate.getDate()),
+          displayLabel: dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          fullDateLabel: dayDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+          ...agg,
+          isLabelVisible
+        });
+      }
+    } else if (dateRange === '90DAYS') {
+      // 90D: Use appropriate weekly intervals (13 weeks)
+      const totalWeeks = Math.ceil(daysCount / 7);
+      for (let w = 0; w < totalWeeks; w++) {
+        const weekStart = new Date(currentStart.getTime() + w * 7 * (24 * 60 * 60 * 1000));
+        const weekEnd = new Date(Math.min(currentEnd.getTime(), weekStart.getTime() + 6 * (24 * 60 * 60 * 1000) + (23 * 3600000 + 59 * 60000 + 59000)));
+
+        const agg = aggregateJobs((job) => {
+          if (!job.createdAt) return false;
+          const d = new Date(job.createdAt);
+          return d >= weekStart && d <= weekEnd;
+        });
+
+        const isLabelVisible = w % 2 === 0 || w === totalWeeks - 1;
+
+        points.push({
+          key: `week_${w}`,
+          dateKey: `week_${w}`,
+          label: String(weekStart.getDate()),
+          displayLabel: weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          fullDateLabel: `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+          ...agg,
+          isLabelVisible
+        });
+      }
+    } else if (dateRange === 'THIS_YEAR') {
+      // Year: Use monthly intervals (12 months)
+      const currentYear = currentStart.getFullYear();
+      for (let m = 0; m < 12; m++) {
+        const monthStart = new Date(currentYear, m, 1, 0, 0, 0, 0);
+        const monthEnd = new Date(currentYear, m + 1, 0, 23, 59, 59, 999);
+
+        const agg = aggregateJobs((job) => {
+          if (!job.createdAt) return false;
+          const d = new Date(job.createdAt);
+          return d >= monthStart && d <= monthEnd;
+        });
+
+        const monthName = monthStart.toLocaleDateString('en-US', { month: 'short' });
+
+        points.push({
+          key: `month_${m}`,
+          dateKey: `month_${m}`,
+          label: monthName,
+          displayLabel: monthName,
+          fullDateLabel: monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+          ...agg,
+          isLabelVisible: true
+        });
+      }
+    } else {
+      // CUSTOM: Adjust interval automatically according to selected date range
+      if (daysCount <= 7) {
+        for (let i = 0; i < daysCount; i++) {
+          const dayDate = new Date(currentStart.getTime() + i * (24 * 60 * 60 * 1000));
+          const dateKey = dayDate.toISOString().split('T')[0];
+          const agg = aggregateJobs((job) => Boolean(job.createdAt && job.createdAt.startsWith(dateKey)));
+
+          points.push({
+            key: dateKey,
+            dateKey,
+            label: String(dayDate.getDate()),
+            displayLabel: dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            fullDateLabel: dayDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+            ...agg,
+            isLabelVisible: true
+          });
+        }
+      } else if (daysCount <= 35) {
+        const step = daysCount <= 14 ? 2 : 4;
+        for (let i = 0; i < daysCount; i++) {
+          const dayDate = new Date(currentStart.getTime() + i * (24 * 60 * 60 * 1000));
+          const dateKey = dayDate.toISOString().split('T')[0];
+          const agg = aggregateJobs((job) => Boolean(job.createdAt && job.createdAt.startsWith(dateKey)));
+
+          points.push({
+            key: dateKey,
+            dateKey,
+            label: String(dayDate.getDate()),
+            displayLabel: dayDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            fullDateLabel: dayDate.toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' }),
+            ...agg,
+            isLabelVisible: i % step === 0 || i === daysCount - 1
+          });
+        }
+      } else if (daysCount <= 120) {
+        const totalWeeks = Math.ceil(daysCount / 7);
+        for (let w = 0; w < totalWeeks; w++) {
+          const weekStart = new Date(currentStart.getTime() + w * 7 * (24 * 60 * 60 * 1000));
+          const weekEnd = new Date(Math.min(currentEnd.getTime(), weekStart.getTime() + 6 * (24 * 60 * 60 * 1000) + (23 * 3600000 + 59 * 60000 + 59000)));
+          const agg = aggregateJobs((job) => {
+            if (!job.createdAt) return false;
+            const d = new Date(job.createdAt);
+            return d >= weekStart && d <= weekEnd;
+          });
+
+          points.push({
+            key: `custom_week_${w}`,
+            dateKey: `custom_week_${w}`,
+            label: String(weekStart.getDate()),
+            displayLabel: weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+            fullDateLabel: `${weekStart.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${weekEnd.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}`,
+            ...agg,
+            isLabelVisible: w % 2 === 0 || w === totalWeeks - 1
+          });
+        }
+      } else {
+        // Group by months
+        let cursor = new Date(currentStart.getFullYear(), currentStart.getMonth(), 1);
+        let mIdx = 0;
+        while (cursor <= currentEnd && mIdx < 36) {
+          const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1, 0, 0, 0, 0);
+          const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0, 23, 59, 59, 999);
+          const agg = aggregateJobs((job) => {
+            if (!job.createdAt) return false;
+            const d = new Date(job.createdAt);
+            return d >= monthStart && d <= monthEnd;
+          });
+
+          const monthName = monthStart.toLocaleDateString('en-US', { month: 'short' });
+          points.push({
+            key: `custom_month_${mIdx}`,
+            dateKey: `custom_month_${mIdx}`,
+            label: monthName,
+            displayLabel: monthName,
+            fullDateLabel: monthStart.toLocaleDateString('en-US', { month: 'long', year: 'numeric' }),
+            ...agg,
+            isLabelVisible: true
+          });
+
+          cursor.setMonth(cursor.getMonth() + 1);
+          mIdx++;
+        }
+      }
     }
 
     return points;
-  }, [currentPeriodJobs, dateRangeBounds]);
+  }, [currentPeriodJobs, dateRange, dateRangeBounds]);
 
   // Hourly Activity (Peak Hours between 8 AM and 10 PM)
   const hourlySlots = [
@@ -804,9 +1005,9 @@ export const ShopAnalytics: React.FC = () => {
       </div>
 
       {/* 3. PRIMARY CHARTS: REVENUE TREND & ORDER/PRINT VOLUME */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 min-w-0 max-w-full">
         {/* CHART 1: REVENUE TREND */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs space-y-3">
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs space-y-3 min-w-0 max-w-full box-border">
           <div className="flex items-center justify-between">
             <div>
               <div className="flex items-center gap-2">
@@ -897,31 +1098,59 @@ export const ShopAnalytics: React.FC = () => {
                     strokeLinejoin="round"
                   />
 
+                  {/* Vertical Guide Line on Hover */}
+                  {hoveredRevenuePoint && (
+                    <line
+                      x1={hoveredRevenuePoint.x}
+                      y1={paddingY}
+                      x2={hoveredRevenuePoint.x}
+                      y2={paddingY + graphHeight}
+                      stroke="#94a3b8"
+                      strokeDasharray="3 3"
+                      strokeWidth="1.5"
+                      pointerEvents="none"
+                    />
+                  )}
+
                   {/* Interactive Points */}
-                  {revenuePoints.map((pt, i) => (
-                    <g key={i}>
-                      <circle
-                        cx={pt.x}
-                        cy={pt.y}
-                        r="3.5"
-                        fill="#ffffff"
-                        stroke="#2563eb"
-                        strokeWidth="2"
-                        className="cursor-pointer transition-transform hover:scale-150"
-                        onMouseEnter={() =>
-                          setHoveredRevenuePoint({
-                            date: pt.displayLabel,
-                            revenue: pt.revenue,
-                            orders: pt.orders,
-                            pages: pt.pages,
-                            x: pt.x,
-                            y: pt.y
-                          })
-                        }
-                        onMouseLeave={() => setHoveredRevenuePoint(null)}
-                      />
-                    </g>
-                  ))}
+                  {revenuePoints.map((pt, i) => {
+                    const isHovered = hoveredRevenuePoint?.index === i;
+                    return (
+                      <g key={i}>
+                        {/* Visible Point Indicator */}
+                        <circle
+                          cx={pt.x}
+                          cy={pt.y}
+                          r={isHovered ? 5.5 : 3.5}
+                          fill={isHovered ? '#2563eb' : '#ffffff'}
+                          stroke="#2563eb"
+                          strokeWidth={isHovered ? 2.5 : 2}
+                          pointerEvents="none"
+                          className="transition-all duration-150"
+                        />
+                        {/* Wide Stable Invisible Hit Target (prevents hover jitter/blinking) */}
+                        <circle
+                          cx={pt.x}
+                          cy={pt.y}
+                          r="16"
+                          fill="transparent"
+                          className="cursor-pointer"
+                          onMouseEnter={() =>
+                            setHoveredRevenuePoint({
+                              date: pt.displayLabel,
+                              revenue: pt.revenue,
+                              orders: pt.orders,
+                              pages: pt.pages,
+                              x: pt.x,
+                              y: pt.y,
+                              index: i
+                            })
+                          }
+                          onMouseLeave={() => setHoveredRevenuePoint(null)}
+                        />
+                      </g>
+                    );
+                  })}
 
                   {/* X-axis tick labels */}
                   {revenuePoints.map((pt, i) => {
@@ -946,13 +1175,19 @@ export const ShopAnalytics: React.FC = () => {
                   })}
                 </svg>
 
-                {/* Tooltip Card */}
+                {/* Tooltip Card (Anti-flicker stabilized positioning) */}
                 {hoveredRevenuePoint && (
                   <div
-                    className="absolute z-20 pointer-events-none transform -translate-x-1/2 -translate-y-full bg-slate-900 text-white px-2.5 py-1.5 rounded-lg text-xs shadow-lg space-y-0.5 border border-slate-800"
+                    className="absolute z-20 pointer-events-none bg-slate-900 text-white px-2.5 py-1.5 rounded-lg text-xs shadow-lg space-y-0.5 border border-slate-800 transition-all duration-75"
                     style={{
                       left: `${(hoveredRevenuePoint.x / svgWidth) * 100}%`,
-                      top: `${(hoveredRevenuePoint.y / svgHeight) * 100 - 8}px`
+                      top: `${(hoveredRevenuePoint.y / svgHeight) * 100}%`,
+                      transform:
+                        (hoveredRevenuePoint.x / svgWidth) < 0.15
+                          ? 'translate(0, -100%) translateY(-12px)'
+                          : (hoveredRevenuePoint.x / svgWidth) > 0.85
+                          ? 'translate(-100%, -100%) translateY(-12px)'
+                          : 'translate(-50%, -100%) translateY(-12px)'
                     }}
                   >
                     <div className="font-semibold text-slate-200">
@@ -972,12 +1207,12 @@ export const ShopAnalytics: React.FC = () => {
         </div>
 
         {/* CHART 2: ORDER & PRINT VOLUME */}
-        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="flex items-center gap-2">
+        <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs space-y-3 min-w-0 max-w-full box-border">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h3 className="text-sm font-bold text-slate-900">Order &amp; Print Volume</h3>
-                <span className="text-xs text-slate-400 font-normal">Daily Throughput</span>
+                <span className="text-xs text-slate-400 font-normal">Throughput</span>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 Comparison of daily order count vs pages printed.
@@ -985,7 +1220,7 @@ export const ShopAnalytics: React.FC = () => {
             </div>
 
             {/* Metric Switcher */}
-            <div className="inline-flex bg-slate-100 p-0.5 rounded-lg border border-slate-200">
+            <div className="inline-flex self-start sm:self-auto bg-slate-100 p-0.5 rounded-lg border border-slate-200 shrink-0">
               <button
                 type="button"
                 onClick={() => setVolumeMetric('PAGES')}
@@ -1011,56 +1246,93 @@ export const ShopAnalytics: React.FC = () => {
             </div>
           </div>
 
-          {/* Bar Chart Container */}
-          <div className="h-48 flex items-end gap-1.5 sm:gap-2 pt-4 border-b border-slate-100 pb-2 relative">
-            {timeSeriesData.map((pt, i) => {
-              const currentVal = volumeMetric === 'PAGES' ? pt.pages : pt.orders;
-              const maxVal = volumeMetric === 'PAGES' ? maxPages : maxOrders;
-              const heightPct = maxVal > 0 && currentVal > 0 ? Math.max(6, (currentVal / maxVal) * 100) : 4;
-
-              return (
-                <div
-                  key={i}
-                  className="flex-1 flex flex-col items-center justify-end h-full group relative cursor-pointer"
-                  onMouseEnter={() =>
-                    setHoveredVolumeBar({
-                      date: pt.displayLabel,
-                      orders: pt.orders,
-                      pages: pt.pages
-                    })
-                  }
-                  onMouseLeave={() => setHoveredVolumeBar(null)}
-                >
-                  <span className="text-[10px] font-mono text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity mb-1">
-                    {currentVal}
-                  </span>
-                  <div
-                    className={`w-full rounded-t transition-all ${
-                      volumeMetric === 'PAGES'
-                        ? 'bg-indigo-500 group-hover:bg-indigo-600'
-                        : 'bg-blue-500 group-hover:bg-blue-600'
-                    }`}
-                    style={{ height: `${heightPct}%` }}
-                  />
-                  <span className="text-[9px] text-slate-400 mt-2 truncate w-full text-center">
-                    {pt.displayLabel.split(' ')[0]}
-                  </span>
+          {/* Bar Chart Area with Controlled Internal Responsive Scrolling */}
+          <div className="relative w-full min-w-0 max-w-full overflow-x-auto overflow-y-visible scrollbar-thin">
+            <div
+              className="h-48 flex items-end gap-1 sm:gap-2 pt-6 border-b border-slate-100 pb-2 relative"
+              style={{
+                minWidth: timeSeriesData.length > 14 ? `${Math.max(timeSeriesData.length * 18, 480)}px` : '100%',
+                boxSizing: 'border-box'
+              }}
+            >
+              {timeSeriesData.length === 0 ? (
+                <div className="w-full h-full flex flex-col items-center justify-center text-slate-400 text-xs">
+                  <Calendar className="w-8 h-8 mb-2 stroke-1 text-slate-300" />
+                  <p>No print orders recorded for this period.</p>
                 </div>
-              );
-            })}
+              ) : (
+                timeSeriesData.map((pt, i) => {
+                  const currentVal = volumeMetric === 'PAGES' ? pt.pages : pt.orders;
+                  const maxVal = volumeMetric === 'PAGES' ? maxPages : maxOrders;
+                  const heightPct = maxVal > 0 && currentVal > 0 ? Math.max(8, (currentVal / maxVal) * 100) : 4;
 
-            {/* Hover tooltip for volume bar */}
-            {hoveredVolumeBar && (
-              <div className="absolute top-1 right-2 bg-slate-900 text-white px-2.5 py-1.5 rounded-lg text-xs shadow-md border border-slate-700 pointer-events-none">
-                <span className="font-semibold text-slate-200 mr-2">{hoveredVolumeBar.date}:</span>
-                <span className="text-indigo-400 font-mono">{hoveredVolumeBar.pages} pages</span>
-                <span className="text-slate-400 mx-1.5">•</span>
-                <span className="text-blue-400 font-mono">{hoveredVolumeBar.orders} orders</span>
-              </div>
-            )}
+                  return (
+                    <div
+                      key={pt.key || i}
+                      className="flex-1 min-w-[12px] flex flex-col items-center justify-end h-full group relative cursor-pointer"
+                      onMouseEnter={() =>
+                        setHoveredVolumeBar({
+                          date: pt.displayLabel,
+                          fullDate: pt.fullDateLabel,
+                          orders: pt.orders,
+                          pages: pt.pages,
+                          index: i
+                        })
+                      }
+                      onMouseLeave={() => setHoveredVolumeBar(null)}
+                    >
+                      <span className="text-[10px] font-mono text-slate-600 opacity-0 group-hover:opacity-100 transition-opacity mb-1 leading-none select-none">
+                        {currentVal}
+                      </span>
+                      <div
+                        className={`w-full max-w-[26px] rounded-t transition-all ${
+                          volumeMetric === 'PAGES'
+                            ? 'bg-indigo-500 group-hover:bg-indigo-600'
+                            : 'bg-blue-500 group-hover:bg-blue-600'
+                        }`}
+                        style={{ height: `${heightPct}%` }}
+                      />
+                      <div className="h-5 flex items-center justify-center mt-2 w-full">
+                        {pt.isLabelVisible ? (
+                          <span className="text-[10px] font-medium text-slate-500 truncate text-center leading-none select-none">
+                            {pt.label}
+                          </span>
+                        ) : (
+                          <span className="w-1 h-1 rounded-full bg-slate-200 shrink-0" />
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+
+              {/* Hover tooltip for volume bar */}
+              {hoveredVolumeBar && (
+                <div
+                  className="absolute z-20 pointer-events-none bg-slate-900 text-white px-2.5 py-1.5 rounded-lg text-xs shadow-xl border border-slate-700/80 transition-all duration-75 max-w-[90%]"
+                  style={{
+                    top: '4px',
+                    left:
+                      hoveredVolumeBar.index !== undefined && timeSeriesData.length > 0
+                        ? `${Math.max(14, Math.min(86, ((hoveredVolumeBar.index + 0.5) / timeSeriesData.length) * 100))}%`
+                        : '50%',
+                    transform: 'translateX(-50%)'
+                  }}
+                >
+                  <div className="font-semibold text-slate-200 text-center truncate">
+                    {hoveredVolumeBar.fullDate || hoveredVolumeBar.date}
+                  </div>
+                  <div className="flex items-center justify-center gap-2 mt-0.5 font-mono text-[11px]">
+                    <span className="text-indigo-400 font-medium">{hoveredVolumeBar.pages} pages</span>
+                    <span className="text-slate-500">•</span>
+                    <span className="text-blue-400 font-medium">{hoveredVolumeBar.orders} orders</span>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
-          <div className="flex items-center justify-between text-xs text-slate-500 pt-0.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500 pt-0.5">
             <div className="flex items-center gap-3">
               <span className="inline-flex items-center gap-1.5">
                 <span className="w-2 h-2 rounded bg-indigo-500" />

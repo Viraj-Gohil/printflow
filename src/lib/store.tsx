@@ -32,7 +32,7 @@ const DEFAULT_ADMIN_RAZORPAY_SETTINGS: AdminRazorpaySettings = {
   isTestMode: false,
   enabled: false,
   currency: 'INR',
-  platformFeePercent: 2.5
+  platformFeePercent: 0
 };
 
 const DEFAULT_PLATFORM_POLICIES: PlatformPolicies = {
@@ -811,12 +811,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return;
     }
 
+    // Permanent shop slug is preserved - shop owners cannot modify public slug
+    const { slug, ...safeUpdates } = updates;
+
     setShops((prev) => {
-      const next = prev.map((s) => (s.id === shopId ? { ...s, ...updates } : s));
+      const next = prev.map((s) => (s.id === shopId ? { ...s, ...safeUpdates } : s));
       setStoredItem('shops', next);
       return next;
     });
-    addAuditLog('SHOP_PROFILE_UPDATED', 'SHOP', shopId, `Updated shop details: ${Object.keys(updates).join(', ')}`);
+    addAuditLog('SHOP_PROFILE_UPDATED', 'SHOP', shopId, `Updated shop details: ${Object.keys(safeUpdates).join(', ')}`);
   };
 
   const updateShopStatus = (shopId: string, status: 'ACTIVE' | 'SUSPENDED') => {

@@ -1,7 +1,6 @@
 import React, { useEffect, useState, useMemo } from 'react';
 import { useApp, getDeterministicAgentToken } from '../../lib/store';
 import {
-  Cpu,
   RotateCw,
   Copy,
   Check,
@@ -70,6 +69,15 @@ export const ShopPrintAgent: React.FC = () => {
 
   // Tab navigation: OVERVIEW, CREDENTIALS, INSTALL
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CREDENTIALS' | 'INSTALL'>('OVERVIEW');
+
+  const [copiedKey, setCopiedKey] = useState<string | null>(null);
+
+  const handleCopyText = async (text: string, key: string) => {
+    if (!text) return;
+    await navigator.clipboard.writeText(text);
+    setCopiedKey(key);
+    setTimeout(() => setCopiedKey(null), 2000);
+  };
 
   const visibleToken =
     (issuedToken?.shopId === shopAgent.shopId ? issuedToken.token : '') ||
@@ -247,33 +255,37 @@ export const ShopPrintAgent: React.FC = () => {
       )}
 
       {/* 3. AGENT STATUS OVERVIEW CARDS */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
         {/* Device Hostname */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-mono mb-1 uppercase tracking-[0.06em]">
             <span>Device Host</span>
             <HardDrive className="w-3.5 h-3.5 text-slate-400" />
           </div>
-          <p className="text-sm font-bold text-slate-900 mt-1 truncate font-mono" title={shopAgent.deviceName}>
-            {shopAgent.deviceName}
-          </p>
-          <p className="text-[11px] text-slate-500 mt-0.5 truncate font-mono">
-            Shop ID: {activeShop.id}
-          </p>
-        </div>
-
-        {/* Agent Version */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-          <div className="flex items-center justify-between text-slate-500 text-xs font-mono mb-1 uppercase tracking-[0.06em]">
-            <span>Agent Version</span>
-            <Cpu className="w-3.5 h-3.5 text-slate-400" />
+          <div className="flex items-center justify-between mt-1">
+            <p className="text-sm font-bold text-slate-900 truncate font-mono" title={shopAgent.deviceName}>
+              {shopAgent.deviceName}
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleCopyText(shopAgent.deviceName, 'Device Host')}
+              className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-600 transition-colors ml-1 shrink-0 cursor-pointer"
+              title="Copy Device Hostname"
+            >
+              {copiedKey === 'Device Host' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
           </div>
-          <p className="text-sm font-bold font-mono text-slate-900 mt-1">
-            {shopAgent.version || 'v1.4.2'}
-          </p>
-          <p className="text-[11px] text-emerald-600 mt-0.5 font-medium">
-            LTS Release (Electron)
-          </p>
+          <div className="flex items-center justify-between text-[11px] text-slate-500 mt-1 pt-1 border-t border-slate-100">
+            <span className="truncate font-mono" title={activeShop.id}>Shop ID: {activeShop.id}</span>
+            <button
+              type="button"
+              onClick={() => void handleCopyText(activeShop.id, 'Shop ID')}
+              className="p-1 hover:bg-slate-100 rounded text-slate-400 hover:text-slate-600 transition-colors ml-1 shrink-0 cursor-pointer"
+              title="Copy Full Canonical Shop UUID"
+            >
+              {copiedKey === 'Shop ID' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          </div>
         </div>
 
         {/* Connected Printers */}

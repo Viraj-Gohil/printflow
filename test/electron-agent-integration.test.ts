@@ -94,6 +94,7 @@ async function runAgentIntegrationTests() {
 
   // Cleanup
   await pool.query('DELETE FROM print_agent_devices WHERE agent_id = $1', [activeAgentId]);
+  await pool.end();
 
   console.log('--- ALL ELECTRON AGENT INTEGRATION TESTS PASSED SUCCESSFULLY! ---');
 }

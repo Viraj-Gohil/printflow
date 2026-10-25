@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { AgentConfig, DiscoveredPrinter } from '../types/agent';
-import { X, ShieldCheck, CheckCircle2, AlertCircle, Eye, EyeOff, Server, Key, Printer, Clock } from 'lucide-react';
+import { X, ShieldCheck, CheckCircle2, AlertCircle, Eye, EyeOff, Server, Key, Store } from 'lucide-react';
 
 interface SettingsModalProps {
   config: AgentConfig;
@@ -14,33 +14,32 @@ interface SettingsModalProps {
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({
   config,
-  printers,
   isOpen,
   onClose,
   onSave,
   onPair,
   required = false
 }) => {
-  const [serverUrl, setServerUrl] = useState(config.serverUrl || '');
   const [shopId, setShopId] = useState(config.shopId || '');
   const [authToken, setAuthToken] = useState(config.authToken || '');
-  const [deviceName, setDeviceName] = useState(config.deviceName || 'Counter PC');
-  const [pollIntervalSec, setPollIntervalSec] = useState(Math.round((config.pollIntervalMs || 5000) / 1000));
-  const [selectedPrinter, setSelectedPrinter] = useState(config.selectedPrinterName || '');
   const [showToken, setShowToken] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [detectedHostName, setDetectedHostName] = useState(config.deviceName || 'PrintFlow Agent');
 
   useEffect(() => {
     if (!isOpen) return;
-    setServerUrl(config.serverUrl || '');
     setShopId(config.shopId || '');
     setAuthToken('');
-    setDeviceName(config.deviceName || 'Counter PC');
-    setPollIntervalSec(Math.round((config.pollIntervalMs || 5000) / 1000));
-    setSelectedPrinter(config.selectedPrinterName || '');
     setShowToken(false);
     setStatusMessage(null);
+
+    // Auto-detect actual computer Host Name via Electron IPC
+    if (window.electronAgentAPI?.getHostname) {
+      window.electronAgentAPI.getHostname().then((detected) => {
+        if (detected) setDetectedHostName(detected);
+      }).catch(() => {});
+    }
   }, [isOpen, config]);
 
   // Handle ESC key for dismiss
@@ -60,35 +59,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setStatusMessage(null);
 
     try {
-      const normalizedUrl = serverUrl.trim().replace(/\/+$/, '');
-      const parsedUrl = new URL(normalizedUrl);
-      const isLocalhost = ['localhost', '127.0.0.1', '[::1]'].includes(parsedUrl.hostname);
-      if (
-        (parsedUrl.protocol !== 'https:' && !(parsedUrl.protocol === 'http:' && isLocalhost)) ||
-        parsedUrl.username ||
-        parsedUrl.password ||
-        parsedUrl.search ||
-        parsedUrl.hash
-      ) {
-        throw new Error('Please enter a valid HTTPS backend URL (HTTP is only allowed for local testing).');
+      if (!shopId.trim()) {
+        throw new Error('Please enter your canonical Shop ID.');
       }
 
       const shouldPair =
         required ||
         !config.hasStoredCredentials ||
         Boolean(authToken.trim()) ||
-        normalizedUrl !== config.serverUrl ||
         shopId.trim() !== config.shopId;
 
+      if (shouldPair && !authToken.trim()) {
+        throw new Error('Please enter the Agent Authentication Token.');
+      }
+
+      const effectiveServerUrl = (config.serverUrl && config.serverUrl.trim())
+        ? config.serverUrl.trim()
+        : (window.location.origin.startsWith('http') ? window.location.origin : 'https://printflow.cloud');
+      const effectiveDeviceName = detectedHostName || config.deviceName || 'PrintFlow Agent';
+
       if (shouldPair) {
-        if (!shopId.trim() || !deviceName.trim() || !authToken.trim()) {
-          throw new Error('Please provide the Shop ID, Terminal Name, and Device Token to complete pairing.');
-        }
         const pairRes = await onPair({
-          serverUrl: normalizedUrl,
+          serverUrl: effectiveServerUrl,
           shopId: shopId.trim(),
           authToken: authToken.trim(),
-          deviceName: deviceName.trim()
+          deviceName: effectiveDeviceName
         });
         if (!pairRes.success) {
           setStatusMessage({ type: 'error', text: pairRes.error || 'Authentication with PrintFlow server failed.' });
@@ -97,9 +92,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       }
 
       const saveRes = await onSave({
-        deviceName: deviceName.trim(),
-        pollIntervalMs: pollIntervalSec * 1000,
-        selectedPrinterName: selectedPrinter || undefined
+        deviceName: effectiveDeviceName,
+        pollIntervalMs: config.pollIntervalMs || 5000,
+        selectedPrinterName: config.selectedPrinterName || undefined
       });
       if (!saveRes.success) {
         setStatusMessage({ type: 'error', text: saveRes.error || 'Could not save agent configuration.' });
@@ -133,7 +128,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     required ||
     !config.hasStoredCredentials ||
     Boolean(authToken.trim()) ||
-    serverUrl.trim().replace(/\/+$/, '') !== config.serverUrl ||
     shopId.trim() !== config.shopId;
 
   if (!isOpen) return null;
@@ -152,7 +146,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="setup-dialog-title"
-        className={`w-full max-w-lg max-h-[92vh] overflow-y-auto p-6 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl shadow-2xl space-y-4 text-xs animate-scale-in ${
+        className={`w-full max-w-md max-h-[92vh] overflow-y-auto p-6 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl shadow-2xl space-y-4 text-xs animate-scale-in ${
           required ? 'setup-dialog-required' : ''
         }`}
       >
@@ -190,63 +184,37 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
             ) : (
               <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400 shrink-0" />
             )}
-            <span className="font-medium">{statusMessage.text}</span>
+            <span className="font-medium leading-relaxed">{statusMessage.text}</span>
           </div>
         )}
 
-        <form onSubmit={handlePairAndSave} className="space-y-3.5">
-          {/* Cloud Host URL */}
+        <form onSubmit={handlePairAndSave} className="space-y-4">
+          {/* Field 1: Shop ID */}
           <div>
-            <label className="font-semibold text-[var(--text-secondary)] block mb-1">
-              PrintFlow Cloud Server URL
+            <label className="font-semibold text-[var(--text-secondary)] block mb-1 flex items-center gap-1.5">
+              <Store className="w-3.5 h-3.5 text-blue-500 shrink-0" />
+              <span>Shop ID</span>
+              <span className="text-red-500">*</span>
             </label>
             <input
-              type="url"
+              type="text"
               required
-              value={serverUrl}
-              onChange={(e) => setServerUrl(e.target.value)}
-              placeholder="https://app.printflow.cloud"
+              value={shopId}
+              onChange={(e) => setShopId(e.target.value)}
+              placeholder="Canonical Shop UUID (e.g. a001a111-0000-0000-0000-000000000001)"
               className="settings-input font-mono !text-xs"
             />
             <p className="text-[11px] text-[var(--text-muted)] mt-1">
-              The backend host endpoint providing print queue synchronization.
+              Find your canonical Shop ID on your web Shop Dashboard header.
             </p>
           </div>
 
-          {/* Shop ID & Terminal Name */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="font-semibold text-[var(--text-secondary)] block mb-1">
-                Shop ID / Slug
-              </label>
-              <input
-                type="text"
-                required
-                value={shopId}
-                onChange={(e) => setShopId(e.target.value)}
-                placeholder="e.g. quick-print-hub"
-                className="settings-input font-mono !text-xs"
-              />
-            </div>
-            <div>
-              <label className="font-semibold text-[var(--text-secondary)] block mb-1">
-                Terminal Name
-              </label>
-              <input
-                type="text"
-                required
-                value={deviceName}
-                onChange={(e) => setDeviceName(e.target.value)}
-                placeholder="e.g. Front Counter 1"
-                className="settings-input !text-xs"
-              />
-            </div>
-          </div>
-
-          {/* Device Auth Token */}
+          {/* Field 2: Agent Device Auth Token */}
           <div>
-            <label className="font-semibold text-[var(--text-secondary)] block mb-1">
-              Agent Device Auth Token
+            <label className="font-semibold text-[var(--text-secondary)] block mb-1 flex items-center gap-1.5">
+              <Key className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>Agent Authentication Token</span>
+              <span className="text-red-500">*</span>
             </label>
             <div className="relative">
               <input
@@ -256,7 +224,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 onChange={(e) => setAuthToken(e.target.value)}
                 placeholder={
                   config.hasStoredCredentials
-                    ? 'Saved token is protected (enter a new token only to re-pair)'
+                    ? 'Saved token protected via Windows DPAPI (enter new token only to re-pair)'
                     : 'agt_tok_...'
                 }
                 className="settings-input !pr-9 font-mono !text-xs"
@@ -271,54 +239,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
               </button>
             </div>
             <p className="text-[11px] text-[var(--text-muted)] mt-1">
-              Generate this device token from your web Shop Dashboard under <strong>Settings → Print Agent</strong>.
+              Obtain your M2M token from your web Shop Dashboard under <strong>Settings → Print Agent</strong>.
             </p>
           </div>
 
-          {/* Spooler Printer & Poll Interval */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="font-semibold text-[var(--text-secondary)] block mb-1 flex items-center gap-1">
-                <Printer className="w-3 h-3 text-[var(--text-faint)]" />
-                <span>Target Spooler Printer</span>
-              </label>
-              <select
-                value={selectedPrinter}
-                onChange={(e) => setSelectedPrinter(e.target.value)}
-                className="settings-input pf-form-select !text-xs"
-              >
-                <option value="">Default Windows Printer</option>
-                {printers.map((p) => (
-                  <option key={p.name} value={p.name} disabled={!p.isOnline}>
-                    {p.displayName} {p.isDefault ? '(Default)' : ''} {!p.isOnline ? '(Offline)' : ''}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="font-semibold text-[var(--text-secondary)] block mb-1 flex items-center gap-1">
-                <Clock className="w-3 h-3 text-[var(--text-faint)]" />
-                <span>Polling Frequency</span>
-              </label>
-              <select
-                value={pollIntervalSec}
-                onChange={(e) => setPollIntervalSec(Number(e.target.value))}
-                className="settings-input pf-form-select !text-xs"
-              >
-                <option value={3}>3 Seconds (High Speed)</option>
-                <option value={5}>5 Seconds (Recommended)</option>
-                <option value={10}>10 Seconds (Standard)</option>
-              </select>
-            </div>
-          </div>
-
-          {/* Security Notice Callout */}
+          {/* Security & One-Agent Policy Callout */}
           <div className="p-3 bg-blue-500/10 border border-blue-500/25 rounded-xl text-[11px] text-blue-800 dark:text-blue-300 flex items-start gap-2.5">
             <ShieldCheck className="w-4 h-4 text-blue-600 dark:text-blue-400 shrink-0 mt-0.5" />
             <p className="leading-relaxed">
-              Upon successful pairing, your token is secured via hardware DPAPI encryption (Windows safeStorage) and is never
-              re-exposed to the renderer or stored in unencrypted browser storage.
+              Upon successful pairing, your token is encrypted locally via Windows safeStorage (DPAPI). PrintFlow enforces a strict <strong>1 Active Agent per Shop</strong> policy.
             </p>
           </div>
 

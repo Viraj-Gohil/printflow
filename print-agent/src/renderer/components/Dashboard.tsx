@@ -1,8 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { AgentConfig, AgentConnectionStatus, DiscoveredPrinter, PrintJobItem, QueueMetrics } from '../types/agent';
 import { formatPrintError } from '../utils/printError';
 import { JobStatusBadge } from './StatusBadge';
-import { Printer, Clock, CheckCircle2, Cpu, ShieldCheck, ArrowRight, AlertTriangle, FileText, Sparkles, RefreshCw } from 'lucide-react';
+import { Printer, Clock, CheckCircle2, Cpu, ShieldCheck, ArrowRight, AlertTriangle, FileText, Sparkles, RefreshCw, Copy, Check } from 'lucide-react';
 
 interface DashboardProps {
   status: AgentConnectionStatus;
@@ -25,6 +25,19 @@ export const Dashboard: React.FC<DashboardProps> = ({
   onNavigateTab,
   onPollNow
 }) => {
+  const [copiedShopId, setCopiedShopId] = useState(false);
+
+  const handleCopyShopId = async () => {
+    if (!config.shopDetails?.shopId) return;
+    if (window.electronAgentAPI?.copyText) {
+      await window.electronAgentAPI.copyText(config.shopDetails.shopId);
+    } else {
+      await navigator.clipboard.writeText(config.shopDetails.shopId);
+    }
+    setCopiedShopId(true);
+    setTimeout(() => setCopiedShopId(false), 2000);
+  };
+
   const activeJob = jobs.find((j) => j.printStatus === 'PRINTING' || j.printStatus === 'DOWNLOADING');
   const activeProgress = activeJob
     ? activeJob.printStatus === 'DOWNLOADING'
@@ -60,8 +73,24 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   {config.shopDetails.planStatus}
                 </span>
               </div>
-              <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono">
-                ID: {config.shopDetails.shopId} • Slug: /{config.shopDetails.shopSlug}
+              <p className="text-xs text-[var(--text-muted)] mt-0.5 font-mono flex items-center gap-1.5 flex-wrap">
+                <span>ID: {config.shopDetails.shopId}</span>
+                <button
+                  type="button"
+                  onClick={handleCopyShopId}
+                  title="Copy full canonical Shop ID UUID"
+                  className="p-1 rounded hover:bg-blue-500/20 text-blue-600 dark:text-blue-400 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                >
+                  {copiedShopId ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-500" />
+                      <span className="text-[10px] text-emerald-500 font-sans font-semibold">Copied!</span>
+                    </>
+                  ) : (
+                    <Copy className="w-3.5 h-3.5" />
+                  )}
+                </button>
+                <span>• Slug: /{config.shopDetails.shopSlug}</span>
               </p>
             </div>
           </div>

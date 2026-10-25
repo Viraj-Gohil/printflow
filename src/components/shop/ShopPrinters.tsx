@@ -106,8 +106,20 @@ export const ShopPrinters: React.FC = () => {
   };
 
   return (
-    <div className="max-w-5xl space-y-6">
-      {/* 1. SAAS PLAN HARDWARE QUOTA & VALIDATION BANNER */}
+    <div className="space-y-6 max-w-7xl mx-auto pb-10 text-slate-800">
+      {/* 1. PAGE HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+            Printers & Hardware
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5 leading-relaxed">
+            Manage local counter printing devices and monitor spooler connectivity.
+          </p>
+        </div>
+      </div>
+
+      {/* 2. SAAS PLAN HARDWARE QUOTA & VALIDATION BANNER */}
       <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1.5">

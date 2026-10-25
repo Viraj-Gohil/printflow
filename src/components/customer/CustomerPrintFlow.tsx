@@ -646,10 +646,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     );
   };
 
-  // Pricing breakdown matching reference screenshot: Subtotal + Service fee = Total
+  // Pricing breakdown: Customers pay strictly actual printing charges calculated from pricing rules (zero platform/service fee)
   const subtotal = files.reduce((acc, f) => acc + f.totalPrice, 0);
-  const serviceFee = files.length > 0 ? 2 : 0;
-  const grandTotal = subtotal + serviceFee;
+  const serviceFee = 0;
+  const grandTotal = subtotal;
 
   // Proceed from Upload (Step 1) to Review (Step 2)
   const handleProceedToReview = async () => {
@@ -2192,12 +2192,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               {/* Total Calculation Card */}
               <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-2xs space-y-2 text-xs">
                 <div className="flex items-center justify-between text-slate-600">
-                  <span>Subtotal</span>
+                  <span>Printing Charges</span>
                   <span className="font-mono font-bold text-slate-800">₹{subtotal.toFixed(0)}</span>
-                </div>
-                <div className="flex items-center justify-between text-slate-600">
-                  <span>Service fee</span>
-                  <span className="font-mono font-bold text-slate-800">₹{serviceFee.toFixed(0)}</span>
                 </div>
 
                 <div className="pt-2 border-t border-dashed border-slate-200 flex items-baseline justify-between">
@@ -2319,12 +2315,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                   <div className="pt-2 border-t border-slate-200 space-y-1.5 text-slate-600 text-left">
                     <div className="flex items-center justify-between">
-                      <span>Subtotal</span>
+                      <span>Printing Charges</span>
                       <span className="font-mono font-semibold text-slate-900">₹{subtotal.toFixed(0)}</span>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <span>Service & Processing Fee</span>
-                      <span className="font-mono font-semibold text-slate-900">₹{serviceFee.toFixed(0)}</span>
                     </div>
                     <div className="pt-2 border-t border-slate-200 flex items-center justify-between font-bold text-slate-900 text-sm">
                       <span>Total Amount</span>

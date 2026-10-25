@@ -52,7 +52,7 @@ export const AdminAnalytics: React.FC = () => {
   const platformFeesCollected = useMemo(() => {
     return (transactions || [])
       .filter((t) => t.status === 'SUCCESS')
-      .reduce((acc, t) => acc + (t.platformFee || t.amount * 0.02), 0);
+      .reduce((acc, t) => acc + (t.platformFee ?? 0), 0);
   }, [transactions]);
 
   const saasSubscriptionRevenue = useMemo(() => {
@@ -179,13 +179,6 @@ export const AdminAnalytics: React.FC = () => {
       {/* 1. COMPACT PAGE HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <span>Platform</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span>Overview</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span className="font-semibold text-purple-700">Platform Analytics</span>
-          </div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
             Platform Analytics
           </h1>
@@ -265,7 +258,7 @@ export const AdminAnalytics: React.FC = () => {
             ₹{totalPlatformRevenue.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
           </p>
           <span className="text-[11px] text-slate-500 font-medium mt-1 block">
-            ₹{saasSubscriptionRevenue.toLocaleString('en-IN')} SaaS MRR + ₹{platformFeesCollected.toFixed(0)} fee cut
+            ₹{saasSubscriptionRevenue.toLocaleString('en-IN')} SaaS MRR + ₹0 platform fee (0% take-rate)
           </span>
         </div>
 

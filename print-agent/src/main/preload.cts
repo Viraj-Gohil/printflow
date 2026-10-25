@@ -5,6 +5,7 @@ import { AgentConfig, AgentConnectionStatus, DiscoveredPrinter, PrintJobItem, Ag
 contextBridge.exposeInMainWorld('electronAgentAPI', {
   // Configuration
   getConfig: (): Promise<AgentConfig> => ipcRenderer.invoke('agent:get-config'),
+  getHostname: (): Promise<string> => ipcRenderer.invoke('system:get-hostname'),
   saveConfig: (config: Partial<AgentConfig>): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('agent:save-config', config),
   pairDevice: (pairingData: { serverUrl: string; shopId: string; authToken: string; deviceName?: string }): Promise<{ success: boolean; error?: string }> =>

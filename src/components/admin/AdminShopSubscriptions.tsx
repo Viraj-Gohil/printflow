@@ -11,7 +11,6 @@ import {
   Calendar,
   CreditCard,
   ExternalLink,
-  ChevronRight,
   TrendingUp,
   Download,
   Edit2,
@@ -141,13 +140,6 @@ export const AdminShopSubscriptions: React.FC = () => {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <span>Platform</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span>Billing & Revenue</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span className="font-semibold text-purple-700">Subscriptions</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
             Subscriptions Management
           </h1>

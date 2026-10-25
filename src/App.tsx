@@ -318,7 +318,6 @@ const AppRouter: React.FC = () => {
     const tab = path.replace('/admin/', '').replace('/admin', '') || 'dashboard';
     return (
       <div className="min-h-screen bg-[#f8fafc] flex flex-col">
-        <Navbar />
         <AdminLayout activeTab={tab}>
           {tab === 'dashboard' && <AdminDashboard />}
           {tab === 'analytics' && <AdminAnalytics />}

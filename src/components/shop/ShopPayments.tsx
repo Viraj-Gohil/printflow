@@ -115,11 +115,6 @@ export const ShopPayments: React.FC = () => {
     return 'Direct UPI Settlement';
   }, [activeShop]);
 
-  const upiDisplay = useMemo(() => {
-    if (!activeShop) return null;
-    return activeShop.razorpaySettings?.upiId || 'Not Configured';
-  }, [activeShop]);
-
   return (
     <div className="space-y-4 max-w-7xl mx-auto pb-10 text-slate-800">
       {/* 1. COMPACT PAGE HEADER */}
@@ -198,21 +193,21 @@ export const ShopPayments: React.FC = () => {
           </p>
         </div>
 
-        {/* Shop UPI VPA */}
+        {/* Settled Transactions */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
           <div className="flex items-center justify-between text-slate-500 text-xs font-mono mb-1 uppercase tracking-[0.06em]">
-            <span>Shop UPI VPA</span>
-            <QrCode className="w-3.5 h-3.5 text-slate-400" />
+            <span>Settled Transactions</span>
+            <CheckCircle2 className="w-3.5 h-3.5 text-slate-400" />
           </div>
           {isRefreshing ? (
-            <div className="h-6 w-32 bg-slate-100 animate-pulse rounded mt-1" />
+            <div className="h-8 w-24 bg-slate-100 animate-pulse rounded mt-1" />
           ) : (
-            <p className="text-base font-bold font-mono text-slate-900 truncate mt-1" title={upiDisplay || undefined}>
-              {upiDisplay || '—'}
+            <p className="text-2xl font-bold font-mono text-slate-900 tabular-nums">
+              {shopTxns.filter((t) => t.status === 'SUCCESS').length}
             </p>
           )}
-          <p className="text-[11px] text-slate-500 mt-1 font-mono">
-            Auto-capture: {activeShop?.razorpaySettings?.autoCapture ? 'Enabled' : 'Disabled'}
+          <p className="text-[11px] text-slate-500 mt-1 leading-snug">
+            Verified customer print payments
           </p>
         </div>
       </div>

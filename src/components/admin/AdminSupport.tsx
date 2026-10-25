@@ -20,7 +20,6 @@ import {
   RefreshCw,
   Download,
   SlidersHorizontal,
-  ChevronRight,
   ChevronDown,
   Tag,
   MessageSquare,
@@ -649,11 +648,6 @@ export const AdminSupport: React.FC = () => {
       <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
           <div>
-            <div className="flex items-center gap-2 text-xs font-semibold text-purple-700 mb-1">
-              <span>Platform</span>
-              <ChevronRight className="w-3.5 h-3.5 text-slate-400" />
-              <span className="text-slate-800">Support Tickets</span>
-            </div>
             <h1 className="text-2xl font-black text-slate-900 tracking-tight flex items-center gap-2.5">
               <LifeBuoy className="w-7 h-7 text-purple-600" />
               Support Tickets

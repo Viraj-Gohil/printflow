@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog, clipboard } from 'electron';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { agentService } from './agent/PrintAgentService.js';
 import { localVault } from './storage/LocalDataVault.js';
@@ -162,6 +163,10 @@ function updateTrayMenu() {
 // ============================================================================
 // IPC MAIN HANDLERS
 // ============================================================================
+
+ipcMain.handle('system:get-hostname', () => {
+  return os.hostname();
+});
 
 ipcMain.handle('agent:get-config', () => {
   return localVault.getPublicConfig();

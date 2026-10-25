@@ -147,11 +147,20 @@ export const ShopQrCodes: React.FC = () => {
   };
 
   return (
-    <div className="space-y-8 pb-12">
-      {/* =========================================================================
-          1. WORKFLOW STRIP (Makes the 6-step ordering entrance workflow crystal clear)
-          SELECT SHOP → GENERATE QR → PREVIEW STAND → PRINT / DOWNLOAD → PLACE AT COUNTER → CUSTOMERS SCAN
-         ========================================================================= */}
+    <div className="space-y-6 max-w-7xl mx-auto pb-12 text-slate-800">
+      {/* 1. PAGE HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200 no-print">
+        <div>
+          <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
+            QR Counter Stands
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-0.5 leading-relaxed">
+            Generate and print self-service QR stands for your shop counter.
+          </p>
+        </div>
+      </div>
+
+      {/* WORKFLOW STRIP */}
       <div className="no-print bg-white p-5 rounded-2xl border border-slate-200/90 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3.5 border-b border-slate-100">
           <div className="flex items-center gap-2">

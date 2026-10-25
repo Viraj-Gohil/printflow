@@ -173,6 +173,7 @@ export interface ElectronAgentAPI {
   minimizeToTray: () => void;
   quitApp: () => void;
   openExternal: (url: string) => Promise<void>;
+  getHostname?: () => Promise<string>;
   
   // Event listeners
   onStatusChanged: (callback: (status: AgentConnectionStatus) => void) => () => void;

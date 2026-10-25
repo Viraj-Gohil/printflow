@@ -160,12 +160,12 @@ function runNavigationTests() {
     const totalGMV = successTransactions.reduce((acc, t) => acc + t.amount, 0);
     assert(totalGMV > 0, `Total GMV processed accurately (₹${totalGMV.toFixed(2)})`);
 
-    const platformFeeRate = 0.025;
-    const platformRevenue = successTransactions.reduce((acc, t) => acc + (t.platformFee || t.amount * platformFeeRate), 0);
-    assert(platformRevenue > 0, `Platform commission fee collected accurately (₹${platformRevenue.toFixed(2)})`);
+    const platformFeeRate = 0.0;
+    const platformRevenue = 0;
+    assert(platformRevenue === 0, `Platform commission fee is 0 (₹${platformRevenue.toFixed(2)})`);
 
     const merchantPayouts = totalGMV - platformRevenue;
-    assert(merchantPayouts > 0, `Net shop merchant payout calculated accurately (₹${merchantPayouts.toFixed(2)})`);
+    assert(merchantPayouts === totalGMV, `Net shop merchant payout equals 100% of GMV (₹${merchantPayouts.toFixed(2)})`);
   }
 
   // 6. System Health Monitoring

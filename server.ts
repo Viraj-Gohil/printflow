@@ -70,6 +70,7 @@ import {
   deleteShopPaymentIntegration,
   getPersistedUsers,
   persistNewShopAndUser,
+  generateUniqueShopSlug,
   requirePostgresPool,
   getShopAgentAvailability,
   getCandidateShopIds
@@ -1016,12 +1017,7 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
       });
     }
 
-    let baseSlug = String(shopName)
-      .toLowerCase()
-      .trim()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/(^-|-$)/g, '');
-    if (!baseSlug) baseSlug = `shop-${Date.now().toString().slice(-4)}`;
+    const randomSlug = await generateUniqueShopSlug();
 
     const newShopId = `shop_${Date.now()}`;
     const newUserId = `usr_${Date.now()}`;
@@ -1030,7 +1026,7 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
     const newShop = {
       id: newShopId,
       name: String(shopName).trim(),
-      slug: baseSlug,
+      slug: randomSlug,
       ownerId: newUserId,
       ownerName: String(ownerName).trim(),
       ownerEmail: cleanEmail,
@@ -1049,9 +1045,9 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
         isTestMode: false,
         keyId: '',
         keySecret: '',
-        upiId: `${baseSlug}@upi`,
+        upiId: `${randomSlug.toLowerCase()}@upi`,
         autoCapture: true,
-        receiptPrefix: baseSlug.slice(0, 3).toUpperCase() + '-'
+        receiptPrefix: 'PF-'
       }
     };
 
@@ -4603,14 +4599,13 @@ app.get('/api/customer/print-jobs/:id/status', createRateLimiter(60), async (req
 
 // Agent Pairing / Setup Endpoint
 app.post('/api/agent/pair', createRateLimiter(30), async (req: Request, res: Response) => {
-  const { shopId, authToken, deviceName } = req.body;
+  const { shopId, authToken, deviceName, agentId } = req.body;
   if (
     typeof shopId !== 'string' ||
     !/^[a-zA-Z0-9_-]{1,128}$/.test(shopId) ||
     typeof authToken !== 'string' ||
-    authToken.length < 24 ||
-    authToken.length > 512 ||
-    (deviceName !== undefined && (typeof deviceName !== 'string' || deviceName.length > 100))
+    authToken.length < 10 ||
+    authToken.length > 512
   ) {
     return res.status(400).json({ success: false, error: 'Shop ID and agent token are required' });
   }
@@ -4619,13 +4614,25 @@ app.post('/api/agent/pair', createRateLimiter(30), async (req: Request, res: Res
     const device = await pairPrintAgent({
       shopId,
       token: authToken,
-      deviceName: deviceName?.trim() || 'PrintFlow Agent'
+      deviceName: (typeof deviceName === 'string' && deviceName.trim()) ? deviceName.trim() : 'PrintFlow Agent',
+      agentId: (typeof agentId === 'string' && agentId.trim()) ? agentId.trim() : undefined
     });
-    if (!device) return res.status(401).json({ success: false, error: 'Invalid or revoked agent token for this shop.' });
+    if (!device) return res.status(401).json({ success: false, error: 'Invalid or unauthorized agent token for this shop.' });
     return res.json({ success: true, ...device, status: 'OFFLINE', pairedAt: new Date().toISOString() });
-  } catch (error) {
-    logger.error('Print agent pairing persistence failed', { error: deepRedact(error) });
-    return res.status(503).json({ success: false, error: 'Agent credential storage is unavailable. Configure DATABASE_URL and retry.' });
+  } catch (error: any) {
+    logger.error('Print agent pairing failed', { error: deepRedact(error) });
+    const msg = error?.message || '';
+    if (
+      msg.includes('already registered') ||
+      msg.includes('idx_one_active_agent_per_shop') ||
+      error?.code === '23505'
+    ) {
+      return res.status(409).json({
+        success: false,
+        error: 'An agent is already registered for this shop. Disconnect or revoke the existing agent before pairing another device.'
+      });
+    }
+    return res.status(400).json({ success: false, error: msg || 'Agent pairing failed.' });
   }
 });
 

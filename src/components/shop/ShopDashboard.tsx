@@ -162,27 +162,6 @@ export const ShopDashboard: React.FC = () => {
             Monitor printing activity and manage today's orders.
           </p>
         </div>
-
-        {/* Header Actions */}
-        <div className="flex items-center gap-2 flex-wrap">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => navigate('/shop/qr-codes')}
-          >
-            <QrCode className="w-3.5 h-3.5 text-slate-500" />
-            <span>Counter QR</span>
-          </Button>
-
-          <Button
-            variant="solid"
-            size="sm"
-            onClick={() => navigate(`/s/${activeShop.slug}`)}
-          >
-            <ExternalLink className="w-3.5 h-3.5 text-white" />
-            <span>Customer View</span>
-          </Button>
-        </div>
       </div>
 
       {/* 2. CUSTOMER QR & ORDERING LINK UTILITY PANEL */}

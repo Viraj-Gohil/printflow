@@ -10,7 +10,6 @@ import {
   AlertTriangle,
   Clock,
   ArrowUpRight,
-  ChevronRight,
   ExternalLink,
   Eye,
   X,
@@ -45,7 +44,7 @@ export const AdminPayments: React.FC = () => {
       if (t.status === 'SUCCESS') {
         success++;
         gmv += t.amount;
-        const fee = t.platformFee || t.amount * ((adminRazorpay.platformFeePercent || 2.5) / 100);
+        const fee = t.platformFee ?? (t.amount * ((adminRazorpay.platformFeePercent || 0) / 100));
         earnings += fee;
         payouts += t.amount - fee;
       } else if (t.status === 'REFUNDED') {
@@ -101,8 +100,8 @@ export const AdminPayments: React.FC = () => {
         `"${t.shopName}"`,
         `"${t.customerName || 'Walk-in'}"`,
         t.amount.toFixed(2),
-        (t.platformFee || t.amount * 0.02).toFixed(2),
-        (t.amount - (t.platformFee || t.amount * 0.02)).toFixed(2),
+        (t.platformFee ?? 0).toFixed(2),
+        (t.amount - (t.platformFee ?? 0)).toFixed(2),
         t.status,
         t.paymentGateway || 'RAZORPAY',
         `"${new Date(t.createdAt).toISOString()}"`
@@ -122,13 +121,6 @@ export const AdminPayments: React.FC = () => {
       {/* Page Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <span>Platform</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span>Billing & Revenue</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span className="font-semibold text-purple-700">Platform Payments</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
             Platform Payments & Settlements
           </h1>
@@ -184,7 +176,7 @@ export const AdminPayments: React.FC = () => {
             ₹{platformEarnings.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
           </p>
           <span className="text-[11px] text-slate-500 font-medium mt-1 block">
-            {adminRazorpay.platformFeePercent}% standard platform fee rate
+            {adminRazorpay.platformFeePercent || 0}% platform fee rate (Platform Fee Removed)
           </span>
         </div>
 
@@ -299,7 +291,7 @@ export const AdminPayments: React.FC = () => {
                 </tr>
               ) : (
                 filteredTransactions.map((tx) => {
-                  const fee = tx.platformFee || tx.amount * 0.02;
+                  const fee = tx.platformFee ?? 0;
                   const isSuccess = tx.status === 'SUCCESS';
                   const isRefunded = tx.status === 'REFUNDED';
                   const isPending = tx.status === 'PENDING';
@@ -448,13 +440,13 @@ export const AdminPayments: React.FC = () => {
                 <div className="flex justify-between text-purple-700">
                   <span>Platform Fee (Commission):</span>
                   <span className="font-mono font-bold">
-                    -₹{(selectedTxModal.platformFee || selectedTxModal.amount * 0.02).toFixed(2)}
+                    -₹{(selectedTxModal.platformFee ?? 0).toFixed(2)}
                   </span>
                 </div>
                 <div className="flex justify-between text-emerald-700 font-bold border-t border-slate-100 pt-2 text-sm">
                   <span>Net Shop Merchant Payout:</span>
                   <span className="font-mono">
-                    ₹{(selectedTxModal.amount - (selectedTxModal.platformFee || selectedTxModal.amount * 0.02)).toFixed(2)}
+                    ₹{(selectedTxModal.amount - (selectedTxModal.platformFee ?? 0)).toFixed(2)}
                   </span>
                 </div>
               </div>

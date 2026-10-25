@@ -18,8 +18,6 @@ import {
   Settings,
   Menu,
   X,
-  ChevronRight,
-  ChevronLeft,
   Search,
   ExternalLink,
   LogOut,
@@ -211,17 +209,6 @@ export const AdminLayout: React.FC<AdminLayoutProps> = ({ children, activeTab })
       ]
     }
   ];
-
-  // Map activeTab to Section & Label for breadcrumbs
-  const currentItemInfo = (() => {
-    // Normalization: if activeTab is 'saas-plans', map to 'plans'
-    const normalizedTab = activeTab === 'saas-plans' ? 'plans' : activeTab;
-    for (const sec of navSections) {
-      const found = sec.items.find((item) => item.id === normalizedTab);
-      if (found) return { section: sec.title, item: found };
-    }
-    return { section: 'OVERVIEW', item: { id: activeTab, label: 'Platform Console', icon: LayoutDashboard, path: '/admin' } };
-  })();
 
   const isTabActive = (itemId: string) => {
     if (activeTab === itemId) return true;

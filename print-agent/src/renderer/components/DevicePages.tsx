@@ -231,6 +231,22 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
 
   const onlinePrintersCount = printers.filter((p) => p.isOnline).length;
 
+  const handleCopyText = async (text: string, label: string) => {
+    if (!text) return;
+    if (window.electronAgentAPI?.copyText) {
+      await window.electronAgentAPI.copyText(text);
+    } else {
+      await navigator.clipboard.writeText(text);
+    }
+    setGlobalMessage({
+      type: 'success',
+      text: `${label} copied to clipboard!`
+    });
+    setTimeout(() => {
+      setGlobalMessage(null);
+    }, 2500);
+  };
+
   return (
     <div className="space-y-6 animate-fade-in pb-16">
       {/* Global Feedback Banner */}
@@ -299,16 +315,30 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
               }
               description="PrintFlow shop instance authorized to stream print requests to this device."
               icon={<Store className="w-4 h-4" />}
+              copyable={Boolean(config.shopId)}
+              onCopy={() => void handleCopyText(config.shopId || '', 'Paired Shop ID')}
             />
 
+            <ReadOnlyField
+              label="Host Name / Device Host"
+              value={config.deviceName || 'Detecting...'}
+              badge={
+                <span className="text-[10px] font-semibold text-[var(--text-faint)] uppercase tracking-wider">
+                  System Host
+                </span>
+              }
+              description="Detected system computer hostname bound to this print agent."
+              icon={<HardDrive className="w-4 h-4" />}
+              copyable={Boolean(config.deviceName)}
+              onCopy={() => void handleCopyText(config.deviceName || '', 'Host Name')}
+            />
 
-
-            {/* Editable Terminal Device Name */}
+            {/* Editable Host Name */}
             <form onSubmit={handleSaveDeviceName} className="pt-2 border-t border-[var(--border-default)]">
               <FormField
-                label="Terminal Device Name"
+                label="Host Name"
                 htmlFor="terminal-device-name"
-                description="Friendly counter name displayed on your PrintFlow Shop Dashboard."
+                description="Friendly counter hostname displayed on your PrintFlow Shop Dashboard."
                 error={nameError || undefined}
                 required
               >
@@ -317,7 +347,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                     id="terminal-device-name"
                     value={deviceName}
                     onChange={(e) => setDeviceName(e.target.value)}
-                    placeholder="e.g. Counter PC 1"
+                    placeholder="e.g. DESKTOP-COUNTER-01"
                     maxLength={100}
                     icon={<Laptop className="w-4 h-4" />}
                     disabled={nameSaveStatus === 'saving'}

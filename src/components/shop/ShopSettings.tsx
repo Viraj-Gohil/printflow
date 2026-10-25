@@ -33,8 +33,7 @@ import { apiUrl } from '../../lib/apiConfig';
 import {
   validateShopName,
   validateEmail,
-  validatePhone,
-  validateUpiId
+  validatePhone
 } from '../../lib/validation';
 import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
@@ -62,9 +61,6 @@ export const ShopSettings: React.FC = () => {
   const [keyIdInput, setKeyIdInput] = useState(activeShop.razorpaySettings?.keyId || '');
   const [replaceSecret, setReplaceSecret] = useState('');
   const [mode, setMode] = useState<'test' | 'live'>('live');
-  const [upiId, setUpiId] = useState(activeShop.razorpaySettings?.upiId || '');
-  const [autoCapture, setAutoCapture] = useState(activeShop.razorpaySettings?.autoCapture ?? true);
-  const [receiptPrefix, setReceiptPrefix] = useState(activeShop.razorpaySettings?.receiptPrefix || 'SGX-');
   const [isEnabled, setIsEnabled] = useState(activeShop.razorpaySettings?.enabled ?? true);
 
   const [showSecret, setShowSecret] = useState(false);
@@ -73,7 +69,7 @@ export const ShopSettings: React.FC = () => {
   const [saveSuccess, setSaveSuccess] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [isSavingGateway, setIsSavingGateway] = useState(false);
-  const [gatewayErrors, setGatewayErrors] = useState<{ keyId?: string; upiId?: string }>({});
+  const [gatewayErrors, setGatewayErrors] = useState<{ keyId?: string }>({});
 
   // Mode switch confirmation modal
   const [pendingModeSwitch, setPendingModeSwitch] = useState<'test' | 'live' | null>(null);
@@ -276,7 +272,7 @@ export const ShopSettings: React.FC = () => {
     setSaveError(null);
     setSaveSuccess(false);
 
-    const errors: { keyId?: string; upiId?: string } = {};
+    const errors: { keyId?: string } = {};
     const key = keyIdInput.trim();
 
     if (!key) {
@@ -285,13 +281,6 @@ export const ShopSettings: React.FC = () => {
       errors.keyId = 'Live mode Key ID must start with "rzp_live_".';
     } else if (mode === 'test' && !key.startsWith('rzp_test_')) {
       errors.keyId = 'Test mode Key ID must start with "rzp_test_".';
-    }
-
-    if (upiId && upiId.trim()) {
-      const upiCheck = validateUpiId(upiId.trim(), false);
-      if (!upiCheck.isValid) {
-        errors.upiId = upiCheck.error || 'Invalid UPI ID format (e.g. name@bank).';
-      }
     }
 
     if (Object.keys(errors).length > 0) {
@@ -342,9 +331,6 @@ export const ShopSettings: React.FC = () => {
         isTestMode: mode === 'test',
         keyId: key,
         keySecret: '', // Never store plaintext secret in client state
-        upiId: upiId.trim(),
-        autoCapture,
-        receiptPrefix: receiptPrefix.trim(),
         lastVerifiedAt: data.config?.lastUpdatedAt || new Date().toISOString()
       });
 
@@ -850,75 +836,6 @@ export const ShopSettings: React.FC = () => {
                   <span>Leave empty to preserve existing vault-stored secret.</span>
                 </p>
               </div>
-
-              {/* Shop UPI ID / VPA */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>Shop UPI ID / VPA</span>
-                  <span className="text-[10px] text-slate-400">For counter QR code</span>
-                </label>
-                <input
-                  type="text"
-                  placeholder="shreeganesh@okaxis"
-                  value={upiId}
-                  onChange={(e) => {
-                    setGatewayErrors((prev) => ({ ...prev, upiId: undefined }));
-                    setUpiId(e.target.value);
-                  }}
-                  className={`w-full px-3 py-2 bg-white border rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 ${
-                    gatewayErrors.upiId ? 'border-red-400 focus:ring-red-400 bg-red-50/20' : 'border-slate-300 focus:ring-blue-500'
-                  }`}
-                />
-                {gatewayErrors.upiId ? (
-                  <p className="text-[11px] text-red-600 font-medium flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3 shrink-0" />
-                    <span>{gatewayErrors.upiId}</span>
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-slate-400">
-                    Direct counter UPI handle for customer scans.
-                  </p>
-                )}
-              </div>
-
-              {/* Receipt Number Prefix */}
-              <div className="space-y-1.5">
-                <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>Receipt Number Prefix</span>
-                  <span className="text-[10px] text-slate-400">Max 5 characters</span>
-                </label>
-                <input
-                  type="text"
-                  maxLength={5}
-                  placeholder="SGX-"
-                  value={receiptPrefix}
-                  onChange={(e) => setReceiptPrefix(e.target.value.toUpperCase())}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                />
-                <p className="text-[11px] text-slate-400">
-                  Formatted on customer receipts (e.g. {receiptPrefix || 'SGX-'}1024)
-                </p>
-              </div>
-
-
-
-              {/* Auto Capture setting */}
-              <div className="space-y-1.5 pt-2">
-                <label className="text-xs font-bold text-slate-800 block">Payment Capture Behavior</label>
-                <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-center gap-3">
-                  <input
-                    type="checkbox"
-                    id="autoCapture"
-                    checked={autoCapture}
-                    onChange={(e) => setAutoCapture(e.target.checked)}
-                    className="w-4 h-4 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
-                  />
-                  <label htmlFor="autoCapture" className="text-xs text-slate-700 cursor-pointer">
-                    <span className="font-semibold block">Auto-capture Payments</span>
-                    <span className="text-[11px] text-slate-500 block">Immediately capture authorized customer UPI and card charges.</span>
-                  </label>
-                </div>
-              </div>
             </div>
 
             {/* Action Buttons */}
@@ -1006,17 +923,13 @@ export const ShopSettings: React.FC = () => {
                 )}
               </div>
 
-              {/* Public Slug with Auto-generate */}
+              {/* Permanent Public Slug */}
               <div className="space-y-1.5">
                 <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                  <span>Public URL Slug <span className="text-red-500">*</span></span>
-                  <button
-                    type="button"
-                    onClick={handleAutoSlug}
-                    className="text-[10px] font-semibold text-blue-600 hover:underline cursor-pointer"
-                  >
-                    Auto-generate
-                  </button>
+                  <span>Public URL Slug</span>
+                  <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded border border-slate-200">
+                    Permanent Identifier
+                  </span>
                 </label>
                 <div className="relative">
                   <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-400 text-xs font-mono">
@@ -1024,27 +937,15 @@ export const ShopSettings: React.FC = () => {
                   </div>
                   <input
                     type="text"
-                    required
+                    readOnly
+                    disabled
                     value={profileForm.slug}
-                    onChange={(e) => {
-                      setProfileErrors((prev) => ({ ...prev, slug: '' }));
-                      setProfileForm({ ...profileForm, slug: e.target.value.toLowerCase() });
-                    }}
-                    className={`w-full pl-8 pr-3 py-2 bg-white border rounded-xl text-xs font-mono text-slate-900 focus:outline-none focus:ring-2 ${
-                      profileErrors.slug ? 'border-red-400 focus:ring-red-400 bg-red-50/20' : 'border-slate-300 focus:ring-blue-500'
-                    }`}
+                    className="w-full pl-8 pr-3 py-2 bg-slate-100 border border-slate-200 rounded-xl text-xs font-mono font-bold text-slate-700 cursor-not-allowed select-all"
                   />
                 </div>
-                {profileErrors.slug ? (
-                  <p className="text-[11px] text-red-600 font-medium flex items-center gap-1">
-                    <AlertCircle className="w-3 h-3 shrink-0" />
-                    <span>{profileErrors.slug}</span>
-                  </p>
-                ) : (
-                  <p className="text-[11px] text-slate-400">
-                    Customer portal: <span className="font-mono text-slate-600">https://printflow.app/s/{profileForm.slug || 'slug'}</span>
-                  </p>
-                )}
+                <p className="text-[11px] text-slate-400">
+                  Customer portal: <span className="font-mono text-slate-600 font-semibold">{window.location.origin}/#/s/{profileForm.slug}</span> (Permanent shop slug assigned at registration)
+                </p>
               </div>
 
               {/* Owner Phone */}

@@ -13,7 +13,6 @@ import {
   Save,
   Key,
   ExternalLink,
-  ChevronRight,
   Settings,
   Mail,
   Smartphone,
@@ -128,13 +127,6 @@ export const AdminPlatformSettings: React.FC = () => {
       {/* 1. COMPACT PAGE HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <span>Platform</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span>Configuration</span>
-            <ChevronRight className="w-3 h-3 text-slate-400" />
-            <span className="font-semibold text-purple-700">Platform Settings</span>
-          </div>
           <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">
             Platform Settings & Global Policies
           </h1>
