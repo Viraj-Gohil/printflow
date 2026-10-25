@@ -1098,11 +1098,29 @@ app.post('/api/auth/register', createRateLimiter(10), async (req: Request, res: 
       logger.warn('Failed to persist shop and user to database, user saved in local store:', { error: deepRedact(dbErr) });
     }
 
+    let canonicalProfileUuid = newUser.id;
+    let canonicalShopUuid = newShopId;
+    try {
+      if (isNeonDatabaseConfigured()) {
+        const pool = requirePostgresPool();
+        const pRes = await pool.query(
+          `SELECT id::text AS "profileId" FROM public.profiles WHERE LOWER(email) = $1 LIMIT 1`,
+          [newUser.email.toLowerCase()]
+        );
+        if (pRes.rowCount && pRes.rows[0].profileId) {
+          canonicalProfileUuid = pRes.rows[0].profileId;
+        }
+      }
+      if (newShopId) {
+        canonicalShopUuid = await resolvePrintFlowShopId(newShopId);
+      }
+    } catch {}
+
     const { signedCookie, session, cookieOptions } = createSecureSession({
-      id: newUser.id,
+      id: canonicalProfileUuid,
       email: newUser.email,
       role: newUser.role,
-      shopId: newShopId,
+      shopId: canonicalShopUuid,
       fullName: newUser.fullName
     });
 
@@ -1273,11 +1291,29 @@ app.post('/api/auth/login', createRateLimiter(10), async (req: Request, res: Res
     });
   }
 
+  let canonicalProfileUuid = user.id;
+  let canonicalShopUuid = user.shopId;
+  try {
+    if (isNeonDatabaseConfigured()) {
+      const pool = requirePostgresPool();
+      const profileRes = await pool.query(
+        `SELECT id::text AS "profileId" FROM public.profiles WHERE LOWER(email) = $1 LIMIT 1`,
+        [cleanEmail]
+      );
+      if (profileRes.rowCount && profileRes.rows[0].profileId) {
+        canonicalProfileUuid = profileRes.rows[0].profileId;
+      }
+    }
+    if (user.shopId) {
+      canonicalShopUuid = await resolvePrintFlowShopId(user.shopId);
+    }
+  } catch {}
+
   const { signedCookie, session, cookieOptions } = createSecureSession({
-    id: user.id,
+    id: canonicalProfileUuid,
     email: user.email,
     role: user.role,
-    shopId: user.shopId,
+    shopId: canonicalShopUuid,
     fullName: user.fullName
   });
 
