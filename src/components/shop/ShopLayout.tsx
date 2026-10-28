@@ -105,32 +105,41 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
     agentOnline: boolean;
     printerReady: boolean;
     reason: string;
+    isChecking?: boolean;
   }>({
     isAvailable: false,
     agentOnline: false,
     printerReady: false,
-    reason: 'Checking agent status...'
+    reason: 'Checking agent status...',
+    isChecking: true
   });
 
+  const agentSeqRef = useRef(0);
+
   useEffect(() => {
-    let isMounted = true;
     const checkAgentStatus = async () => {
       if (!activeShop?.slug) return;
+      const seq = ++agentSeqRef.current;
       try {
         const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`));
+        if (seq !== agentSeqRef.current) return;
         if (res.ok) {
           const data = await res.json();
-          if (data.success && data.availability && isMounted) {
-            setAgentAvailability(data.availability);
+          if (data.success && data.availability) {
+            setAgentAvailability({
+              ...data.availability,
+              isChecking: false
+            });
           }
         }
       } catch {
-        if (isMounted) {
+        if (seq === agentSeqRef.current) {
           setAgentAvailability({
             isAvailable: false,
             agentOnline: false,
             printerReady: false,
-            reason: 'Agent status unavailable'
+            reason: 'Agent status unavailable',
+            isChecking: false
           });
         }
       }
@@ -139,7 +148,6 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
     void checkAgentStatus();
     const interval = window.setInterval(() => void checkAgentStatus(), 8000);
     return () => {
-      isMounted = false;
       window.clearInterval(interval);
     };
   }, [activeShop?.slug]);
@@ -307,7 +315,12 @@ export const ShopLayout: React.FC<ShopLayoutProps> = ({ children, activeTab }) =
             className="hidden md:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-slate-50 border border-slate-200/90 text-xs font-medium hover:bg-slate-100 transition-colors cursor-pointer"
             title={`Print Agent Status: ${agentAvailability.reason}. Click to open agent configuration.`}
           >
-            {agentAvailability.agentOnline ? (
+            {agentAvailability.isChecking ? (
+              <>
+                <span className="w-2 h-2 rounded-full bg-slate-400 animate-pulse" />
+                <span className="text-slate-600 font-medium hidden xl:inline text-[11px]">Checking Agent...</span>
+              </>
+            ) : agentAvailability.agentOnline ? (
               agentAvailability.printerReady ? (
                 <>
                   <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-emerald-100 animate-pulse" />

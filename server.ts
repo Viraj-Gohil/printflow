@@ -471,7 +471,7 @@ function requireAdminRole(req: Request, res: Response, next: NextFunction) {
  * Strictly disallows Super Admin, validates shop membership, and enforces tenant boundary.
  * Never trusts client headers or URL role parameters.
  */
-function requireShopOwnerRole(req: Request, res: Response, next: NextFunction) {
+async function requireShopOwnerRole(req: Request, res: Response, next: NextFunction) {
   const user = (req as any).authenticatedUser as ServerSession | undefined;
 
   if (!user) {
@@ -510,11 +510,24 @@ function requireShopOwnerRole(req: Request, res: Response, next: NextFunction) {
   // Validate tenant boundary if :shopId is in route params
   const paramShopId = req.params?.shopId;
   if (paramShopId && paramShopId !== user.shopId) {
-    return res.status(403).json({
-      success: false,
-      error: 'Cross-tenant access forbidden. You are not authorized to access another shop.',
-      code: 'CROSS_TENANT_FORBIDDEN'
-    });
+    let isSameShop = false;
+    try {
+      const [canonParam, canonUser] = await Promise.all([
+        resolvePrintFlowShopId(paramShopId),
+        resolvePrintFlowShopId(user.shopId)
+      ]);
+      if (canonParam && canonUser && canonParam === canonUser) {
+        isSameShop = true;
+      }
+    } catch {}
+
+    if (!isSameShop) {
+      return res.status(403).json({
+        success: false,
+        error: 'Cross-tenant access forbidden. You are not authorized to access another shop.',
+        code: 'CROSS_TENANT_FORBIDDEN'
+      });
+    }
   }
 
   return next();
@@ -5106,7 +5119,13 @@ app.get('/api/shop/:shopId/live', requireShopOwnerRole, async (req: Request, res
         [candidateShopIds]
       );
       if (deviceCheck.rowCount && deviceCheck.rowCount > 0) {
-        isOnline = deviceCheck.rows.some(d => d.status === 'ONLINE' || (d.last_seen && new Date(d.last_seen).getTime() > Date.now() - 15 * 60 * 1000));
+        const HEARTBEAT_TIMEOUT_MS = 15_000;
+        const nowMs = Date.now();
+        isOnline = deviceCheck.rows.some(d =>
+          d.status === 'ONLINE' &&
+          d.last_seen &&
+          (nowMs - new Date(d.last_seen).getTime() <= HEARTBEAT_TIMEOUT_MS)
+        );
       }
     } catch {}
 

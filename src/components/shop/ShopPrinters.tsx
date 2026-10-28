@@ -1,112 +1,244 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useApp } from '../../lib/store';
+import { authenticatedFetch } from '../../lib/apiConfig';
 import {
   Printer,
   Plus,
   CheckCircle2,
   AlertCircle,
-  Power,
-  RotateCw,
+  RefreshCw,
   Cpu,
   Layers,
-  Sparkles,
-  Info,
   Crown,
-  ArrowRight,
-  Trash2,
-  ShieldCheck
+  ShieldCheck,
+  Info,
+  Clock,
+  Wifi,
+  WifiOff,
+  Sliders,
+  Check,
+  X,
+  LogIn,
+  ShieldAlert
 } from 'lucide-react';
-import { PaperSize, PrinterDevice } from '../../types';
+
+interface BackendPrinter {
+  id: string;
+  name: string;
+  model?: string;
+  status: 'ONLINE' | 'OFFLINE' | 'BUSY' | 'ERROR';
+  isOnline: boolean;
+  isDefault: boolean;
+  isRegistered: boolean;
+  connectionType?: string;
+  driverName?: string;
+  portName?: string;
+  isManualOverride: boolean;
+  detectionSource: 'AUTO' | 'MANUAL';
+  capabilities: {
+    paperSizes: string[];
+    supportsColor: boolean | null;
+    supportsDuplex: boolean | null;
+  };
+  lastSeen?: string | null;
+  lastSyncedAt?: string | null;
+}
 
 export const ShopPrinters: React.FC = () => {
-  const { activeShop, printers, plans, updatePrinter, addPrinter, deletePrinter, navigate } = useApp();
+  const { activeShop, navigate, currentUser, isAuthenticated, isAuthRestored } = useApp();
 
-  const shopPrinters = printers.filter((p) => p.shopId === activeShop.id);
-  const agentPrinters = shopPrinters.filter((printer) => printer.agentManaged);
-  const registeredPrinterCount = agentPrinters.length > 0 ? agentPrinters.length : shopPrinters.length;
-  const currentPlan = plans.find((p) => p.id === activeShop.planId) || plans[0];
-  const printerLimit = currentPlan.printerLimit ?? 1;
-  const isLimitReached = registeredPrinterCount >= printerLimit;
-  const remainingSlots = Math.max(0, printerLimit - registeredPrinterCount);
-  const usagePercent = Math.min(100, Math.round((registeredPrinterCount / printerLimit) * 100));
+  const [printers, setPrinters] = useState<BackendPrinter[]>([]);
+  const [registeredCount, setRegisteredCount] = useState(0);
+  const [printerLimit, setPrinterLimit] = useState(1);
+  const [planName, setPlanName] = useState('Starter Plan');
+  const [isLimitReached, setIsLimitReached] = useState(false);
+  const [remainingSlots, setRemainingSlots] = useState(1);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
+  const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
+  const [authErrorType, setAuthErrorType] = useState<'NONE' | 'UNAUTHENTICATED' | 'EXPIRED' | 'FORBIDDEN'>('NONE');
 
-  const [showAddModal, setShowAddModal] = useState(false);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const printersSeqRef = React.useRef(0);
 
-  // New Printer form state
-  const [newPrinterName, setNewPrinterName] = useState('');
-  const [newPrinterModel, setNewPrinterModel] = useState('');
-  const [supportsColor, setSupportsColor] = useState(false);
-  const [supportsDuplex, setSupportsDuplex] = useState(true);
-  const [selectedSizes, setSelectedSizes] = useState<PaperSize[]>(['A4']);
-  const [modalError, setModalError] = useState<string | null>(null);
+  const fetchPrinters = useCallback(async (manual = false) => {
+    if (!activeShop?.id) return;
+    if (manual) setIsRefreshing(true);
+    else setIsLoading(true);
 
-  const handleOpenAddModal = () => {
-    setModalError(null);
-    setShowAddModal(true);
-  };
+    const seq = ++printersSeqRef.current;
 
-  const handleAddPrinter = (e: React.FormEvent) => {
-    e.preventDefault();
-    setModalError(null);
+    try {
+      const response = await authenticatedFetch(`/api/shop/${encodeURIComponent(activeShop.id)}/printers`, {
+        method: 'GET'
+      });
+      const data = await response.json();
+      if (seq !== printersSeqRef.current) return;
 
-    if (isLimitReached) {
-      setModalError(
-        `Printer quota reached (${registeredPrinterCount}/${printerLimit}). Your active "${currentPlan.name}" plan permits a maximum of ${printerLimit} connected printer${printerLimit > 1 ? 's' : ''}. Upgrade your SaaS plan to connect additional hardware.`
-      );
-      return;
-    }
-
-    const trimmedName = newPrinterName.trim();
-    if (!trimmedName || trimmedName.length < 2) {
-      setModalError('Printer nickname must be at least 2 characters long.');
-      return;
-    }
-
-    if (selectedSizes.length === 0) {
-      setModalError('Please select at least one supported paper size.');
-      return;
-    }
-
-    const res = addPrinter({
-      shopId: activeShop.id,
-      deviceId: 'DEV-WIN-COUNTER-1',
-      name: trimmedName,
-      model: newPrinterModel.trim() || 'Network Laser Printer',
-      status: 'ONLINE',
-      capabilities: {
-        paperSizes: selectedSizes,
-        supportsColor,
-        supportsDuplex
-      },
-      priority: shopPrinters.length + 1,
-      isEnabled: true,
-      lastSeen: 'Just now'
-    });
-
-    if (!res.success) {
-      setModalError(res.message || 'Failed to add printer.');
-      return;
-    }
-
-    setNewPrinterName('');
-    setNewPrinterModel('');
-    setModalError(null);
-    setShowAddModal(false);
-  };
-
-  const toggleSize = (size: PaperSize) => {
-    if (selectedSizes.includes(size)) {
-      if (selectedSizes.length > 1) {
-        setSelectedSizes(selectedSizes.filter((s) => s !== size));
+      if (response.status === 401) {
+        setAuthErrorType('EXPIRED');
+        setErrorMessage('Authentication required or session expired. Please sign in to your shop owner account.');
+        setPrinters([]);
+        return;
       }
-    } else {
-      setSelectedSizes([...selectedSizes, size]);
+
+      if (response.status === 403) {
+        setAuthErrorType('FORBIDDEN');
+        setErrorMessage(data.error || 'Access denied. You are not authorized to view printer details for this shop.');
+        setPrinters([]);
+        return;
+      }
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to retrieve shop printers from backend.');
+      }
+
+      setAuthErrorType('NONE');
+      setPrinters(data.printers || []);
+      setRegisteredCount(data.registeredCount || 0);
+      setPrinterLimit(data.printerLimit || 1);
+      setPlanName(data.planName || 'Starter Plan');
+      setIsLimitReached(Boolean(data.isLimitReached));
+      setRemainingSlots(data.remainingSlots || 0);
+      setErrorMessage(null);
+    } catch (err: any) {
+      if (seq === printersSeqRef.current) {
+        setErrorMessage(err?.message || 'Could not communicate with server.');
+      }
+    } finally {
+      if (seq === printersSeqRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    }
+  }, [activeShop?.id]);
+
+  useEffect(() => {
+    if (!isAuthRestored) return;
+    if (!isAuthenticated || !currentUser) {
+      setAuthErrorType('UNAUTHENTICATED');
+      setIsLoading(false);
+      return;
+    }
+
+    void fetchPrinters();
+    const timer = setInterval(() => {
+      void fetchPrinters();
+    }, 15000);
+    return () => clearInterval(timer);
+  }, [isAuthRestored, isAuthenticated, currentUser, fetchPrinters]);
+
+  const handleToggleRegistration = async (printer: BackendPrinter) => {
+    const nextRegistered = !printer.isRegistered;
+    setActionLoadingId(printer.id);
+    setErrorMessage(null);
+    setSuccessMessage(null);
+
+    try {
+      const response = await authenticatedFetch(`/api/shop/${encodeURIComponent(activeShop.id)}/printers/${encodeURIComponent(printer.id)}/register`, {
+        method: 'POST',
+        body: JSON.stringify({ registered: nextRegistered })
+      });
+      const data = await response.json();
+
+      if (response.status === 401) {
+        setAuthErrorType('EXPIRED');
+        setErrorMessage('Session expired. Please sign in again.');
+        return;
+      }
+
+      if (response.status === 403) {
+        setErrorMessage('Unauthorized access: Tenant boundary restriction enforced.');
+        return;
+      }
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Failed to update printer registration.');
+      }
+
+      setSuccessMessage(nextRegistered ? `Successfully registered "${printer.name}".` : `Unregistered "${printer.name}".`);
+      setTimeout(() => setSuccessMessage(null), 4000);
+      await fetchPrinters(true);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Failed to update printer registration.');
+    } finally {
+      setActionLoadingId(null);
     }
   };
+
+  const usagePercent = Math.min(100, Math.round((registeredCount / Math.max(1, printerLimit)) * 100));
+
+  // 1. Session Restoration Loading State
+  if (!isAuthRestored) {
+    return (
+      <div className="bg-white p-12 text-center rounded-2xl border border-slate-200 space-y-3 max-w-xl mx-auto my-12 shadow-2xs">
+        <RefreshCw className="w-8 h-8 text-blue-600 animate-spin mx-auto" />
+        <p className="text-sm font-semibold text-slate-800">Initializing Session...</p>
+        <p className="text-xs text-slate-500">Restoring authenticated shop session credentials.</p>
+      </div>
+    );
+  }
+
+  // 2. Unauthenticated or Expired Session State
+  if (authErrorType === 'UNAUTHENTICATED' || authErrorType === 'EXPIRED' || (!isAuthenticated && isAuthRestored)) {
+    return (
+      <div className="bg-white p-8 sm:p-12 text-center rounded-2xl border border-slate-200 space-y-4 max-w-lg mx-auto my-12 shadow-2xs animate-fade-in">
+        <div className="w-14 h-14 rounded-2xl bg-amber-50 text-amber-600 border border-amber-200 flex items-center justify-center mx-auto">
+          <ShieldAlert className="w-7 h-7" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 className="text-lg font-bold text-slate-900">
+            {authErrorType === 'EXPIRED' ? 'Session Expired' : 'Authentication Required'}
+          </h2>
+          <p className="text-xs text-slate-600 leading-relaxed max-w-sm mx-auto">
+            {authErrorType === 'EXPIRED'
+              ? 'Your shop session has expired. Please sign in to your shop owner account to manage printers.'
+              : 'Please sign in to your shop owner account to access Printers & Hardware.'}
+          </p>
+        </div>
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => navigate('/auth/login')}
+            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-2xs inline-flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <LogIn className="w-4 h-4" />
+            <span>Sign In to Shop Account</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // 3. Forbidden (Cross-Tenant) State
+  if (authErrorType === 'FORBIDDEN') {
+    return (
+      <div className="bg-white p-8 sm:p-12 text-center rounded-2xl border border-red-200 space-y-4 max-w-lg mx-auto my-12 shadow-2xs animate-fade-in">
+        <div className="w-14 h-14 rounded-2xl bg-red-50 text-red-600 border border-red-200 flex items-center justify-center mx-auto">
+          <ShieldAlert className="w-7 h-7 text-red-600" />
+        </div>
+        <div className="space-y-1.5">
+          <h2 className="text-lg font-bold text-slate-900">Access Restricted</h2>
+          <p className="text-xs text-slate-600 leading-relaxed max-w-sm mx-auto">
+            {errorMessage || 'You are not authorized to view hardware configuration for this shop.'}
+          </p>
+        </div>
+        <div className="pt-2">
+          <button
+            type="button"
+            onClick={() => navigate('/shop/dashboard')}
+            className="px-5 py-2.5 bg-slate-800 hover:bg-slate-900 text-white font-bold text-xs rounded-xl shadow-2xs inline-flex items-center gap-2 cursor-pointer transition-colors"
+          >
+            <span>Return to Dashboard</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-6 max-w-7xl mx-auto pb-10 text-slate-800">
+    <div className="space-y-6 max-w-7xl mx-auto pb-10 text-slate-800 animate-fade-in">
       {/* 1. PAGE HEADER */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
         <div>
@@ -114,26 +246,63 @@ export const ShopPrinters: React.FC = () => {
             Printers & Hardware
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 mt-0.5 leading-relaxed">
-            Manage local counter printing devices and monitor spooler connectivity.
+            Synchronized Windows printers detected by the PrintFlow Desktop Agent.
           </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void fetchPrinters(true)}
+            disabled={isRefreshing}
+            className="secondary-button !min-h-[38px] !text-xs font-semibold"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-blue-600 ${isRefreshing ? 'animate-spin' : ''}`} />
+            <span>{isRefreshing ? 'Syncing...' : 'Sync Printers'}</span>
+          </button>
         </div>
       </div>
 
-      {/* 2. SAAS PLAN HARDWARE QUOTA & VALIDATION BANNER */}
+      {/* 2. SUCCESS / ERROR FEEDBACK */}
+      {successMessage && (
+        <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>{successMessage}</span>
+          </div>
+          <button type="button" onClick={() => setSuccessMessage(null)} className="text-emerald-500 hover:text-emerald-700">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {errorMessage && (
+        <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+            <span>{errorMessage}</span>
+          </div>
+          <button type="button" onClick={() => setErrorMessage(null)} className="text-red-500 hover:text-red-700">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* 3. SUBSCRIPTION QUOTA & LIMITS BANNER */}
       <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200 shadow-xs relative overflow-hidden">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
           <div className="space-y-1.5">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-xs font-bold text-slate-500 uppercase tracking-wider font-mono">
-                SaaS Hardware Quota
+                Subscription Quota
               </span>
               <span className="text-[11px] font-bold px-2.5 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200 flex items-center gap-1">
                 <Crown className="w-3 h-3 text-blue-600" />
-                <span>{currentPlan.name} Plan</span>
+                <span>{planName}</span>
               </span>
               {isLimitReached ? (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
-                  Quota Full ({registeredPrinterCount}/{printerLimit})
+                  Quota Full ({registeredCount}/{printerLimit})
                 </span>
               ) : (
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
@@ -143,10 +312,10 @@ export const ShopPrinters: React.FC = () => {
             </div>
 
             <h2 className="text-lg font-bold text-slate-900">
-              Connected Printers ({registeredPrinterCount} of {printerLimit} Allowed)
+              Registered Printers ({registeredCount} of {printerLimit} Allowed)
             </h2>
             <p className="text-xs text-slate-500 max-w-xl">
-              Printers registered to your shop counter. Hardware connections are strictly validated according to your active SaaS subscription tier.
+              Only registered counter printers receive production print orders. Unregistered printers remain visible for detection but cannot process paying jobs.
             </p>
 
             {/* Quota Progress Bar */}
@@ -160,341 +329,179 @@ export const ShopPrinters: React.FC = () => {
                 />
               </div>
               <div className="flex justify-between text-[11px] text-slate-400 font-mono">
-                <span>{registeredPrinterCount} in use</span>
+                <span>{registeredCount} registered</span>
                 <span>Max: {printerLimit} printer{printerLimit > 1 ? 's' : ''}</span>
               </div>
             </div>
           </div>
 
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2.5 shrink-0">
-            {isLimitReached ? (
+          <div className="flex items-center gap-2.5 shrink-0">
+            {isLimitReached && (
               <button
+                type="button"
                 onClick={() => navigate('/shop/subscription')}
-                className="px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-all cursor-pointer"
+                className="px-4 py-2.5 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center gap-1.5 transition-all cursor-pointer"
               >
                 <Crown className="w-4 h-4" />
-                <span>Upgrade Plan to Add More</span>
+                <span>Upgrade Plan</span>
               </button>
-            ) : null}
-
-            <button
-              onClick={handleOpenAddModal}
-              className={`px-4 py-2.5 font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
-                isLimitReached
-                  ? 'bg-slate-100 text-slate-600 hover:bg-slate-200 border border-slate-300'
-                  : 'bg-blue-600 hover:bg-blue-700 text-white'
-              }`}
-            >
-              <Plus className="w-4 h-4" />
-              <span>Register New Printer</span>
-            </button>
+            )}
           </div>
         </div>
-
-        {/* Warning banner when limit reached */}
-        {isLimitReached && (
-          <div className="mt-4 p-3.5 bg-amber-50/80 border border-amber-200 rounded-xl text-xs text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5">
-              <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-              <span>
-                <strong>Plan Limit Reached:</strong> Your <strong>{currentPlan.name}</strong> plan allows a maximum of <strong>{printerLimit} connected printer{printerLimit > 1 ? 's' : ''}</strong>. To connect more counter printers, upgrade your SaaS subscription.
-              </span>
-            </div>
-            <button
-              onClick={() => navigate('/shop/subscription')}
-              className="text-xs font-bold text-blue-700 hover:text-blue-800 underline underline-offset-2 shrink-0 cursor-pointer text-left sm:text-right"
-            >
-              View Plan Options →
-            </button>
-          </div>
-        )}
       </div>
 
-      {/* 2. PRINTERS LIST */}
-      {shopPrinters.length === 0 ? (
-        <div className="bg-white p-10 rounded-2xl border border-slate-200 text-center space-y-4 shadow-xs">
-          <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto shadow-2xs">
-            <Printer className="w-7 h-7" />
+      {/* 4. READ-ONLY NOTE & PRINTER LIST */}
+      <div className="bg-blue-50/70 border border-blue-200 rounded-xl p-3.5 text-xs text-blue-900 flex items-center gap-3">
+        <Info className="w-4 h-4 text-blue-600 shrink-0" />
+        <div>
+          <strong>Read-Only Configuration:</strong> Printer capabilities and settings are automatically detected by your Windows printer driver. 
+          To edit capabilities or add hardware, use the <a href="/shop/print-agent" className="underline font-bold text-blue-700">PrintFlow Desktop Agent</a>.
+        </div>
+      </div>
+
+      {isLoading ? (
+        <div className="bg-white p-12 text-center rounded-2xl border border-slate-200 space-y-3">
+          <RefreshCw className="w-6 h-6 text-blue-600 animate-spin mx-auto" />
+          <p className="text-xs text-slate-500 font-medium">Synchronizing printers from agent...</p>
+        </div>
+      ) : printers.length === 0 ? (
+        <div className="bg-white p-12 text-center rounded-2xl border border-slate-200 space-y-3">
+          <div className="w-12 h-12 rounded-xl bg-slate-100 text-slate-400 flex items-center justify-center mx-auto">
+            <Printer className="w-6 h-6" />
           </div>
           <div className="space-y-1">
-            <h3 className="text-base font-bold text-slate-900">No Counter Printers Registered Yet</h3>
+            <h3 className="text-sm font-bold text-slate-900">No Printers Detected</h3>
             <p className="text-xs text-slate-500 max-w-md mx-auto">
-              Link your counter laser or inkjet printer to receive and auto-route customer print jobs. Your active {currentPlan.name} plan includes {printerLimit} printer connection slot{printerLimit > 1 ? 's' : ''}.
+              Start your PrintFlow Desktop Agent on the shop PC to automatically discover and synchronize local USB and network Windows printers.
             </p>
           </div>
-          <button
-            onClick={handleOpenAddModal}
-            className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs inline-flex items-center gap-2 cursor-pointer transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            <span>Connect First Printer</span>
-          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {shopPrinters.map((printer) => (
-            <div
-              key={printer.id}
-              className={`bg-white p-5 rounded-2xl border transition-all ${
-                printer.isEnabled
-                  ? 'border-slate-200 shadow-xs'
-                  : 'border-slate-200 bg-slate-50/70 opacity-75'
-              }`}
-            >
-              <div className="flex items-start justify-between gap-3 mb-4">
-                <div className="flex items-center gap-3 min-w-0">
-                  <div
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
-                      printer.status === 'ONLINE'
-                        ? 'bg-emerald-50 text-emerald-600'
-                        : 'bg-slate-100 text-slate-400'
-                    }`}
-                  >
-                    <Printer className="w-5 h-5" />
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-sm font-bold text-slate-900 truncate">{printer.name}</h3>
-                    <p className="text-[11px] text-slate-400 truncate">
-                      {printer.model}{printer.agentManaged ? ` · Synced from ${printer.deviceId}` : ''}
-                    </p>
-                  </div>
-                </div>
+          {printers.map((printer) => {
+            const isOnline = printer.status === 'ONLINE' && printer.isOnline;
+            const isRegistered = printer.isRegistered;
+            const isActionLoading = actionLoadingId === printer.id;
 
-                <span
-                  className={`text-[10px] font-bold px-2 py-0.5 rounded-full shrink-0 ${
-                    printer.status === 'ONLINE'
-                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                      : 'bg-slate-100 text-slate-600 border border-slate-200'
-                  }`}
-                >
-                  {printer.status}
-                </span>
-              </div>
-
-              <div className="space-y-2 py-3 border-y border-slate-100 text-xs">
-                <div className="flex items-center justify-between text-slate-600">
-                  <span>Color Capability:</span>
-                  <span className="font-semibold text-slate-900">
-                    {printer.capabilities.supportsColor ? 'Full Color (CMYK)' : 'Monochrome (B&W Only)'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-slate-600">
-                  <span>Duplex Unit:</span>
-                  <span className="font-semibold text-slate-900">
-                    {printer.capabilities.supportsDuplex ? 'Automatic Double-Sided' : 'Manual Flip Only'}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-slate-600">
-                  <span>Paper Sizes:</span>
-                  <div className="flex gap-1 flex-wrap">
-                    {printer.capabilities.paperSizes.map((s) => (
-                      <span key={s} className="px-1.5 py-0.5 bg-slate-100 text-slate-700 font-semibold rounded text-[10px]">
-                        {s}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-4 flex items-center justify-between pt-1">
-                <span className="text-[11px] text-slate-400 font-mono">Heartbeat: {printer.lastSeen}</span>
-
-                <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => updatePrinter(printer.id, { isEnabled: !printer.isEnabled })}
-                    className={`px-3 py-1 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
-                      printer.isEnabled
-                        ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                        : 'bg-emerald-600 text-white hover:bg-emerald-700'
-                    }`}
-                  >
-                    {printer.isEnabled ? 'Disable Tray' : 'Enable Tray'}
-                  </button>
-
-                  {deleteConfirmId === printer.id ? (
-                    <div className="flex items-center gap-1">
-                      <button
-                        onClick={() => {
-                          deletePrinter(printer.id);
-                          setDeleteConfirmId(null);
-                        }}
-                        className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold rounded-lg cursor-pointer transition-colors"
-                      >
-                        Confirm
-                      </button>
-                      <button
-                        onClick={() => setDeleteConfirmId(null)}
-                        className="px-2 py-1 bg-slate-100 text-slate-600 text-[11px] rounded-lg cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                    </div>
-                  ) : (
-                    <button
-                      onClick={() => setDeleteConfirmId(printer.id)}
-                      className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
-                      title="Remove printer"
+            return (
+              <div
+                key={printer.id || printer.name}
+                className={`bg-white p-5 rounded-2xl border transition-all space-y-4 ${
+                  isRegistered ? 'border-blue-200 shadow-xs' : 'border-slate-200 opacity-85'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div
+                      className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                        isOnline ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-400'
+                      }`}
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  )}
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* 3. REGISTER NEW PRINTER MODAL WITH SAAS LIMIT VALIDATION */}
-      {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-slate-950/50 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-xl border border-slate-200 space-y-4">
-            <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">Register Counter Printer</h3>
-                <p className="text-xs text-slate-500">
-                  Link hardware for automated order spooling.
-                </p>
-              </div>
-              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 border border-blue-200">
-                Slot {registeredPrinterCount + 1} of {printerLimit}
-              </span>
-            </div>
-
-            {/* If user reached limit, display strict upgrade requirement */}
-            {isLimitReached ? (
-              <div className="space-y-4 py-2">
-                <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl space-y-2 text-xs text-amber-900">
-                  <div className="flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span className="font-bold">Hardware Limit Reached</span>
+                      <Printer className="w-5 h-5" />
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-slate-900 truncate" title={printer.name}>
+                          {printer.name}
+                        </h3>
+                        {printer.isDefault && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-blue-100 text-blue-700 uppercase font-mono">
+                            Default
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400 truncate">
+                        {printer.model || printer.driverName || 'Standard Windows Printer'} · {printer.connectionType || 'USB / Local'}
+                      </p>
+                    </div>
                   </div>
-                  <p>
-                    Your current <strong>{currentPlan.name}</strong> SaaS plan is capped at <strong>{printerLimit} printer{printerLimit > 1 ? 's' : ''}</strong>. You have already registered {registeredPrinterCount} printer{registeredPrinterCount > 1 ? 's' : ''}.
-                  </p>
-                  <p className="text-[11px] text-amber-800">
-                    To connect additional printers and speed up counter throughput, please upgrade your subscription.
-                  </p>
-                </div>
 
-                <div className="flex items-center gap-2 pt-2">
-                  <button
-                    type="button"
-                    onClick={() => setShowAddModal(false)}
-                    className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl cursor-pointer"
-                  >
-                    Close
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAddModal(false);
-                      navigate('/shop/subscription');
-                    }}
-                    className="flex-1 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Crown className="w-3.5 h-3.5" />
-                    <span>Upgrade SaaS Plan</span>
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <form onSubmit={handleAddPrinter} className="space-y-4">
-                {modalError && (
-                  <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700 font-semibold flex items-center gap-2">
-                    <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
-                    <span>{modalError}</span>
-                  </div>
-                )}
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-800">
-                    Printer Nickname <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. HP LaserJet 1020 - Counter 1"
-                    value={newPrinterName}
-                    onChange={(e) => {
-                      setModalError(null);
-                      setNewPrinterName(e.target.value);
-                    }}
-                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500 font-medium"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-bold text-slate-800">Model / Driver Name</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Canon imageRUNNER 2206"
-                    value={newPrinterModel}
-                    onChange={(e) => setNewPrinterModel(e.target.value)}
-                    className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-800 block">Paper Sizes Supported</label>
-                  <div className="flex gap-2 flex-wrap">
-                    {(['A4', 'A3', 'A5', 'Letter', 'Legal'] as PaperSize[]).map((size) => (
-                      <button
-                        type="button"
-                        key={size}
-                        onClick={() => toggleSize(size)}
-                        className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
-                          selectedSizes.includes(size)
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-                        }`}
-                      >
-                        {size}
-                      </button>
-                    ))}
+                  <div className="flex flex-col items-end gap-1 shrink-0">
+                    <span
+                      className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                        isOnline
+                          ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                          : 'bg-slate-100 text-slate-600 border border-slate-200'
+                      }`}
+                    >
+                      {printer.status}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">
+                      {printer.detectionSource === 'MANUAL' ? 'Manual Override' : 'Agent Detected'}
+                    </span>
                   </div>
                 </div>
 
-                <div className="flex gap-4 pt-1 flex-wrap">
-                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={supportsColor}
-                      onChange={(e) => setSupportsColor(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 rounded"
-                    />
-                    <span>Color Printing (CMYK)</span>
-                  </label>
-
-                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={supportsDuplex}
-                      onChange={(e) => setSupportsDuplex(e.target.checked)}
-                      className="w-4 h-4 text-blue-600 rounded"
-                    />
-                    <span>Automatic Duplex (2-sided)</span>
-                  </label>
+                {/* Capabilities Read-Only Grid */}
+                <div className="space-y-2 py-3 border-y border-slate-100 text-xs">
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Color Support:</span>
+                    <span className="font-semibold text-slate-900">
+                      {printer.capabilities.supportsColor === true
+                        ? 'Full Color'
+                        : printer.capabilities.supportsColor === false
+                        ? 'Monochrome (B&W)'
+                        : 'Unknown / Not Verified'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Duplex Unit:</span>
+                    <span className="font-semibold text-slate-900">
+                      {printer.capabilities.supportsDuplex === true
+                        ? 'Automatic 2-Sided'
+                        : printer.capabilities.supportsDuplex === false
+                        ? 'Single-Sided Only'
+                        : 'Unknown / Not Verified'}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-slate-600">
+                    <span>Paper Sizes:</span>
+                    <div className="flex gap-1 flex-wrap">
+                      {Array.isArray(printer.capabilities.paperSizes) && printer.capabilities.paperSizes.length > 0 ? (
+                        printer.capabilities.paperSizes.map((s) => (
+                          <span key={s} className="px-1.5 py-0.5 bg-slate-100 text-slate-700 font-semibold rounded text-[10px]">
+                            {s}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="text-slate-400 italic text-[11px]">A4 (Default)</span>
+                      )}
+                    </div>
+                  </div>
                 </div>
 
-                <div className="pt-4 border-t border-slate-100 flex justify-end gap-2">
+                {/* Footer status & Register Action */}
+                <div className="flex items-center justify-between pt-1">
+                  <div className="text-[11px] text-slate-400 font-mono flex items-center gap-1">
+                    <Clock className="w-3 h-3 text-slate-400" />
+                    <span>Synced: {printer.lastSyncedAt ? new Date(printer.lastSyncedAt).toLocaleTimeString() : 'Recently'}</span>
+                  </div>
+
                   <button
                     type="button"
-                    onClick={() => setShowAddModal(false)}
-                    className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl cursor-pointer"
+                    disabled={isActionLoading || (!isRegistered && isLimitReached)}
+                    onClick={() => void handleToggleRegistration(printer)}
+                    className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 ${
+                      isRegistered
+                        ? 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                        : isLimitReached
+                        ? 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        : 'bg-blue-600 hover:bg-blue-700 text-white shadow-xs'
+                    }`}
                   >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-xs cursor-pointer"
-                  >
-                    Register Printer
+                    {isActionLoading ? (
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    ) : isRegistered ? (
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                    ) : (
+                      <Plus className="w-3.5 h-3.5" />
+                    )}
+                    <span>{isRegistered ? 'Registered (Active)' : 'Register Printer'}</span>
                   </button>
                 </div>
-              </form>
-            )}
-          </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

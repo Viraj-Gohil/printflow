@@ -885,7 +885,7 @@ export async function getShopAgentAvailability(shopId: string): Promise<ShopAgen
     };
   }
 
-  const HEARTBEAT_TIMEOUT_MS = 60_000;
+  const HEARTBEAT_TIMEOUT_MS = 15_000;
   const nowMs = Date.now();
   let anyAgentOnline = false;
   let activeAgentId: string | undefined;
@@ -1684,10 +1684,12 @@ export async function getActivePrintAgentForShop(shopId: string): Promise<{
   connected: boolean;
   agentId?: string;
   deviceName?: string;
-  status: 'ONLINE' | 'OFFLINE' | 'DISCONNECTED';
+  status: 'ONLINE' | 'OFFLINE' | 'DISCONNECTED' | 'REVOKED';
   lastSeen?: string | null;
+  heartbeatAgeSeconds?: number | null;
   connectedAt?: string | null;
   printersCount: number;
+  evaluatedAt: string;
 } | null> {
   const pool = requirePostgresPool();
   const canonicalShopId = await resolvePrintFlowShopId(shopId);
@@ -1698,37 +1700,62 @@ export async function getActivePrintAgentForShop(shopId: string): Promise<{
             jsonb_array_length(printers) AS printer_count
      FROM print_agent_devices
      WHERE (shop_id = ANY($1::text[]) OR shop_id = $2) AND is_revoked = false
+     ORDER BY last_seen DESC NULLS LAST
      LIMIT 1`,
     [candidateShopIds, canonicalShopId]
   );
+
+  const nowIso = new Date().toISOString();
 
   if (!res.rowCount || res.rows.length === 0) {
     return {
       connected: false,
       status: 'DISCONNECTED',
-      printersCount: 0
+      lastSeen: null,
+      heartbeatAgeSeconds: null,
+      printersCount: 0,
+      evaluatedAt: nowIso
     };
   }
 
   const row = res.rows[0];
   const lastSeenMs = row.last_seen ? new Date(row.last_seen).getTime() : 0;
-  const isOnline = row.status === 'ONLINE' && Date.now() - lastSeenMs <= 60_000;
+  const heartbeatAgeMs = row.last_seen ? Math.max(0, Date.now() - lastSeenMs) : null;
+  const HEARTBEAT_TIMEOUT_MS = 15_000;
+  const isOnline = !row.is_revoked && row.status === 'ONLINE' && heartbeatAgeMs !== null && heartbeatAgeMs <= HEARTBEAT_TIMEOUT_MS;
+
+  let effectiveStatus: 'ONLINE' | 'OFFLINE' | 'DISCONNECTED' | 'REVOKED' = 'OFFLINE';
+  if (row.is_revoked) {
+    effectiveStatus = 'REVOKED';
+  } else if (row.status === 'DISCONNECTED') {
+    effectiveStatus = 'DISCONNECTED';
+  } else if (isOnline) {
+    effectiveStatus = 'ONLINE';
+  } else {
+    effectiveStatus = 'OFFLINE';
+  }
 
   return {
-    connected: true,
+    connected: isOnline,
     agentId: row.agent_id,
     deviceName: row.device_name,
-    status: isOnline ? 'ONLINE' : (row.status as any),
+    status: effectiveStatus,
     lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
+    heartbeatAgeSeconds: heartbeatAgeMs !== null ? Math.floor(heartbeatAgeMs / 1000) : null,
     connectedAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-    printersCount: Number(row.printer_count) || 0
+    printersCount: isOnline ? (Number(row.printer_count) || 0) : 0,
+    evaluatedAt: nowIso
   };
 }
 
 export async function getPrintAgentStatus(agentId: string, shopId: string): Promise<{
-  status: 'ONLINE' | 'OFFLINE';
-  lastSeen: string;
+  status: 'ONLINE' | 'OFFLINE' | 'DISCONNECTED' | 'REVOKED';
+  isOnline: boolean;
+  lastSeen: string | null;
+  heartbeatAgeSeconds: number | null;
+  lastSeenText: string;
   connectedPrintersCount: number;
+  evaluatedAt: string;
 } | null> {
   const candidateShopIds = await getCandidateShopIds(shopId);
   const result = await requirePostgresPool().query(
@@ -1739,11 +1766,37 @@ export async function getPrintAgentStatus(agentId: string, shopId: string): Prom
   if (result.rowCount !== 1) return null;
   const row = result.rows[0];
   const lastSeenMs = row.last_seen ? new Date(row.last_seen).getTime() : 0;
-  const online = !row.is_revoked && row.status === 'ONLINE' && Date.now() - lastSeenMs <= 60_000;
+  const heartbeatAgeMs = row.last_seen ? Math.max(0, Date.now() - lastSeenMs) : null;
+  const HEARTBEAT_TIMEOUT_MS = 15_000;
+  const online = !row.is_revoked && row.status === 'ONLINE' && heartbeatAgeMs !== null && heartbeatAgeMs <= HEARTBEAT_TIMEOUT_MS;
+
+  let effectiveStatus: 'ONLINE' | 'OFFLINE' | 'DISCONNECTED' | 'REVOKED' = 'OFFLINE';
+  if (row.is_revoked) {
+    effectiveStatus = 'REVOKED';
+  } else if (row.status === 'DISCONNECTED') {
+    effectiveStatus = 'DISCONNECTED';
+  } else if (online) {
+    effectiveStatus = 'ONLINE';
+  } else {
+    effectiveStatus = 'OFFLINE';
+  }
+
+  const ageSecs = heartbeatAgeMs !== null ? Math.floor(heartbeatAgeMs / 1000) : null;
+
   return {
-    status: online ? 'ONLINE' : 'OFFLINE',
-    lastSeen: online ? `Heartbeat ${Math.floor((Date.now() - lastSeenMs) / 1000)}s ago` : row.is_revoked ? 'Revoked' : 'Not connected',
-    connectedPrintersCount: Number(row.printer_count) || 0
+    status: effectiveStatus,
+    isOnline: online,
+    lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
+    heartbeatAgeSeconds: ageSecs,
+    lastSeenText: online
+      ? `Heartbeat ${ageSecs}s ago`
+      : row.is_revoked
+      ? 'Revoked'
+      : row.last_seen
+      ? `Disconnected (${ageSecs}s ago)`
+      : 'Not connected',
+    connectedPrintersCount: online ? (Number(row.printer_count) || 0) : 0,
+    evaluatedAt: new Date().toISOString()
   };
 }
 

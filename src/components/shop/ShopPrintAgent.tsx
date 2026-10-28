@@ -76,6 +76,9 @@ export const ShopPrintAgent: React.FC = () => {
     connectedAt: string | null;
   } | null>(null);
 
+  // Request sequence ref to prevent stale async API responses from overwriting newer states
+  const requestSeqRef = React.useRef(0);
+
   // Tab navigation: OVERVIEW, CREDENTIALS, INSTALL
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CREDENTIALS' | 'INSTALL'>('OVERVIEW');
 
@@ -95,11 +98,14 @@ export const ShopPrintAgent: React.FC = () => {
 
   const refreshStatus = async (manual = false) => {
     if (manual) setIsRefreshing(true);
+    const seq = ++requestSeqRef.current;
     try {
       const response = await fetch(
         `/api/agent/active-status?shopId=${encodeURIComponent(activeShop?.id || '')}`
       );
       const data = await response.json();
+      if (seq !== requestSeqRef.current) return;
+
       if (!response.ok || !data.success) {
         setConnectionStatus('OFFLINE');
         setLastHeartbeat('Disconnected');
@@ -109,9 +115,8 @@ export const ShopPrintAgent: React.FC = () => {
         return;
       }
 
-      if (data.connected) {
-        const isOnline = data.status === 'ONLINE';
-        setConnectionStatus(isOnline ? 'ONLINE' : 'OFFLINE');
+      if (data.connected && data.status === 'ONLINE') {
+        setConnectionStatus('ONLINE');
         setLastHeartbeat(data.lastSeen ? new Date(data.lastSeen).toLocaleString() : 'Connected');
         setConnectedPrinters(data.printersCount || 0);
         setActiveDeviceInfo({
@@ -121,19 +126,20 @@ export const ShopPrintAgent: React.FC = () => {
         });
       } else {
         setConnectionStatus('OFFLINE');
-        setLastHeartbeat('Disconnected');
+        setLastHeartbeat(data.lastSeen ? `Last seen: ${new Date(data.lastSeen).toLocaleString()}` : 'Disconnected');
         setConnectedPrinters(0);
         setActiveDeviceInfo(null);
       }
       setConnectionError(null);
     } catch {
+      if (seq !== requestSeqRef.current) return;
       setConnectionStatus('ERROR');
       setLastHeartbeat('Unavailable');
       setConnectedPrinters(0);
       setActiveDeviceInfo(null);
       setConnectionError('Backend service unavailable');
     } finally {
-      if (manual) {
+      if (manual && seq === requestSeqRef.current) {
         setTimeout(() => setIsRefreshing(false), 300);
       }
     }
@@ -164,19 +170,16 @@ export const ShopPrintAgent: React.FC = () => {
   };
 
   useEffect(() => {
-    let isCurrent = true;
     const fetchInitial = async () => {
-      if (!isCurrent) return;
       await refreshStatus();
     };
 
     void fetchInitial();
     const timer = window.setInterval(() => {
-      if (isCurrent) void refreshStatus();
-    }, 15000);
+      void refreshStatus();
+    }, 10000);
 
     return () => {
-      isCurrent = false;
       window.clearInterval(timer);
     };
   }, [shopAgent.id, shopAgent.shopId]);
@@ -296,7 +299,7 @@ export const ShopPrintAgent: React.FC = () => {
 
       {/* 2.5 CONNECTION STATUS & SINGLE-DEVICE CARD */}
       <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-3">
-        {activeDeviceInfo || connectionStatus === 'ONLINE' ? (
+        {connectionStatus === 'ONLINE' && activeDeviceInfo ? (
           /* When Connected */
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div className="space-y-1">

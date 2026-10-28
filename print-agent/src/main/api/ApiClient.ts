@@ -37,7 +37,7 @@ export class ApiClient {
     shopId: string;
     authToken: string;
     deviceName?: string;
-  }): Promise<{ success: boolean; agentId?: string; shopId?: string; error?: string }> {
+  }): Promise<{ success: boolean; agentId?: string; shopId?: string; error?: string; code?: string; activeDevice?: any }> {
     let backendUrl: URL;
     try {
       backendUrl = new URL(pairingData.serverUrl);

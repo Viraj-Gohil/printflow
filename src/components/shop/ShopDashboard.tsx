@@ -53,15 +53,18 @@ export const ShopDashboard: React.FC = () => {
     reason: string;
   } | null>(null);
 
+  const dashSeqRef = React.useRef(0);
+
   React.useEffect(() => {
-    let isMounted = true;
     const fetchStatus = async () => {
       if (!activeShop?.slug) return;
+      const seq = ++dashSeqRef.current;
       try {
         const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(activeShop.slug)}/agent-status`));
+        if (seq !== dashSeqRef.current) return;
         if (res.ok) {
           const data = await res.json();
-          if (data.success && data.availability && isMounted) {
+          if (data.success && data.availability) {
             setAgentStatus(data.availability);
           }
         }
@@ -72,7 +75,6 @@ export const ShopDashboard: React.FC = () => {
     void fetchStatus();
     const interval = window.setInterval(() => void fetchStatus(), 10000);
     return () => {
-      isMounted = false;
       window.clearInterval(interval);
     };
   }, [activeShop?.slug]);

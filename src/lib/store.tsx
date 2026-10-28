@@ -123,6 +123,7 @@ interface AppContextType {
   users: UserProfile[];
   currentUser: UserProfile | null;
   isAuthenticated: boolean;
+  isAuthRestored: boolean;
   setCurrentUser: (user: UserProfile | null) => void;
   registerShop: (data: {
     shopName: string;
@@ -371,6 +372,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Current authenticated user (null by default; authenticates upon login or registration)
   const [currentUser, setCurrentUser] = useState<UserProfile | null>(null);
+  const [isAuthRestored, setIsAuthRestored] = useState<boolean>(false);
 
   // Cloud Synchronization & Observability States
   const [isLoadingData, setIsLoadingData] = useState<boolean>(false);
@@ -387,7 +389,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           if (data.user.shopId) setActiveShopIdState(data.user.shopId);
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => {
+        setIsAuthRestored(true);
+      });
   }, []);
 
   // Public shops loader: fetch live shops from Supabase for public directory and customers
@@ -2580,6 +2585,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         users,
         currentUser,
         isAuthenticated,
+        isAuthRestored,
         setCurrentUser,
         registerShop,
         login,

@@ -27,3 +27,36 @@ export function apiUrl(endpoint: string): string {
   return `${getApiBaseUrl()}${cleanEndpoint}`;
 }
 
+export function getAuthToken(): string | null {
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      return window.localStorage.getItem('printflow_access_token');
+    }
+  } catch {
+    // Restricted storage contexts
+  }
+  return null;
+}
+
+export async function authenticatedFetch(endpoint: string, options: RequestInit = {}): Promise<Response> {
+  const url = apiUrl(endpoint);
+  const token = getAuthToken();
+
+  const headers = new Headers(options.headers || {});
+  if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
+  }
+  if (token && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const fetchOptions: RequestInit = {
+    ...options,
+    headers,
+    credentials: options.credentials || 'include'
+  };
+
+  return fetch(url, fetchOptions);
+}
+
+

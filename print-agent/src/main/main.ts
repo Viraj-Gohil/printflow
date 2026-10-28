@@ -340,7 +340,7 @@ ipcMain.handle('logs:export', async () => {
     defaultPath: `printflow-agent-logs-${new Date().toISOString().slice(0, 10)}.json`,
     filters: [{ name: 'JSON', extensions: ['json'] }]
   };
-  const result = mainWindow && !mainWindow.isDestroyed()
+  const result: any = mainWindow && !mainWindow.isDestroyed()
     ? await dialog.showSaveDialog(mainWindow, options)
     : await dialog.showSaveDialog(options);
   if (result.canceled || !result.filePath) return { success: false };
