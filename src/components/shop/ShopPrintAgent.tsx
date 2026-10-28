@@ -18,7 +18,9 @@ import {
   Activity,
   X,
   RefreshCw,
-  Info
+  Info,
+  LogOut,
+  Laptop
 } from 'lucide-react';
 import { Chip } from '../ui/Chip';
 import { Button } from '../ui/Button';
@@ -66,6 +68,13 @@ export const ShopPrintAgent: React.FC = () => {
   const [connectedPrinters, setConnectedPrinters] = useState<number>(0);
   const [connectionError, setConnectionError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDisconnecting, setIsDisconnecting] = useState(false);
+  const [showDisconnectModal, setShowDisconnectModal] = useState(false);
+  const [activeDeviceInfo, setActiveDeviceInfo] = useState<{
+    deviceName: string;
+    lastSeen: string | null;
+    connectedAt: string | null;
+  } | null>(null);
 
   // Tab navigation: OVERVIEW, CREDENTIALS, INSTALL
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'CREDENTIALS' | 'INSTALL'>('OVERVIEW');
@@ -88,38 +97,69 @@ export const ShopPrintAgent: React.FC = () => {
     if (manual) setIsRefreshing(true);
     try {
       const response = await fetch(
-        `/api/agent/${encodeURIComponent(shopAgent.id)}/status?shopId=${encodeURIComponent(shopAgent.shopId)}`
+        `/api/agent/active-status?shopId=${encodeURIComponent(activeShop?.id || '')}`
       );
-      const data = (await response.json()) as {
-        success?: boolean;
-        status?: 'ONLINE' | 'OFFLINE';
-        lastSeen?: string;
-        connectedPrintersCount?: number;
-        error?: string;
-      };
-
+      const data = await response.json();
       if (!response.ok || !data.success) {
         setConnectionStatus('OFFLINE');
-        setLastHeartbeat(data.lastSeen || 'Status unavailable');
+        setLastHeartbeat('Disconnected');
         setConnectedPrinters(0);
+        setActiveDeviceInfo(null);
         setConnectionError(data.error || 'Agent not responding');
         return;
       }
 
-      const isOnline = data.status === 'ONLINE';
-      setConnectionStatus(isOnline ? 'ONLINE' : 'OFFLINE');
-      setLastHeartbeat(data.lastSeen || (isOnline ? 'Active just now' : 'Not connected'));
-      setConnectedPrinters(data.connectedPrintersCount || 0);
+      if (data.connected) {
+        const isOnline = data.status === 'ONLINE';
+        setConnectionStatus(isOnline ? 'ONLINE' : 'OFFLINE');
+        setLastHeartbeat(data.lastSeen ? new Date(data.lastSeen).toLocaleString() : 'Connected');
+        setConnectedPrinters(data.printersCount || 0);
+        setActiveDeviceInfo({
+          deviceName: data.deviceName || 'Counter PC',
+          lastSeen: data.lastSeen,
+          connectedAt: data.connectedAt
+        });
+      } else {
+        setConnectionStatus('OFFLINE');
+        setLastHeartbeat('Disconnected');
+        setConnectedPrinters(0);
+        setActiveDeviceInfo(null);
+      }
       setConnectionError(null);
     } catch {
       setConnectionStatus('ERROR');
       setLastHeartbeat('Unavailable');
       setConnectedPrinters(0);
+      setActiveDeviceInfo(null);
       setConnectionError('Backend service unavailable');
     } finally {
       if (manual) {
         setTimeout(() => setIsRefreshing(false), 300);
       }
+    }
+  };
+
+  const handleDisconnectAgent = async () => {
+    setIsDisconnecting(true);
+    try {
+      const response = await fetch('/api/agent/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ shopId: activeShop?.id })
+      });
+      const data = await response.json();
+      if (data.success) {
+        setShowDisconnectModal(false);
+        setRegenSuccessMsg('Print agent disconnected successfully. Shop active device assignment released.');
+        setTimeout(() => setRegenSuccessMsg(null), 5000);
+        await refreshStatus(true);
+      } else {
+        setConnectionError(data.error || 'Failed to disconnect print agent.');
+      }
+    } catch (err: any) {
+      setConnectionError(err?.message || 'Failed to disconnect print agent.');
+    } finally {
+      setIsDisconnecting(false);
     }
   };
 
@@ -250,6 +290,142 @@ export const ShopPrintAgent: React.FC = () => {
           <div className="flex items-center gap-2">
             <AlertTriangle className="w-4 h-4 text-red-600 shrink-0" />
             <span>{connectionError}. Local queue processing may be paused until connectivity restores.</span>
+          </div>
+        </div>
+      )}
+
+      {/* 2.5 CONNECTION STATUS & SINGLE-DEVICE CARD */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-3">
+        {activeDeviceInfo || connectionStatus === 'ONLINE' ? (
+          /* When Connected */
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                  Status: Connected
+                </span>
+                <span className="text-xs font-semibold text-slate-800">
+                  Shop: {activeShop.name}
+                </span>
+              </div>
+              <div className="flex items-center gap-4 text-xs text-slate-600 flex-wrap pt-0.5">
+                <span className="flex items-center gap-1 font-mono">
+                  <Laptop className="w-3.5 h-3.5 text-slate-400" />
+                  <strong>Device Host:</strong> {activeDeviceInfo?.deviceName || shopAgent.deviceName}
+                </span>
+                <span className="flex items-center gap-1">
+                  <Clock className="w-3.5 h-3.5 text-slate-400" />
+                  <strong>Connected:</strong> {lastHeartbeat}
+                </span>
+              </div>
+            </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowDisconnectModal(true)}
+              className="text-red-600 hover:text-red-700 hover:bg-red-50 border-red-200 shrink-0 cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+              <span>Disconnect Agent</span>
+            </Button>
+          </div>
+        ) : (
+          /* When Disconnected */
+          <div className="space-y-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
+                <span className="w-2 h-2 rounded-full bg-slate-400" />
+                Status: Disconnected
+              </span>
+              <span className="text-xs text-slate-500">
+                Shop: <strong className="text-slate-800">{activeShop.name}</strong>
+              </span>
+            </div>
+
+            <div className="p-3 bg-blue-50 border border-blue-200 rounded-xl text-xs text-blue-900 flex items-start gap-2.5">
+              <ShieldCheck className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="font-semibold">Automatic Device Handover</p>
+                <p className="text-blue-800 mt-0.5 leading-relaxed">
+                  Each shop can have only <strong>ONE active Print Agent device</strong> at a time. When you connect a new PC with your shop credentials, the previous PC is automatically disconnected and the new PC becomes the active print station.
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+              <div className="p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Shop ID</span>
+                  <span className="text-xs font-mono font-bold text-slate-800">{activeShop.id}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyText(activeShop.id, 'Shop ID')}
+                  className="p-1 hover:bg-slate-200 rounded text-slate-500 cursor-pointer"
+                  title="Copy Shop ID"
+                >
+                  {copiedKey === 'Shop ID' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+
+              <div className="p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-between">
+                <div className="truncate mr-2">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Agent Auth Token</span>
+                  <span className="text-xs font-mono font-bold text-slate-800 truncate block">
+                    {visibleToken ? `${visibleToken.slice(0, 16)}...` : 'agt_tok_...'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={copyToken}
+                  className="p-1 hover:bg-slate-200 rounded text-slate-500 shrink-0 cursor-pointer"
+                  title="Copy Token"
+                >
+                  {tokenCopied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Disconnect Confirmation Modal */}
+      {showDisconnectModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in">
+          <div className="bg-white border border-slate-200 p-6 rounded-2xl shadow-2xl space-y-4 max-w-sm w-full text-center">
+            <div className="w-12 h-12 rounded-full bg-red-50 text-red-600 flex items-center justify-center mx-auto">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-bold text-slate-900">
+                Disconnect Print Agent?
+              </h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                Disconnect this Print Agent from this PC? Printing will stop until the agent is connected again.
+              </p>
+            </div>
+            <div className="flex items-center justify-center gap-2.5 pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowDisconnectModal(false)}
+                disabled={isDisconnecting}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="solid"
+                size="sm"
+                onClick={() => void handleDisconnectAgent()}
+                disabled={isDisconnecting}
+                className="bg-red-600 hover:bg-red-700 text-white flex-1"
+              >
+                {isDisconnecting ? 'Disconnecting...' : 'Disconnect'}
+              </Button>
+            </div>
           </div>
         </div>
       )}

@@ -23,6 +23,7 @@ export class PrintAgentService {
   private pollFailureCount = 0;
   private mainWindow?: BrowserWindow | null;
   private onStatusChangeListener?: (status: AgentConnectionStatus) => void;
+  private revocationReason: string | null = null;
 
   private constructor() {
     const config = localVault.getConfig();
@@ -194,6 +195,12 @@ export class PrintAgentService {
         }
         return { success: true, status: res.status };
       }
+
+      if (res.sessionReplaced || res.code === 'SESSION_REPLACED' || res.error?.includes('replaced by another device')) {
+        await this.handleSessionReplaced(res.error || 'This agent session has been replaced by another device.');
+        return { success: false, status: 'REVOKED' };
+      }
+
       this.setStatus('ERROR');
       logger.warn('NETWORK', `Heartbeat ping failed: ${res.error}`);
       return { success: false };
@@ -204,8 +211,8 @@ export class PrintAgentService {
 
   public async pollPendingJobs(): Promise<{ success: boolean; newJobsCount: number; error?: string }> {
     if (this.pairingInProgress) return { success: false, newJobsCount: 0, error: 'Device pairing is in progress.' };
-    if (this.currentStatus === 'RESTRICTED' || this.currentStatus === 'UNAUTHORIZED') {
-      return { success: false, newJobsCount: 0, error: 'Shop account or subscription is currently restricted.' };
+    if (this.currentStatus === 'RESTRICTED' || this.currentStatus === 'UNAUTHORIZED' || this.currentStatus === 'REVOKED') {
+      return { success: false, newJobsCount: 0, error: 'Shop account or device session is currently restricted or revoked.' };
     }
     if (this.pollingInProgress) return { success: false, newJobsCount: 0, error: 'A queue check is already running.' };
     this.pollingInProgress = true;
@@ -215,7 +222,12 @@ export class PrintAgentService {
       if (requestRevision !== this.configRevision) {
         return { success: false, newJobsCount: 0, error: 'Device configuration changed during the queue check.' };
       }
+
       if (!res.success) {
+        if (res.sessionReplaced || res.code === 'SESSION_REPLACED' || res.error?.includes('replaced by another device')) {
+          await this.handleSessionReplaced(res.error || 'This agent session has been replaced by another device.');
+          return { success: false, newJobsCount: 0, error: res.error };
+        }
         logger.warn('NETWORK', `Could not fetch the print queue: ${res.error || 'backend request failed'}`);
         return { success: false, newJobsCount: 0, error: res.error || 'The backend request failed.' };
       }
@@ -428,6 +440,44 @@ export class PrintAgentService {
       : { success: false, error: 'Authenticated connection check failed. Check the backend URL and device credentials.' };
   }
 
+  public async disconnectDevice(): Promise<{ success: boolean; error?: string }> {
+    logger.info('AUTH', 'Initiating secure agent disconnect from shop...');
+    try {
+      const config = localVault.getConfig();
+      if (config.authToken && config.agentId) {
+        await this.apiClient.disconnectDevice();
+      }
+    } catch (err: any) {
+      logger.warn('AUTH', `Backend disconnect notification error: ${err.message}`);
+    }
+
+    // Stop background polling and heartbeat loops
+    this.stop();
+
+    // Safely handle currently printing or downloading jobs: never mark unfinished job as completed!
+    const activeJobs = localVault.getAllJobs().filter(
+      (job) => job.printStatus === 'PRINTING' || job.printStatus === 'DOWNLOADING'
+    );
+    for (const job of activeJobs) {
+      job.printStatus = 'REQUIRES_ATTENTION';
+      job.errorMessage = 'Printing stopped: agent was disconnected from counter PC. Verify physical output.';
+      job.updatedAt = new Date().toISOString();
+      localVault.saveJob(job);
+      logger.warn('SPOOLER', `Job ${job.id} interrupted due to agent disconnect; marked REQUIRES_ATTENTION.`);
+    }
+
+    try {
+      localVault.resetConfig();
+      this.apiClient.updateConfig(localVault.getConfig());
+      this.configRevision++;
+      this.setStatus('DISCONNECTED');
+      logger.info('AUTH', 'Agent device disconnected successfully. Stored credentials purged.');
+      return { success: true };
+    } catch (error) {
+      return { success: false, error: error instanceof Error ? error.message : 'Unable to purge agent settings.' };
+    }
+  }
+
   public resetConfig(): { success: boolean; error?: string } {
     if (this.queueManager.isProcessingJob()) {
       return { success: false, error: 'Wait for the active download or print operation to finish before resetting settings.' };
@@ -444,10 +494,44 @@ export class PrintAgentService {
     }
   }
 
-  public getStatus(): { status: AgentConnectionStatus; lastHeartbeat: string | null } {
+  public async handleSessionReplaced(reason: string = 'This agent session has been replaced by another device.'): Promise<void> {
+    logger.warn('AUTH', `Session handover detected: ${reason}. Halting active loops and safely stopping print processing.`);
+
+    // 1. Immediately stop background polling and heartbeat loops
+    this.stop();
+
+    // 2. Safely handle currently printing/downloading jobs: never mark unfinished job as completed or blind reprint
+    const activeJobs = localVault.getAllJobs().filter(
+      (job) => job.printStatus === 'PRINTING' || job.printStatus === 'DOWNLOADING'
+    );
+    for (const job of activeJobs) {
+      job.printStatus = 'REQUIRES_ATTENTION';
+      job.errorMessage = 'Printing stopped: agent session was replaced by another device. Verify physical print output before resuming.';
+      job.updatedAt = new Date().toISOString();
+      localVault.saveJob(job);
+      logger.warn('SPOOLER', `Job ${job.id} interrupted due to session handover; marked REQUIRES_ATTENTION.`);
+    }
+
+    // 3. Clear active auth credentials in local vault so old session cannot reconnect automatically
+    localVault.saveConfig({
+      authToken: '',
+      hasStoredCredentials: false
+    });
+    this.apiClient.updateConfig(localVault.getConfig());
+    this.configRevision++;
+
+    // 4. Update status to REVOKED and save revocation message
+    this.revocationReason = reason;
+    this.setStatus('REVOKED');
+  }
+
+  public getStatus(): { status: AgentConnectionStatus; lastHeartbeat: string | null; error?: string } {
     return {
       status: this.currentStatus,
-      lastHeartbeat: localVault.getLastHeartbeatAt()
+      lastHeartbeat: localVault.getLastHeartbeatAt(),
+      error: this.currentStatus === 'REVOKED'
+        ? (this.revocationReason || 'This agent session has been replaced by another device.')
+        : undefined
     };
   }
 }

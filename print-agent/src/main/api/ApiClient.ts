@@ -71,9 +71,21 @@ export class ApiClient {
         })
       });
 
-      const data = (await response.json()) as { success?: boolean; error?: string; shopId?: string; agentId?: string };
+      const data = (await response.json().catch(() => ({}))) as {
+        success?: boolean;
+        error?: string;
+        shopId?: string;
+        agentId?: string;
+        code?: string;
+        activeDevice?: any;
+      };
       if (!response.ok || !data.success) {
-        return { success: false, error: data.error || `Pairing failed with status ${response.status}` };
+        return {
+          success: false,
+          error: data.error || `Pairing failed with status ${response.status}`,
+          code: data.code,
+          activeDevice: data.activeDevice
+        };
       }
       if (data.shopId !== pairingData.shopId || typeof data.agentId !== 'string' || !data.agentId) {
         return { success: false, error: 'The server returned an invalid device identity.' };
@@ -88,9 +100,32 @@ export class ApiClient {
   }
 
   /**
+   * Securely disconnects this desktop agent from the backend shop
+   */
+  public async disconnectDevice(): Promise<{ success: boolean; error?: string }> {
+    const url = `${this.getBaseUrl()}/api/agent/disconnect`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders()
+      });
+      const data = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      return { success: response.ok && Boolean(data.success), error: data.error };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
    * Sends heartbeat ping to maintain online status and acknowledge connectivity
    */
-  public async sendHeartbeat(): Promise<{ success: boolean; status?: string; error?: string }> {
+  public async sendHeartbeat(): Promise<{
+    success: boolean;
+    status?: string;
+    error?: string;
+    code?: string;
+    sessionReplaced?: boolean;
+  }> {
     const url = `${this.getBaseUrl()}/api/agent/heartbeat`;
 
     try {
@@ -99,12 +134,22 @@ export class ApiClient {
         headers: this.getHeaders()
       });
 
-      if (!response.ok) {
-        const errText = await response.text();
-        return { success: false, error: `HTTP ${response.status}: ${errText}` };
+      const data = (await response.json().catch(() => ({}))) as {
+        success?: boolean;
+        status?: string;
+        error?: string;
+        code?: string;
+      };
+
+      if (!response.ok || !data.success) {
+        return {
+          success: false,
+          code: data.code,
+          sessionReplaced: data.code === 'SESSION_REPLACED' || data.error?.includes('replaced by another device'),
+          error: data.error || `HTTP ${response.status}`
+        };
       }
 
-      const data = (await response.json()) as { success?: boolean; status?: string };
       return { success: Boolean(data.success), status: data.status };
     } catch (err: any) {
       return { success: false, error: err.message };
@@ -212,7 +257,13 @@ export class ApiClient {
   /**
    * Fetches queued print jobs authorized for this shop
    */
-  public async fetchPendingJobs(): Promise<{ success: boolean; jobs: PrintJobItem[]; error?: string }> {
+  public async fetchPendingJobs(): Promise<{
+    success: boolean;
+    jobs: PrintJobItem[];
+    error?: string;
+    code?: string;
+    sessionReplaced?: boolean;
+  }> {
     const url = `${this.getBaseUrl()}/api/agent/jobs?shopId=${encodeURIComponent(this.config.shopId)}`;
 
     try {
@@ -221,12 +272,23 @@ export class ApiClient {
         headers: this.getHeaders()
       });
 
-      if (!response.ok) {
-        const errData = (await response.json().catch(() => ({}))) as { error?: string };
-        return { success: false, jobs: [], error: errData.error || `HTTP ${response.status}` };
+      const data = (await response.json().catch(() => ({}))) as {
+        success?: boolean;
+        jobs?: PrintJobItem[];
+        error?: string;
+        code?: string;
+      };
+
+      if (!response.ok || !data.success) {
+        return {
+          success: false,
+          jobs: [],
+          code: data.code,
+          sessionReplaced: data.code === 'SESSION_REPLACED' || data.error?.includes('replaced by another device'),
+          error: data.error || `HTTP ${response.status}`
+        };
       }
 
-      const data = (await response.json()) as { jobs?: PrintJobItem[] };
       return { success: true, jobs: data.jobs || [] };
     } catch (err: any) {
       return { success: false, jobs: [], error: err.message };

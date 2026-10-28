@@ -74,52 +74,44 @@ async function runOneAgentPolicyTests() {
   );
   assert.equal(activeCountRes.rows[0].count, 1, 'There must be exactly 1 active device record in database.');
 
-  // TEST 3: Second device pairing attempt gets REJECTED with clear error
-  console.log('Test 3: Second device pairing attempt gets rejected with one-agent-per-shop error');
-  let rejectedErrorMsg = '';
-  try {
-    await pairPrintAgent({
-      shopId: testShopId,
-      token: testTokenMaster,
-      deviceName: 'Laptop Counter 02',
-      agentId: testDevice2AgentId
-    });
-  } catch (err: any) {
-    rejectedErrorMsg = err?.message || '';
-  }
+  // TEST 3: Second device pairing performs automatic handover without requiring manual disconnect
+  console.log('Test 3: Second device pairing performs automatic handover (PC 2 takes over from PC 1)');
+  const handoverResult = await pairPrintAgent({
+    shopId: testShopId,
+    token: testTokenMaster,
+    deviceName: 'Laptop Counter 02',
+    agentId: testDevice2AgentId
+  });
 
-  assert.ok(
-    rejectedErrorMsg.includes('already registered'),
-    `Error must state that an agent is already registered. Received: ${rejectedErrorMsg}`
+  assert.ok(handoverResult, 'Handover must succeed automatically');
+  assert.equal(handoverResult.agentId, testDevice2AgentId, 'New device must be active');
+  assert.equal(handoverResult.handoverFrom, testDevice1AgentId, 'Must record previous device in handover');
+
+  // Verify only 1 active device remains
+  const activeCountAfterHandover = await pool.query(
+    'SELECT COUNT(*)::int as count FROM print_agent_devices WHERE shop_id IN ($1, $2) AND is_revoked = false',
+    [testShopId, testShopUuid]
   );
-  assert.equal(
-    rejectedErrorMsg,
-    'An agent is already registered for this shop. Disconnect or revoke the existing agent before pairing another device.'
+  assert.equal(activeCountAfterHandover.rows[0].count, 1, 'Strictly 1 active device permitted at any time');
+
+  // Verify previous device was revoked with reason REPLACED_BY_NEW_DEVICE
+  const prevDeviceRes = await pool.query(
+    'SELECT is_revoked, status, revocation_reason FROM print_agent_devices WHERE agent_id = $1',
+    [testDevice1AgentId]
   );
+  assert.equal(prevDeviceRes.rows[0].is_revoked, true);
+  assert.equal(prevDeviceRes.rows[0].revocation_reason, 'REPLACED_BY_NEW_DEVICE');
 
-  // TEST 4: Authorized revocation of device 1
-  console.log('Test 4: Authorized revocation of existing agent device');
-  const revoked = await revokePrintAgent(testDevice1AgentId);
-  assert.equal(revoked, true, 'Revocation of device 1 must return true');
-
+  // TEST 4: Revoked device 1 is rejected on authentication
+  console.log('Test 4: Revoked device 1 is rejected with SESSION_REPLACED');
   const authRevoked = await authenticatePrintAgent({
     agentId: testDevice1AgentId,
     token: testTokenMaster,
     targetShopId: testShopId
   });
   assert.equal(authRevoked.valid, false, 'Revoked device 1 must fail authentication');
-
-  // TEST 5: Replacement device pairing succeeds after revocation
-  console.log('Test 5: Replacement device pairing succeeds after previous device is revoked');
-  const replacementDevice = await pairPrintAgent({
-    shopId: testShopId,
-    token: testTokenMaster + '_replacement',
-    deviceName: 'Laptop Counter 02 (Replacement)',
-    agentId: testDevice2AgentId
-  });
-
-  assert.ok(replacementDevice, 'Replacement device pairing must succeed after previous agent was revoked');
-  assert.equal(replacementDevice.agentId, testDevice2AgentId);
+  assert.equal(authRevoked.code, 'SESSION_REPLACED');
+  assert.equal(authRevoked.error, 'This agent session has been replaced by another device.');
 
   // TEST 6: Cross-shop token misuse prevention
   console.log('Test 6: Cross-shop token misuse is strictly rejected');

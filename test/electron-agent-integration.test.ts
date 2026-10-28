@@ -20,8 +20,9 @@ async function runAgentIntegrationTests() {
   console.log('--- STARTING ELECTRON AGENT INTEGRATION TEST SUITE ---');
   const pool = requirePostgresPool();
 
-  // Clean up test agent record
-  await pool.query('DELETE FROM print_agent_devices WHERE agent_id = $1', [testAgentId]);
+  // Clean up test agent record & shop devices
+  const candidateIds = await getCandidateShopIds(testClientShopId);
+  await pool.query('DELETE FROM print_agent_devices WHERE agent_id = $1 OR shop_id = ANY($2::text[])', [testAgentId, candidateIds]);
 
   // TEST 1: Pair print agent device
   console.log('Test 1: Secure agent device pairing');

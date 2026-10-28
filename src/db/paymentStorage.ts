@@ -93,8 +93,8 @@ export interface StoredPrintAgentJob {
   printerName?: string;
   claimedBy?: string;
   claimedAt?: string;
-  createdAt: string;
-  updatedAt: string;
+  createdAt?: string;
+  updatedAt?: string;
   errorMessage?: string;
   retrySafe?: boolean;
   pagesPrinted?: number;
@@ -247,13 +247,17 @@ export async function initializePaymentTables(maxRetries = 3): Promise<void> {
           agent_id VARCHAR(128) PRIMARY KEY,
           shop_id VARCHAR(128) NOT NULL,
           device_name VARCHAR(128) NOT NULL,
-          token_hash CHAR(64) NOT NULL UNIQUE,
+          token_hash CHAR(64) NOT NULL,
           is_revoked BOOLEAN NOT NULL DEFAULT false,
           status VARCHAR(16) NOT NULL DEFAULT 'OFFLINE',
           last_seen TIMESTAMP WITH TIME ZONE,
           printers JSONB NOT NULL DEFAULT '[]'::jsonb,
           created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+          revocation_reason VARCHAR(64)
+        );
+        ALTER TABLE print_agent_devices DROP CONSTRAINT IF EXISTS print_agent_devices_token_hash_key;
+        ALTER TABLE print_agent_devices ADD COLUMN IF NOT EXISTS revocation_reason VARCHAR(64);
         CREATE INDEX IF NOT EXISTS idx_print_agent_devices_shop ON print_agent_devices(shop_id);
         CREATE UNIQUE INDEX IF NOT EXISTS idx_one_active_agent_per_shop ON print_agent_devices(shop_id) WHERE (is_revoked = false);
 
@@ -935,12 +939,15 @@ export async function getShopAgentAvailability(shopId: string): Promise<ShopAgen
 
 export async function insertPrintAgentJob<T extends StoredPrintAgentJob>(
   job: T,
-  files: PrintAgentJobFile[]
+  files: PrintAgentJobFile[] = []
 ): Promise<T | null> {
   const canonicalShopId = await resolvePrintFlowShopId(job.shopId);
+  const now = new Date().toISOString();
   const normalizedJob: T = {
     ...job,
-    shopId: canonicalShopId
+    shopId: canonicalShopId,
+    createdAt: (job as any).createdAt || now,
+    updatedAt: (job as any).updatedAt || now
   };
   const client = await requirePostgresPool().connect();
   try {
@@ -948,10 +955,20 @@ export async function insertPrintAgentJob<T extends StoredPrintAgentJob>(
     const inserted = await client.query(
       `INSERT INTO print_agent_jobs
          (job_id, order_id, shop_id, print_status, claimed_by, claimed_at, job_data, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, NULL, NULL, $5::jsonb, $6, $7)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9)
        ON CONFLICT (shop_id, order_id) DO NOTHING
        RETURNING job_id`,
-      [normalizedJob.id, normalizedJob.orderId, canonicalShopId, normalizedJob.printStatus, JSON.stringify(normalizedJob), normalizedJob.createdAt, normalizedJob.updatedAt]
+      [
+        normalizedJob.id,
+        normalizedJob.orderId,
+        canonicalShopId,
+        normalizedJob.printStatus,
+        (normalizedJob as any).claimedBy || null,
+        (normalizedJob as any).claimedAt || null,
+        JSON.stringify(normalizedJob),
+        normalizedJob.createdAt,
+        normalizedJob.updatedAt
+      ]
     );
     if (inserted.rowCount === 0) {
       await client.query('ROLLBACK');
@@ -1308,47 +1325,13 @@ export async function pairPrintAgent(params: {
   token: string;
   deviceName: string;
   agentId?: string;
-}): Promise<{ agentId: string; shopId: string; deviceName: string } | null> {
+}): Promise<{ agentId: string; shopId: string; deviceName: string; handoverFrom?: string | null } | null> {
   const canonicalShopId = await resolvePrintFlowShopId(params.shopId);
   const candidateShopIds = await getCandidateShopIds(params.shopId);
   const pool = requirePostgresPool();
   const tokenHash = hashAgentToken(params.token);
 
-  // 1. Check for existing active (un-revoked) agent for this shop
-  const existingRes = await pool.query(
-    `SELECT agent_id, shop_id, device_name, token_hash, is_revoked
-     FROM print_agent_devices
-     WHERE (shop_id = ANY($1::text[]) OR shop_id = $2) AND is_revoked = false
-     LIMIT 1`,
-    [candidateShopIds, canonicalShopId]
-  );
-
-  if (existingRes.rowCount && existingRes.rows.length > 0) {
-    const existing = existingRes.rows[0];
-
-    // Check if this is the SAME device reconnecting
-    const isSameDevice = params.agentId
-      ? params.agentId === existing.agent_id
-      : existing.token_hash === tokenHash;
-
-    if (isSameDevice) {
-      // Reconnecting same device - update device_name and timestamp
-      await pool.query(
-        `UPDATE print_agent_devices
-         SET device_name = $2, updated_at = NOW()
-         WHERE agent_id = $1`,
-        [existing.agent_id, params.deviceName]
-      );
-      return { agentId: existing.agent_id, shopId: canonicalShopId, deviceName: params.deviceName };
-    } else {
-      // Second / different device attempting to pair while an active agent exists for this shop
-      throw new Error(
-        'An agent is already registered for this shop. Disconnect or revoke the existing agent before pairing another device.'
-      );
-    }
-  }
-
-  // 2. Validate token authorization if not a default token
+  // 1. Validate token authorization before performing any state changes
   const expectedDefaultToken = getDeterministicAgentToken(canonicalShopId);
   const isAuthorizedDefaultToken =
     params.token === expectedDefaultToken ||
@@ -1364,69 +1347,165 @@ export async function pairPrintAgent(params: {
     }
   }
 
-  // 3. No active agent exists for this shop -> Insert new agent device pairing
-  const newAgentId = params.agentId || `agent_${canonicalShopId}_${crypto.randomBytes(4).toString('hex')}`;
-
+  // 2. Perform Atomic Handover in a Transaction with row-level locking
+  const client = await pool.connect();
   try {
-    await pool.query(
-      `INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
-       VALUES ($1, $2, $3, $4, false, 'OFFLINE', NULL, NOW())`,
-      [newAgentId, canonicalShopId, params.deviceName, tokenHash]
+    await client.query('BEGIN');
+
+    // Lock active device(s) for this shop to guarantee serial execution and prevent race conditions
+    const existingRes = await client.query(
+      `SELECT agent_id, shop_id, device_name, token_hash, is_revoked, status
+       FROM print_agent_devices
+       WHERE (shop_id = ANY($1::text[]) OR shop_id = $2) AND is_revoked = false
+       FOR UPDATE`,
+      [candidateShopIds, canonicalShopId]
     );
-  } catch (err: any) {
-    if (err?.code === '23505' || err?.message?.includes('idx_one_active_agent_per_shop')) {
-      throw new Error(
-        'An agent is already registered for this shop. Disconnect or revoke the existing agent before pairing another device.'
+
+    let handoverFromAgentId: string | null = null;
+
+    if (existingRes.rowCount && existingRes.rows.length > 0) {
+      const existing = existingRes.rows[0];
+      const isSameDevice = params.agentId
+        ? params.agentId === existing.agent_id
+        : existing.token_hash === tokenHash;
+
+      if (isSameDevice) {
+        // Same device reconnecting / updating name: keep active, refresh status
+        await client.query(
+          `UPDATE print_agent_devices
+           SET device_name = $2, status = 'ONLINE', last_seen = NOW(), updated_at = NOW(), revocation_reason = NULL
+           WHERE agent_id = $1`,
+          [existing.agent_id, params.deviceName]
+        );
+        await client.query('COMMIT');
+        return {
+          agentId: existing.agent_id,
+          shopId: params.shopId || canonicalShopId,
+          deviceName: params.deviceName,
+          handoverFrom: null
+        };
+      }
+
+      // DIFFERENT DEVICE -> AUTOMATIC HANDOVER
+      handoverFromAgentId = existing.agent_id;
+      // Revoke previous device's active session
+      await client.query(
+        `UPDATE print_agent_devices
+         SET is_revoked = true, status = 'DISCONNECTED', revocation_reason = 'REPLACED_BY_NEW_DEVICE', updated_at = NOW()
+         WHERE agent_id = $1`,
+        [existing.agent_id]
+      );
+
+      // Safely transition in-flight jobs claimed by previous device to REQUIRES_ATTENTION
+      await client.query(
+        `UPDATE print_agent_jobs
+         SET print_status = 'REQUIRES_ATTENTION',
+             job_data = jsonb_set(
+               COALESCE(job_data, '{}'::jsonb),
+               '{errorMessage}',
+               to_jsonb('Printing stopped: agent session was replaced by another device. Verify physical print output before resuming.'::text)
+             ),
+             updated_at = NOW()
+         WHERE claimed_by = $1 AND print_status IN ('PRINTING', 'DOWNLOADING')`,
+        [existing.agent_id]
+      );
+
+      // Any queued jobs claimed by the previous device are unclaimed so the new device can pick them up
+      await client.query(
+        `UPDATE print_agent_jobs
+         SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW()
+         WHERE claimed_by = $1 AND print_status = 'QUEUED'`,
+        [existing.agent_id]
       );
     }
-    throw err;
-  }
 
-  return { agentId: newAgentId, shopId: canonicalShopId, deviceName: params.deviceName };
+    // Insert or update new device as active
+    const newAgentId = params.agentId || `agent_${canonicalShopId}_${crypto.randomBytes(4).toString('hex')}`;
+    await client.query(
+      `INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at, revocation_reason)
+       VALUES ($1, $2, $3, $4, false, 'ONLINE', NOW(), NOW(), NULL)
+       ON CONFLICT (agent_id) DO UPDATE SET
+         shop_id = EXCLUDED.shop_id,
+         device_name = EXCLUDED.device_name,
+         token_hash = EXCLUDED.token_hash,
+         is_revoked = false,
+         status = 'ONLINE',
+         last_seen = NOW(),
+         updated_at = NOW(),
+         revocation_reason = NULL`,
+      [newAgentId, canonicalShopId, params.deviceName, tokenHash]
+    );
+
+    await client.query('COMMIT');
+    return {
+      agentId: newAgentId,
+      shopId: params.shopId || canonicalShopId,
+      deviceName: params.deviceName,
+      handoverFrom: handoverFromAgentId
+    };
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function authenticatePrintAgent(params: {
   agentId: string;
   token: string;
   targetShopId?: string;
-}): Promise<{ valid: boolean; shopId?: string; deviceName?: string; error?: string }> {
+}): Promise<{ valid: boolean; shopId?: string; deviceName?: string; error?: string; code?: string }> {
   const expectedDefaultToken = getDeterministicAgentToken(params.targetShopId || '');
   const isDefault = params.token === expectedDefaultToken || params.token === 'agt_tok_royal_cyber_counter_master_2026';
 
   const pool = requirePostgresPool();
   let result = await pool.query(
-    `SELECT shop_id, device_name, token_hash, is_revoked FROM print_agent_devices WHERE agent_id = $1`,
+    `SELECT shop_id, device_name, token_hash, is_revoked, revocation_reason FROM print_agent_devices WHERE agent_id = $1`,
     [params.agentId]
   );
   if (result.rowCount !== 1 && isDefault && params.targetShopId) {
     await pool.query(
-      `INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at)
-       VALUES ($1, $2, 'PrintFlow Agent', $3, false, 'OFFLINE', NULL, NOW())
+      `INSERT INTO print_agent_devices (agent_id, shop_id, device_name, token_hash, is_revoked, status, last_seen, updated_at, revocation_reason)
+       VALUES ($1, $2, 'PrintFlow Agent', $3, false, 'OFFLINE', NULL, NOW(), NULL)
        ON CONFLICT (agent_id) DO NOTHING`,
       [params.agentId, params.targetShopId, hashAgentToken(params.token)]
     );
     result = await pool.query(
-      `SELECT shop_id, device_name, token_hash, is_revoked FROM print_agent_devices WHERE agent_id = $1`,
+      `SELECT shop_id, device_name, token_hash, is_revoked, revocation_reason FROM print_agent_devices WHERE agent_id = $1`,
       [params.agentId]
     );
   }
-  if (result.rowCount !== 1) return { valid: false, error: 'Unrecognized agent device ID' };
+
+  if (result.rowCount !== 1) return { valid: false, error: 'Unrecognized agent device ID', code: 'UNAUTHORIZED' };
   const row = result.rows[0];
-  if (row.is_revoked) return { valid: false, error: 'Agent credentials have been revoked' };
+  if (row.is_revoked) {
+    if (row.revocation_reason === 'REPLACED_BY_NEW_DEVICE') {
+      return {
+        valid: false,
+        code: 'SESSION_REPLACED',
+        error: 'This agent session has been replaced by another device.'
+      };
+    }
+    return { valid: false, code: 'REVOKED', error: 'Agent credentials have been revoked' };
+  }
+
   const storedHash = Buffer.from(row.token_hash, 'hex');
   const suppliedHash = Buffer.from(hashAgentToken(params.token), 'hex');
   if (storedHash.length !== suppliedHash.length || !crypto.timingSafeEqual(storedHash, suppliedHash)) {
-    return { valid: false, error: 'Invalid agent authentication token' };
+    return { valid: false, error: 'Invalid agent authentication token', code: 'UNAUTHORIZED' };
   }
+
   if (params.targetShopId && row.shop_id !== params.targetShopId) {
     const [canonRow, canonTarget] = await Promise.all([
       resolvePrintFlowShopId(row.shop_id),
       resolvePrintFlowShopId(params.targetShopId)
     ]);
     if (canonRow !== canonTarget) {
-      return { valid: false, error: 'Agent is not authorized for the requested shop' };
+      return { valid: false, error: 'Agent is not authorized for the requested shop', code: 'UNAUTHORIZED' };
     }
   }
+
   const heartbeat = await pool.query(
     `UPDATE print_agent_devices
      SET status = 'ONLINE', last_seen = NOW(), updated_at = NOW()
@@ -1434,8 +1513,22 @@ export async function authenticatePrintAgent(params: {
      RETURNING agent_id`,
     [params.agentId, hashAgentToken(params.token)]
   );
-  if (heartbeat.rowCount !== 1) return { valid: false, error: 'Agent credentials have been revoked or rotated' };
-  return { valid: true, shopId: row.shop_id, deviceName: row.device_name };
+  if (heartbeat.rowCount !== 1) {
+    const check = await pool.query(
+      `SELECT revocation_reason, is_revoked FROM print_agent_devices WHERE agent_id = $1`,
+      [params.agentId]
+    );
+    if (check.rows[0]?.revocation_reason === 'REPLACED_BY_NEW_DEVICE') {
+      return {
+        valid: false,
+        code: 'SESSION_REPLACED',
+        error: 'This agent session has been replaced by another device.'
+      };
+    }
+    return { valid: false, code: 'REVOKED', error: 'Agent credentials have been revoked or rotated' };
+  }
+
+  return { valid: true, shopId: params.targetShopId || row.shop_id, deviceName: row.device_name };
 }
 
 export async function revokePrintAgent(agentId: string): Promise<boolean> {
@@ -1444,6 +1537,132 @@ export async function revokePrintAgent(agentId: string): Promise<boolean> {
     [agentId]
   );
   return result.rowCount === 1;
+}
+
+export async function disconnectPrintAgent(params: {
+  agentId?: string;
+  token?: string;
+  shopId?: string;
+}): Promise<{
+  success: boolean;
+  disconnectedAgentId?: string;
+  shopId?: string;
+  message?: string;
+}> {
+  const pool = requirePostgresPool();
+  let targetAgentId = params.agentId;
+  let targetShopId = params.shopId;
+
+  // 1. If called by agent with agentId + token:
+  if (params.agentId && params.token) {
+    const tokenHash = hashAgentToken(params.token);
+    const authRes = await pool.query(
+      `SELECT agent_id, shop_id, is_revoked FROM print_agent_devices WHERE agent_id = $1 AND token_hash = $2`,
+      [params.agentId, tokenHash]
+    );
+    if (authRes.rowCount !== 1) {
+      throw new Error('Invalid agent credentials. Disconnect failed.');
+    }
+    targetAgentId = authRes.rows[0].agent_id;
+    targetShopId = authRes.rows[0].shop_id;
+  } else if (params.shopId) {
+    // 2. If called by authorized shop owner with shopId:
+    const candidateShopIds = await getCandidateShopIds(params.shopId);
+    const canonicalShopId = await resolvePrintFlowShopId(params.shopId);
+    const findRes = await pool.query(
+      `SELECT agent_id, shop_id FROM print_agent_devices
+       WHERE (shop_id = ANY($1::text[]) OR shop_id = $2) AND is_revoked = false
+       LIMIT 1`,
+      [candidateShopIds, canonicalShopId]
+    );
+    if (findRes.rowCount && findRes.rows.length > 0) {
+      targetAgentId = findRes.rows[0].agent_id;
+      targetShopId = findRes.rows[0].shop_id;
+    } else {
+      // Idempotent: already disconnected
+      return { success: true, message: 'No active print agent was connected for this shop.' };
+    }
+  } else {
+    throw new Error('Either agent credentials or shopId are required to disconnect.');
+  }
+
+  if (targetAgentId) {
+    // Revoke the device session and mark disconnected
+    await pool.query(
+      `UPDATE print_agent_devices
+       SET is_revoked = true, status = 'DISCONNECTED', revocation_reason = 'MANUAL_DISCONNECT', updated_at = NOW()
+       WHERE agent_id = $1`,
+      [targetAgentId]
+    );
+
+    // Safely handle currently printing/downloading jobs: never mark unfinished job as completed!
+    // Interrupt in-progress prints safely by transitioning to REQUIRES_ATTENTION, preserving pending/paid jobs
+    await pool.query(
+      `UPDATE print_agent_jobs
+       SET print_status = 'REQUIRES_ATTENTION',
+           error_message = 'Printing stopped: agent device was disconnected. Verify physical print output before resuming.',
+           updated_at = NOW()
+       WHERE claimed_by = $1 AND print_status IN ('PRINTING', 'DOWNLOADING')`,
+      [targetAgentId]
+    ).catch(() => {});
+
+    // Unclaim any queued jobs so another device can claim them
+    await pool.query(
+      `UPDATE print_agent_jobs
+       SET claimed_by = NULL, claimed_at = NULL, updated_at = NOW()
+       WHERE claimed_by = $1 AND print_status = 'QUEUED'`,
+      [targetAgentId]
+    ).catch(() => {});
+
+    return { success: true, disconnectedAgentId: targetAgentId, shopId: targetShopId };
+  }
+
+  return { success: true };
+}
+
+export async function getActivePrintAgentForShop(shopId: string): Promise<{
+  connected: boolean;
+  agentId?: string;
+  deviceName?: string;
+  status: 'ONLINE' | 'OFFLINE' | 'DISCONNECTED';
+  lastSeen?: string | null;
+  connectedAt?: string | null;
+  printersCount: number;
+} | null> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(shopId);
+  const candidateShopIds = await getCandidateShopIds(shopId);
+
+  const res = await pool.query(
+    `SELECT agent_id, device_name, status, last_seen, created_at, updated_at, is_revoked,
+            jsonb_array_length(printers) AS printer_count
+     FROM print_agent_devices
+     WHERE (shop_id = ANY($1::text[]) OR shop_id = $2) AND is_revoked = false
+     LIMIT 1`,
+    [candidateShopIds, canonicalShopId]
+  );
+
+  if (!res.rowCount || res.rows.length === 0) {
+    return {
+      connected: false,
+      status: 'DISCONNECTED',
+      printersCount: 0
+    };
+  }
+
+  const row = res.rows[0];
+  const lastSeenMs = row.last_seen ? new Date(row.last_seen).getTime() : 0;
+  const isOnline = row.status === 'ONLINE' && Date.now() - lastSeenMs <= 60_000;
+
+  return {
+    connected: true,
+    agentId: row.agent_id,
+    deviceName: row.device_name,
+    status: isOnline ? 'ONLINE' : (row.status as any),
+    lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
+    connectedAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+    printersCount: Number(row.printer_count) || 0
+  };
 }
 
 export async function getPrintAgentStatus(agentId: string, shopId: string): Promise<{

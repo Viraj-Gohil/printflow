@@ -8,8 +8,10 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
   getHostname: (): Promise<string> => ipcRenderer.invoke('system:get-hostname'),
   saveConfig: (config: Partial<AgentConfig>): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('agent:save-config', config),
-  pairDevice: (pairingData: { serverUrl: string; shopId: string; authToken: string; deviceName?: string }): Promise<{ success: boolean; error?: string }> =>
+  pairDevice: (pairingData: { serverUrl: string; shopId: string; authToken: string; deviceName?: string }): Promise<{ success: boolean; error?: string; code?: string; activeDevice?: any }> =>
     ipcRenderer.invoke('agent:pair-device', pairingData),
+  disconnectDevice: (): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('agent:disconnect-device'),
   testConnection: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('agent:test-connection'),
   resetConfig: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('agent:reset-config'),
 

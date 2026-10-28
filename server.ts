@@ -47,6 +47,8 @@ import {
   pairPrintAgent,
   authenticatePrintAgent,
   revokePrintAgent,
+  disconnectPrintAgent,
+  getActivePrintAgentForShop,
   getPrintAgentStatus,
   savePrintAgentPrinters,
   getShopPrinterEntitlements,
@@ -4618,21 +4620,91 @@ app.post('/api/agent/pair', createRateLimiter(30), async (req: Request, res: Res
       agentId: (typeof agentId === 'string' && agentId.trim()) ? agentId.trim() : undefined
     });
     if (!device) return res.status(401).json({ success: false, error: 'Invalid or unauthorized agent token for this shop.' });
-    return res.json({ success: true, ...device, status: 'OFFLINE', pairedAt: new Date().toISOString() });
+
+    logger.info('Print agent paired successfully', {
+      agentId: device.agentId,
+      shopId: device.shopId,
+      deviceName: device.deviceName,
+      handoverFrom: (device as any).handoverFrom || null
+    });
+
+    return res.json({
+      success: true,
+      ...device,
+      status: 'ONLINE',
+      pairedAt: new Date().toISOString()
+    });
   } catch (error: any) {
     logger.error('Print agent pairing failed', { error: deepRedact(error) });
     const msg = error?.message || '';
-    if (
-      msg.includes('already registered') ||
-      msg.includes('idx_one_active_agent_per_shop') ||
-      error?.code === '23505'
-    ) {
-      return res.status(409).json({
-        success: false,
-        error: 'An agent is already registered for this shop. Disconnect or revoke the existing agent before pairing another device.'
-      });
-    }
     return res.status(400).json({ success: false, error: msg || 'Agent pairing failed.' });
+  }
+});
+
+// Agent Disconnect Endpoint (Supports M2M Desktop Agent and Authenticated Shop Owner)
+app.post('/api/agent/disconnect', createRateLimiter(30), async (req: Request, res: Response) => {
+  const agentToken = req.headers['x-agent-token'] as string | undefined;
+  const agentId = req.headers['x-agent-id'] as string | undefined;
+  const { shopId } = req.body || {};
+  const user = (req as any).authenticatedUser as ServerSession | undefined;
+  const roleHeader = req.headers['x-user-role'] as string | undefined;
+  const shopIdHeader = req.headers['x-shop-id'] as string | undefined;
+
+  // 1. Desktop Agent M2M Disconnect
+  if (agentId && agentToken) {
+    try {
+      const result = await disconnectPrintAgent({ agentId, token: agentToken });
+      logger.info('Print agent disconnected via M2M token', { agentId });
+      return res.json({
+        message: 'Print agent disconnected successfully from this PC.',
+        ...result
+      });
+    } catch (err: any) {
+      logger.error('Agent M2M disconnect failed', { error: deepRedact(err) });
+      return res.status(400).json({ success: false, error: err?.message || 'Agent disconnect failed.' });
+    }
+  }
+
+  // 2. Authenticated Shop Owner Disconnect from Web UI
+  const isSuperAdmin = user?.role === 'ADMIN' || roleHeader === 'ADMIN';
+  const isShopOwner =
+    user?.role === 'SHOP_OWNER' ||
+    roleHeader === 'SHOP_OWNER' ||
+    process.env.NODE_ENV !== 'production';
+
+  if (!isSuperAdmin && !isShopOwner) {
+    return res.status(401).json({ success: false, error: 'Agent credentials or shop owner authorization required.' });
+  }
+
+  const effectiveShopId = shopId || user?.shopId || shopIdHeader;
+  if (!effectiveShopId || typeof effectiveShopId !== 'string') {
+    return res.status(400).json({ success: false, error: 'Shop ID is required to disconnect agent.' });
+  }
+
+  try {
+    const result = await disconnectPrintAgent({ shopId: effectiveShopId });
+    logger.info('Shop owner disconnected active agent device', { shopId: effectiveShopId });
+    return res.json({
+      message: 'Print agent disconnected successfully.',
+      ...result
+    });
+  } catch (err: any) {
+    logger.error('Shop owner agent disconnect failed', { error: deepRedact(err) });
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to disconnect agent.' });
+  }
+});
+
+// Query Active Print Agent Status for Shop (Used by Web Settings & Desktop UI)
+app.get('/api/agent/active-status', async (req: Request, res: Response) => {
+  const shopId = (req.query.shopId as string) || (req.headers['x-shop-id'] as string);
+  if (!shopId) {
+    return res.status(400).json({ success: false, error: 'Shop ID is required' });
+  }
+  try {
+    const status = await getActivePrintAgentForShop(shopId);
+    return res.json({ success: true, ...status });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: 'Unable to query active agent status' });
   }
 });
 
@@ -4640,7 +4712,6 @@ app.post('/api/agent/pair', createRateLimiter(30), async (req: Request, res: Res
 app.post('/api/agent/heartbeat', createRateLimiter(60), async (req: Request, res: Response) => {
   const agentToken = req.headers['x-agent-token'] as string;
   const agentId = req.headers['x-agent-id'] as string;
-
   if (!agentToken || !agentId) {
     return res.status(401).json({ success: false, error: 'Missing agent device credentials' });
   }
@@ -4648,7 +4719,11 @@ app.post('/api/agent/heartbeat', createRateLimiter(60), async (req: Request, res
   try {
     const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken });
     if (!agentCheck.valid || !agentCheck.shopId) {
-      return res.status(403).json({ success: false, error: agentCheck.error || 'Invalid or revoked agent token' });
+      return res.status(403).json({
+        success: false,
+        code: agentCheck.code || 'REVOKED',
+        error: agentCheck.error || 'Invalid or revoked agent token'
+      });
     }
     return res.json({
       success: true,
@@ -4717,7 +4792,11 @@ app.post('/api/agent/printers/sync', async (req: Request, res: Response) => {
   try {
     const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken });
     if (!agentCheck.valid || !agentCheck.shopId) {
-      return res.status(403).json({ success: false, error: agentCheck.error || 'Agent access unauthorized' });
+      return res.status(403).json({
+        success: false,
+        code: agentCheck.code || 'REVOKED',
+        error: agentCheck.error || 'Agent access unauthorized'
+      });
     }
     const entitlement = await getShopPrinterEntitlements(agentCheck.shopId);
     const shopPrinters = await getShopPrintAgentPrinters(agentCheck.shopId);
@@ -4859,7 +4938,11 @@ app.get('/api/agent/jobs', async (req: Request, res: Response) => {
   try {
     const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken, targetShopId: shopId });
     if (!agentCheck.valid || !agentCheck.shopId) {
-      return res.status(403).json({ success: false, error: agentCheck.error || 'Agent access unauthorized' });
+      return res.status(403).json({
+        success: false,
+        code: agentCheck.code || 'REVOKED',
+        error: agentCheck.error || 'Agent access unauthorized'
+      });
     }
 
     const jobs = await listPrintAgentJobs(agentCheck.shopId, true, agentId);
@@ -4886,7 +4969,11 @@ app.post('/api/agent/jobs/:id/claim', async (req: Request, res: Response) => {
     return res.status(503).json({ success: false, error: 'Agent credential storage is unavailable.' });
   }
   if (!agentCheck.valid || !agentCheck.shopId) {
-    return res.status(403).json({ success: false, error: agentCheck.error || 'Agent access unauthorized' });
+    return res.status(403).json({
+      success: false,
+      code: agentCheck.code || 'REVOKED',
+      error: agentCheck.error || 'Agent access unauthorized'
+    });
   }
 
   let job: BackendPrintJob | null | undefined;

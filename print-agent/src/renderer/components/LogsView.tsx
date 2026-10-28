@@ -56,25 +56,25 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
   };
 
   return (
-    <div className="space-y-4 animate-fade-in">
+    <div className="space-y-5 animate-fade-in">
       {/* Controls Bar */}
-      <div className="pf-card p-4 space-y-3.5">
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
-          {/* Search Input */}
-          <div className="relative min-w-56 flex-1">
-            <Search className="w-4 h-4 text-[var(--text-faint)] absolute left-3 top-2.5" />
+      <div className="pf-card p-6 border border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-2xl shadow-card space-y-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3.5">
+          {/* Search Box */}
+          <div className="relative min-w-[240px] flex-1">
+            <Search className="w-4 h-4 text-[#94A3B8] absolute left-3.5 top-3" />
             <input
               type="text"
               placeholder="Search log messages or categories..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="settings-input !pl-9 !text-xs"
+              className="settings-input !pl-10 !text-xs"
             />
             {search && (
               <button
                 type="button"
                 onClick={() => setSearch('')}
-                className="absolute right-2.5 top-2.5 text-[var(--text-faint)] hover:text-[var(--text-primary)]"
+                className="absolute right-3 top-3 text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white"
                 title="Clear search"
               >
                 <X className="w-3.5 h-3.5" />
@@ -83,12 +83,12 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
           </div>
 
           {/* Action Toolbar */}
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2.5">
             <select
               aria-label="Filter by log category"
               value={categoryFilter}
               onChange={(e) => setCategoryFilter(e.target.value as typeof categoryFilter)}
-              className="settings-input pf-form-select !w-auto !text-xs min-w-36"
+              className="settings-input pf-form-select !w-auto !text-xs min-w-[140px]"
             >
               <option value="ALL">All Categories</option>
               {(['AGENT', 'SPOOLER', 'NETWORK', 'AUTH', 'RECOVERY', 'STORAGE'] as const).map((category) => (
@@ -101,20 +101,20 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
             <button
               type="button"
               onClick={() => setIsPaused((value) => !value)}
-              className="secondary-button !min-h-[36px] !text-xs"
+              className="secondary-button !min-h-[38px] !text-xs font-semibold"
               aria-pressed={isPaused}
               title={isPaused ? 'Resume live log stream' : 'Pause live log stream'}
             >
-              {isPaused ? <Play className="h-3.5 w-3.5 text-emerald-500" /> : <Pause className="h-3.5 w-3.5 text-amber-500" />}
+              {isPaused ? <Play className="h-3.5 w-3.5 text-[#10B981]" /> : <Pause className="h-3.5 w-3.5 text-[#F59E0B]" />}
               <span>{isPaused ? 'Resume' : 'Pause'}</span>
             </button>
 
-            <label className="inline-flex items-center gap-1.5 text-xs text-[var(--text-secondary)] px-2 cursor-pointer select-none">
+            <label className="inline-flex items-center gap-2 text-xs text-[#475569] dark:text-slate-300 px-2 cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={autoScroll}
                 onChange={(e) => setAutoScroll(e.target.checked)}
-                className="accent-blue-600"
+                className="accent-[#2563EB]"
               />
               <span>Auto-scroll</span>
             </label>
@@ -122,122 +122,93 @@ export const LogsView: React.FC<LogsViewProps> = ({ logs, onClearLogs, onExportL
             <button
               type="button"
               onClick={handleExport}
-              className="secondary-button !min-h-[36px] !text-xs"
+              className="secondary-button !min-h-[38px] !text-xs font-semibold"
               title="Save a sanitized JSON/text export of recent log records"
             >
-              <Download className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+              <Download className="w-3.5 h-3.5 text-[#2563EB]" />
               <span>Export</span>
             </button>
 
             <button
               type="button"
               onClick={() => {
-                if (
-                  window.confirm(
-                    'Clear the visible recent-log buffer? Persisted log files and crash recovery records will remain untouched.'
-                  )
-                ) {
+                if (window.confirm('Clear the recent log screen buffer? Persisted crash logs remain safely saved on disk.')) {
                   onClearLogs();
-                  setDisplayedLogs([]);
                 }
               }}
-              className="secondary-button !min-h-[36px] !text-xs text-[var(--text-muted)] hover:text-red-600"
+              className="secondary-button !min-h-[38px] !text-xs font-semibold text-[#64748B] hover:text-[#EF4444]"
               title="Clear visible logs"
             >
               <Trash2 className="w-3.5 h-3.5" />
+              <span>Clear</span>
             </button>
           </div>
         </div>
 
-        {/* Severity Filter Tabs */}
-        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-[var(--border-default)]">
-          {(['ALL', 'INFO', 'WARN', 'ERROR', 'DEBUG'] as const).map((lvl) => {
-            const isActive = levelFilter === lvl;
-            return (
-              <button
-                key={lvl}
-                type="button"
-                onClick={() => setLevelFilter(lvl)}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold transition-all ${
-                  isActive
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
-                }`}
-              >
-                {lvl}
-              </button>
-            );
-          })}
-        </div>
+        {/* Notifications */}
+        {copiedNotification && (
+          <div className="p-3 rounded-xl bg-[#ECFDF5] border border-[#A7F3D0] text-[#065F46] text-xs flex items-center gap-2 animate-fade-in">
+            <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+            <span>{copiedNotification}</span>
+          </div>
+        )}
+        {exportError && (
+          <div className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FECACA] text-[#991B1B] text-xs flex items-center gap-2 animate-fade-in">
+            <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
+            <span>{exportError}</span>
+          </div>
+        )}
       </div>
 
-      {/* Notifications */}
-      {copiedNotification && (
-        <div className="p-3 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-cyan-700 dark:text-cyan-300 text-xs flex items-center gap-2 font-mono animate-fade-in">
-          <CheckCircle2 className="w-4 h-4 text-cyan-500 shrink-0" />
-          <span className="truncate">{copiedNotification}</span>
-        </div>
-      )}
-
-      {exportError && (
-        <div
-          role="alert"
-          className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-700 dark:text-red-300 text-xs flex items-center gap-2 animate-fade-in"
-        >
-          <AlertCircle className="w-4 h-4 text-red-500 shrink-0" />
-          <span>{exportError}</span>
-        </div>
-      )}
-
-      {/* Terminal View (Exact Dark Page Background #0B1020 & Border #2A344A) */}
-      <div className="bg-[#0B1020] border border-[#2A344A] rounded-2xl p-4 font-mono text-xs overflow-hidden shadow-inner text-slate-300">
-        <div className="flex items-center justify-between pb-3 mb-3 border-b border-[#1f283c] text-[11px] text-slate-400">
+      {/* Log Console Window */}
+      <div className="pf-card p-5 border border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-2xl shadow-card space-y-3">
+        <div className="flex items-center justify-between pb-2 border-b border-[#E2E8F0] dark:border-slate-800 text-xs text-[#64748B] dark:text-slate-400">
           <div className="flex items-center gap-2">
-            <Terminal className="w-4 h-4 text-cyan-400" />
-            <span className="font-bold text-slate-200">Desktop Spooler &amp; M2M Diagnostics Console</span>
-            {isPaused && (
-              <span className="px-2 py-0.2 rounded-full bg-amber-500/20 text-amber-300 text-[10px] font-bold">
-                STREAM PAUSED
-              </span>
-            )}
+            <Terminal className="w-4 h-4 text-[#2563EB]" />
+            <span className="font-bold text-[#0F172A] dark:text-white">Diagnostic Stream</span>
+            <span>({filteredLogs.length} events)</span>
           </div>
-          <span className="text-slate-400">Showing {filteredLogs.length} events</span>
+          <span className="text-[11px] font-mono">Tokens &amp; customer documents sanitized</span>
         </div>
 
-        <div ref={listRef} className="space-y-1 max-h-[480px] overflow-y-auto pr-1">
+        <div
+          ref={listRef}
+          className="h-[520px] overflow-y-auto space-y-1.5 font-mono text-[11.5px] p-3 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800"
+        >
           {filteredLogs.length === 0 ? (
-            <p className="text-slate-500 py-12 text-center font-sans text-xs">
-              No diagnostic events found matching your active filters.
-            </p>
+            <div className="py-24 text-center text-[#94A3B8]">
+              No log events recorded matching the selected filter.
+            </div>
           ) : (
             filteredLogs.map((log) => {
-              let levelClass = 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30';
-              let textClass = 'text-slate-200';
-
-              if (log.level === 'WARN') {
-                levelClass = 'bg-amber-500/20 text-amber-300 border border-amber-500/30';
-                textClass = 'text-amber-200';
-              } else if (log.level === 'ERROR') {
-                levelClass = 'bg-red-500/20 text-red-300 border border-red-500/30';
-                textClass = 'text-red-200';
-              } else if (log.level === 'DEBUG') {
-                levelClass = 'bg-slate-700/50 text-slate-400 border border-slate-600/30';
-                textClass = 'text-slate-400';
-              }
-
+              const isError = log.level === 'ERROR';
+              const isWarn = log.level === 'WARN';
               return (
                 <div
                   key={log.id}
-                  className="leading-relaxed hover:bg-slate-900/80 p-1.5 rounded transition-colors flex items-start gap-2 text-[11.5px]"
+                  className={`p-2 rounded-lg flex items-start gap-2.5 transition-colors leading-relaxed ${
+                    isError
+                      ? 'bg-[#FEF2F2] text-[#991B1B] border border-[#FECACA]'
+                      : isWarn
+                      ? 'bg-[#FFFBEB] text-[#92400E] border border-[#FDE68A]'
+                      : 'hover:bg-white dark:hover:bg-slate-800 text-[#334155] dark:text-slate-300'
+                  }`}
                 >
-                  <span className="text-slate-500 text-[10px] shrink-0 select-none mt-0.5">
-                    {new Date(log.timestamp).toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                  <span className="text-[#94A3B8] shrink-0 text-[10.5px]">
+                    {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
-                  <span className={`font-bold text-[9.5px] px-1.5 py-0.2 rounded shrink-0 uppercase ${levelClass}`}>
-                    {log.level}
+                  <span
+                    className={`px-1.5 py-0.2 rounded text-[10px] font-bold uppercase shrink-0 ${
+                      isError
+                        ? 'bg-[#EF4444] text-white'
+                        : isWarn
+                        ? 'bg-[#F59E0B] text-white'
+                        : 'bg-[#E2E8F0] dark:bg-slate-800 text-[#475569] dark:text-slate-300'
+                    }`}
+                  >
+                    {log.category}
                   </span>
-                  <span className="text-cyan-400 text-[11px] shrink-0 font-semibold">[{log.category}]</span>
-                  <span className={`break-words ${textClass} flex-1`}>{log.message}</span>
+                  <span className="break-all flex-1">{log.message}</span>
                 </div>
               );
             })

@@ -49,33 +49,33 @@ const DEFAULT_CONFIG: AgentConfig = {
 const PAGE_DETAILS: Record<AgentPage, { title: string; description: string; icon: React.ReactNode }> = {
   DASHBOARD: {
     title: 'Dashboard Overview',
-    description: 'Live telemetry, queue backlog, and hardware connectivity for this counter station.',
-    icon: <LayoutDashboard className="w-4 h-4" />
+    description: 'Real-time telemetry, queue metrics, and printer hardware status for this counter station.',
+    icon: <LayoutDashboard className="w-5 h-5 text-[#2563EB]" />
   },
   QUEUE: {
-    title: 'Print Queue Management',
-    description: 'Monitor incoming customer jobs, active spooling progress, retries, and errors.',
-    icon: <ListOrdered className="w-4 h-4" />
+    title: 'Print Job Queue',
+    description: 'Monitor incoming customer orders, active spooling progress, and safe retries.',
+    icon: <ListOrdered className="w-5 h-5 text-[#2563EB]" />
   },
   PRINTERS: {
-    title: 'Windows Printers',
-    description: 'Installed local & network hardware discovered via Windows Print Spooler.',
-    icon: <Printer className="w-4 h-4" />
+    title: 'Printer Management',
+    description: 'Installed local & network printers detected via Windows Win32 Print Spooler.',
+    icon: <Printer className="w-5 h-5 text-[#2563EB]" />
   },
   LOGS: {
-    title: 'Diagnostic Event Logs',
-    description: 'Real-time agent service activity, spooler events, network handshakes, and errors.',
-    icon: <Terminal className="w-4 h-4" />
+    title: 'Activity Logs',
+    description: 'Diagnostic event logs, print spooler handshakes, and network telemetry.',
+    icon: <Terminal className="w-5 h-5 text-[#2563EB]" />
   },
   DEVICE_PREFERENCES: {
-    title: 'Device & Preferences',
-    description: 'Manage terminal identity, cloud connectivity, printer behavior, and Agent preferences.',
-    icon: <SlidersHorizontal className="w-4 h-4" />
+    title: 'Settings',
+    description: 'Device identity, queue polling interval, autostart, and print behavior.',
+    icon: <SlidersHorizontal className="w-5 h-5 text-[#2563EB]" />
   },
   ABOUT: {
-    title: 'About PrintFlow Desktop',
-    description: 'Application build details, cloud integration, and support resources.',
-    icon: <CircleHelp className="w-4 h-4" />
+    title: 'About & System Information',
+    description: 'Application build details, environment specifications, and support portal.',
+    icon: <CircleHelp className="w-5 h-5 text-[#2563EB]" />
   }
 };
 
@@ -83,8 +83,8 @@ const NAVIGATION: Array<{ id: AgentPage; label: string; icon: React.ReactNode }>
   { id: 'DASHBOARD', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4 shrink-0" /> },
   { id: 'QUEUE', label: 'Print Queue', icon: <ListOrdered className="w-4 h-4 shrink-0" /> },
   { id: 'PRINTERS', label: 'Printers', icon: <Printer className="w-4 h-4 shrink-0" /> },
-  { id: 'LOGS', label: 'Live Logs', icon: <Terminal className="w-4 h-4 shrink-0" /> },
-  { id: 'DEVICE_PREFERENCES', label: 'Device & Preferences', icon: <SlidersHorizontal className="w-4 h-4 shrink-0" /> },
+  { id: 'LOGS', label: 'Activity Logs', icon: <Terminal className="w-4 h-4 shrink-0" /> },
+  { id: 'DEVICE_PREFERENCES', label: 'Settings', icon: <SlidersHorizontal className="w-4 h-4 shrink-0" /> },
   { id: 'ABOUT', label: 'About', icon: <CircleHelp className="w-4 h-4 shrink-0" /> }
 ];
 
@@ -295,6 +295,23 @@ export const App: React.FC = () => {
     return result;
   };
 
+  const handleDisconnectDevice = async () => {
+    const api = window.electronAgentAPI;
+    if (!api) return { success: false, error: 'PrintFlow Agent must run within the Electron desktop runtime.' };
+    const result = await api.disconnectDevice();
+    const [savedConfig, connection, savedMetrics] = await Promise.all([
+      api.getConfig(),
+      api.getStatus(),
+      api.getMetrics()
+    ]);
+    setConfig(savedConfig);
+    setStatus(connection.status);
+    setLastHeartbeat(connection.lastHeartbeat);
+    setMetrics(savedMetrics);
+    setIsSettingsOpen(false);
+    return result;
+  };
+
   const handleResetConfig = async () => {
     const api = window.electronAgentAPI;
     if (!api) return { success: false, error: 'PrintFlow Agent must run within the Electron desktop runtime.' };
@@ -308,7 +325,7 @@ export const App: React.FC = () => {
     return result;
   };
 
-  const configured = Boolean(config.agentId && config.hasStoredCredentials);
+  const configured = Boolean(config.agentId && config.hasStoredCredentials && status !== 'DISCONNECTED' && status !== 'REVOKED');
   const currentPage = PAGE_DETAILS[activePage];
 
   // =========================================================================
@@ -389,21 +406,38 @@ export const App: React.FC = () => {
                 <p>Enter the shop identifier and device pairing token from your Web Dashboard.</p>
               </div>
 
-              {initializationError && (
-                <div role="alert" className="mx-6 mt-3 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-600 dark:text-red-400 flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 shrink-0" />
-                  <span>{initializationError}</span>
+              {status === 'REVOKED' && (
+                <div role="alert" className="mb-4 p-4 rounded-xl bg-[#FFFBEB] border border-[#FDE68A] text-[#92400E] dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-800 flex flex-col gap-1.5 animate-fade-in shadow-xs">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 text-[#D97706] shrink-0" />
+                    <span className="font-bold text-xs">This agent session has been replaced by another device.</span>
+                  </div>
+                  <p className="text-[11.5px] leading-relaxed text-[#B45309] dark:text-amber-300">
+                    Another PC connected to this shop using valid credentials. Printing on this PC was automatically stopped to prevent conflicts.
+                  </p>
+                  <p className="text-[11px] text-[#92400E] dark:text-amber-400 font-medium">
+                    To make this PC the active print device again, enter your shop token below and click Connect to Shop.
+                  </p>
+                </div>
+              )}
+              {initializationError && status !== 'REVOKED' && (
+                <div role="alert" className="mb-4 p-3.5 rounded-xl bg-[#FEF2F2] border border-[#FECACA] text-xs text-[#991B1B] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800 flex items-center gap-2.5 animate-fade-in shadow-xs">
+                  <AlertTriangle className="w-4 h-4 text-[#EF4444] shrink-0" />
+                  <span className="font-medium">{initializationError}</span>
                 </div>
               )}
 
               <SettingsModal
                 config={config}
+                status={status}
+                lastHeartbeat={lastHeartbeat}
                 printers={printers}
                 isOpen
                 required
                 onClose={() => undefined}
                 onSave={handleSaveConfig}
                 onPair={handlePairDevice}
+                onDisconnect={handleDisconnectDevice}
               />
             </div>
           </div>
@@ -460,10 +494,10 @@ export const App: React.FC = () => {
                   aria-current={isActive ? 'page' : undefined}
                   onClick={() => setActivePage(item.id)}
                   title={isSidebarCollapsed ? item.label : undefined}
-                  className={`flex min-h-9 items-center gap-2.5 rounded-xl px-2.5 py-1.5 text-left text-xs font-semibold transition-all cursor-pointer ${
+                  className={`flex min-h-9 items-center gap-2.5 rounded-xl px-2.5 py-2 text-left text-xs font-semibold transition-all cursor-pointer ${
                     isActive
-                      ? 'bg-blue-600 text-white shadow-xs font-bold'
-                      : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)]'
+                      ? 'bg-[#2563EB] text-white shadow-xs font-bold'
+                      : 'text-[#475569] dark:text-slate-300 hover:bg-[#F8FAFC] dark:hover:bg-slate-800 hover:text-[#0F172A] dark:hover:text-white'
                   }`}
                 >
                   <span className="shrink-0">{item.icon}</span>
@@ -472,8 +506,8 @@ export const App: React.FC = () => {
                     <span
                       className={`rounded-full px-1.5 py-0.2 text-[10px] font-mono font-bold ${
                         isActive
-                          ? 'bg-white text-blue-700'
-                          : 'bg-amber-500 text-white'
+                          ? 'bg-white text-[#2563EB]'
+                          : 'bg-[#F59E0B] text-white'
                       } ${isSidebarCollapsed ? 'ml-0' : 'ml-auto'}`}
                     >
                       {metrics.queuedJobs}
@@ -485,9 +519,9 @@ export const App: React.FC = () => {
           </div>
 
           {!isSidebarCollapsed && (
-            <div className="mt-4 pt-3 border-t border-[var(--border-default)] px-2 text-[11px] text-[var(--text-muted)] space-y-1">
+            <div className="mt-4 pt-3 border-t border-[#E2E8F0] dark:border-slate-800 px-2 text-[11px] text-[#64748B] dark:text-slate-400 space-y-1">
               <div className="flex items-center gap-1.5 font-medium">
-                <Printer className="h-3.5 w-3.5 text-blue-600 dark:text-blue-400" />
+                <Printer className="h-3.5 w-3.5 text-[#2563EB]" />
                 <span>
                   {printers.length} Installed Printer{printers.length === 1 ? '' : 's'}
                 </span>
@@ -501,19 +535,19 @@ export const App: React.FC = () => {
           {/* Page Heading Bar */}
           <div className="agent-page-heading flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
             <div className="flex items-center gap-3">
-              <span className="w-9 h-9 rounded-xl flex items-center justify-center bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/25 shrink-0">
+              <span className="w-10 h-10 rounded-xl flex items-center justify-center bg-[#EFF6FF] text-[#2563EB] dark:bg-blue-950/40 dark:text-blue-400 border border-[#BFDBFE] dark:border-blue-800 shrink-0 shadow-xs">
                 {currentPage.icon}
               </span>
               <div>
-                <h1 className="text-base font-bold text-[var(--text-primary)] tracking-tight">
+                <h1 className="text-base font-bold text-[#0F172A] dark:text-white tracking-tight">
                   {currentPage.title}
                 </h1>
-                <p className="text-xs text-[var(--text-muted)] mt-0.5">{currentPage.description}</p>
+                <p className="text-xs text-[#64748B] dark:text-slate-400 mt-0.5">{currentPage.description}</p>
               </div>
             </div>
 
             {activePage === 'DEVICE_PREFERENCES' && (
-              <span className="text-xs font-mono font-semibold px-2.5 py-1 rounded-lg bg-[var(--bg-subtle)] text-[var(--text-secondary)] border border-[var(--border-default)] self-start sm:self-auto">
+              <span className="text-xs font-mono font-semibold px-2.5 py-1 rounded-lg bg-[#F8FAFC] text-[#475569] dark:bg-slate-800 dark:text-slate-300 border border-[#E2E8F0] dark:border-slate-700 self-start sm:self-auto shadow-xs">
                 {config.deviceName || config.agentId || 'Terminal'}
               </span>
             )}
@@ -523,16 +557,16 @@ export const App: React.FC = () => {
           {initializationError && (
             <div
               role="alert"
-              className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3 text-xs text-red-700 dark:text-red-300 animate-fade-in"
+              className="mb-4 flex items-center justify-between gap-3 rounded-xl border border-[#FECACA] bg-[#FEF2F2] dark:border-red-800 dark:bg-red-950/40 px-4 py-3 text-xs text-[#991B1B] dark:text-red-300 animate-fade-in shadow-xs"
             >
               <div className="flex items-center gap-2">
-                <AlertTriangle className="h-4 w-4 shrink-0 text-red-500" />
+                <AlertTriangle className="h-4 w-4 shrink-0 text-[#EF4444]" />
                 <span className="font-medium">{initializationError}</span>
               </div>
               <button
                 type="button"
                 onClick={() => setInitializationError(null)}
-                className="text-red-600 dark:text-red-400 hover:text-red-800 dark:hover:text-red-200 cursor-pointer"
+                className="text-[#991B1B] dark:text-red-400 hover:text-[#7F1D1D] dark:hover:text-red-200 cursor-pointer"
                 title="Dismiss error banner"
               >
                 <X className="w-4 h-4" />
@@ -614,6 +648,7 @@ export const App: React.FC = () => {
                 onSave={handleSaveConfig}
                 onTestConnection={handleTestConnection}
                 onReset={handleResetConfig}
+                onDisconnect={handleDisconnectDevice}
                 onOpenSettings={() => setIsSettingsOpen(true)}
                 onOpenLogs={() => setActivePage('LOGS')}
                 onNavigatePrinters={() => setActivePage('PRINTERS')}
@@ -636,11 +671,14 @@ export const App: React.FC = () => {
       {/* On-demand Settings Dialog */}
       <SettingsModal
         config={config}
+        status={status}
+        lastHeartbeat={lastHeartbeat}
         printers={printers}
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         onSave={handleSaveConfig}
         onPair={handlePairDevice}
+        onDisconnect={handleDisconnectDevice}
       />
     </div>
   );

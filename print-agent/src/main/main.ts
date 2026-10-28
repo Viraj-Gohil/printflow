@@ -248,6 +248,14 @@ ipcMain.handle('agent:pair-device', async (_event, pairingData: unknown) => {
   });
 });
 
+ipcMain.handle('agent:disconnect-device', async () => {
+  const result = await agentService.disconnectDevice();
+  if (result.success) {
+    app.setLoginItemSettings({ openAtLogin: false });
+  }
+  return result;
+});
+
 ipcMain.handle('agent:get-status', () => {
   return agentService.getStatus();
 });

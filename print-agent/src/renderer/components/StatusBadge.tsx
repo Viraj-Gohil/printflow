@@ -12,17 +12,16 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
       return (
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold tracking-wide',
-            'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/25',
-            'transition-colors duration-200',
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
+            'bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800',
             className
           )}
         >
           <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500" />
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-[#10B981] opacity-75" />
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-[#10B981]" />
           </span>
-          <span className="font-semibold text-[11px] uppercase tracking-wider">Connected</span>
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Online</span>
         </span>
       );
     case 'CONNECTING':
@@ -31,13 +30,12 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-            'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25',
-            'transition-colors duration-200',
+            'bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A] dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800',
             className
           )}
         >
-          <Loader2 className="w-3 h-3 animate-spin text-amber-500" />
-          <span className="font-semibold text-[11px] uppercase tracking-wider">
+          <Loader2 className="w-3 h-3 animate-spin text-[#F59E0B]" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">
             {status === 'RECONNECTING' ? 'Reconnecting...' : 'Connecting...'}
           </span>
         </span>
@@ -47,13 +45,12 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-            'bg-rose-500/10 text-rose-600 dark:text-rose-400 border border-rose-500/25',
-            'transition-colors duration-200',
+            'bg-[#FEF2F2] text-[#B91C1C] border border-[#FECACA] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800',
             className
           )}
         >
-          <AlertCircle className="w-3.5 h-3.5 text-rose-500" />
-          <span className="font-semibold text-[11px] uppercase tracking-wider">Unauthorized</span>
+          <AlertCircle className="w-3.5 h-3.5 text-[#EF4444]" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Unauthorized</span>
         </span>
       );
     case 'RESTRICTED':
@@ -62,13 +59,12 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-            'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30',
-            'transition-colors duration-200',
+            'bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A] dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800',
             className
           )}
         >
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-          <span className="font-semibold text-[11px] uppercase tracking-wider">
+          <AlertTriangle className="w-3.5 h-3.5 text-[#F59E0B]" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">
             {status === 'PRINTER_LIMIT_REACHED' ? 'Limit Reached' : 'Restricted'}
           </span>
         </span>
@@ -78,28 +74,40 @@ export const AgentStatusBadge: React.FC<{ status: AgentConnectionStatus; classNa
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-            'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/25',
-            'transition-colors duration-200',
+            'bg-[#FEF2F2] text-[#B91C1C] border border-[#FECACA] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800',
             className
           )}
         >
-          <AlertCircle className="w-3.5 h-3.5 text-red-500" />
-          <span className="font-semibold text-[11px] uppercase tracking-wider">Sync Error</span>
+          <AlertCircle className="w-3.5 h-3.5 text-[#EF4444]" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Error</span>
         </span>
       );
+    case 'REVOKED':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
+            'bg-[#FFF1F2] text-[#BE123C] border border-[#FECDD3] dark:bg-rose-950/40 dark:text-rose-300 dark:border-rose-800',
+            className
+          )}
+        >
+          <AlertCircle className="w-3.5 h-3.5 text-[#BE123C]" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Session Replaced</span>
+        </span>
+      );
+    case 'DISCONNECTED':
     case 'OFFLINE':
     default:
       return (
         <span
           className={cn(
             'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold',
-            'bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/25',
-            'transition-colors duration-200',
+            'bg-[#F1F5F9] text-[#475569] border border-[#E2E8F0] dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
             className
           )}
         >
-          <span className="w-2 h-2 rounded-full bg-slate-400" />
-          <span className="font-semibold text-[11px] uppercase tracking-wider">Offline</span>
+          <span className="h-2 w-2 rounded-full bg-[#94A3B8]" />
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Offline</span>
         </span>
       );
   }
@@ -111,67 +119,65 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
       return (
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/25',
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800',
             className
           )}
         >
-          <CheckCircle2 className="w-3 h-3 text-green-500" />
-          <span>Printed</span>
-        </span>
-      );
-    case 'PRINTING':
-      return (
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-teal-500/15 text-teal-600 dark:text-teal-300 border border-teal-500/30',
-            'shadow-xs shadow-teal-500/10',
-            className
-          )}
-        >
-          <Printer className="w-3 h-3 text-teal-500 animate-pulse" />
-          <span className="font-medium">Spooling...</span>
+          <CheckCircle2 className="w-3.5 h-3.5 text-[#10B981]" />
+          <span>Completed</span>
         </span>
       );
     case 'DOWNLOADING':
       return (
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 border border-cyan-500/25',
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800',
             className
           )}
         >
-          <Loader2 className="w-3 h-3 text-cyan-500 animate-spin" />
+          <Loader2 className="w-3.5 h-3.5 animate-spin text-[#2563EB]" />
           <span>Downloading</span>
         </span>
       );
+    case 'PRINTING':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800',
+            className
+          )}
+        >
+          <Printer className="w-3.5 h-3.5 text-[#2563EB] animate-pulse" />
+          <span>Printing</span>
+        </span>
+      );
     case 'ASSIGNED':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#F0F9FF] text-[#0369A1] border border-[#BAE6FD] dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800',
+            className
+          )}
+        >
+          <Clock className="w-3.5 h-3.5 text-[#0284C7]" />
+          <span>Assigned</span>
+        </span>
+      );
     case 'QUEUED':
       return (
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25',
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#FFFBEB] text-[#B45309] border border-[#FDE68A] dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800',
             className
           )}
         >
-          <Clock className="w-3 h-3 text-amber-500" />
-          <span>In Queue</span>
-        </span>
-      );
-    case 'FAILED':
-      return (
-        <span
-          className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/25',
-            className
-          )}
-        >
-          <AlertCircle className="w-3.5 h-3.5 text-red-500" />
-          <span>Failed</span>
+          <Clock className="w-3.5 h-3.5 text-[#F59E0B]" />
+          <span>Queued</span>
         </span>
       );
     case 'MANUAL_ATTENTION':
@@ -179,25 +185,38 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
       return (
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/35',
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#FFF7ED] text-[#C2410C] border border-[#FFEDD5] dark:bg-orange-950/40 dark:text-orange-300 dark:border-orange-800',
             className
           )}
         >
-          <AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
-          <span>Needs Review</span>
+          <AlertTriangle className="w-3.5 h-3.5 text-[#EA580C]" />
+          <span>Requires Attention</span>
+        </span>
+      );
+    case 'FAILED':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#FEF2F2] text-[#B91C1C] border border-[#FECACA] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800',
+            className
+          )}
+        >
+          <XCircle className="w-3.5 h-3.5 text-[#EF4444]" />
+          <span>Failed</span>
         </span>
       );
     case 'CANCELLED':
       return (
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-slate-500/10 text-slate-500 dark:text-slate-400 border border-slate-500/25',
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#F1F5F9] text-[#475569] border border-[#E2E8F0] dark:bg-slate-800 dark:text-slate-300 dark:border-slate-700',
             className
           )}
         >
-          <XCircle className="w-3.5 h-3.5 text-slate-400" />
+          <XCircle className="w-3.5 h-3.5 text-[#64748B]" />
           <span>Cancelled</span>
         </span>
       );
@@ -205,8 +224,8 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
       return (
         <span
           className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-semibold',
-            'bg-slate-500/10 text-slate-600 dark:text-slate-400 border border-slate-500/20',
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-[#F1F5F9] text-[#475569] border border-[#E2E8F0]',
             className
           )}
         >

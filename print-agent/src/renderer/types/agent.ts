@@ -2,6 +2,8 @@ export type AgentConnectionStatus =
   | 'ONLINE'
   | 'CONNECTED'
   | 'OFFLINE'
+  | 'DISCONNECTED'
+  | 'REVOKED'
   | 'CONNECTING'
   | 'RECONNECTING'
   | 'UNAUTHORIZED'
@@ -142,7 +144,8 @@ export interface ElectronAgentAPI {
   // Configuration
   getConfig: () => Promise<AgentConfig>;
   saveConfig: (config: Partial<AgentConfig>) => Promise<{ success: boolean; error?: string }>;
-  pairDevice: (pairingData: { serverUrl: string; shopId: string; authToken: string; deviceName?: string }) => Promise<{ success: boolean; error?: string }>;
+  pairDevice: (pairingData: { serverUrl: string; shopId: string; authToken: string; deviceName?: string }) => Promise<{ success: boolean; error?: string; code?: string; activeDevice?: any }>;
+  disconnectDevice: () => Promise<{ success: boolean; error?: string }>;
   testConnection: () => Promise<{ success: boolean; error?: string }>;
   resetConfig: () => Promise<{ success: boolean; error?: string }>;
   

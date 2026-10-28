@@ -2,7 +2,22 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { DiscoveredPrinter, PrintJobItem } from '../types/agent';
 import { formatPrintError } from '../utils/printError';
 import { JobStatusBadge } from './StatusBadge';
-import { AlertTriangle, FileText, Printer, RefreshCw, Search, Trash2, X, Eye, RotateCcw, Ban, Clock, CheckCircle2 } from 'lucide-react';
+import {
+  AlertTriangle,
+  FileText,
+  Printer,
+  RefreshCw,
+  Search,
+  Trash2,
+  X,
+  Eye,
+  RotateCcw,
+  Clock,
+  CheckCircle2,
+  ShieldCheck,
+  Copy,
+  Check
+} from 'lucide-react';
 
 interface QueueViewProps {
   jobs: PrintJobItem[];
@@ -26,11 +41,10 @@ export const QueueView: React.FC<QueueViewProps> = ({
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<QueueFilter>('ALL');
   const [printerFilter, setPrinterFilter] = useState('');
-  const [sortOrder, setSortOrder] = useState<'NEWEST' | 'OLDEST'>('NEWEST');
   const [selectedJob, setSelectedJob] = useState<PrintJobItem | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [copiedJobId, setCopiedJobId] = useState<string | null>(null);
 
-  // Keyboard navigation & modal escape key
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && selectedJob) {
@@ -41,7 +55,6 @@ export const QueueView: React.FC<QueueViewProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedJob]);
 
-  // Tab counts
   const counts = useMemo(() => {
     return {
       ALL: jobs.length,
@@ -49,7 +62,7 @@ export const QueueView: React.FC<QueueViewProps> = ({
       PRINTING: jobs.filter((j) => j.printStatus === 'PRINTING' || j.printStatus === 'DOWNLOADING').length,
       COMPLETED: jobs.filter((j) => j.printStatus === 'COMPLETED').length,
       FAILED: jobs.filter((j) => j.printStatus === 'FAILED' || j.printStatus === 'CANCELLED').length,
-      MANUAL_ATTENTION: jobs.filter((j) => j.printStatus === 'MANUAL_ATTENTION').length
+      MANUAL_ATTENTION: jobs.filter((j) => j.printStatus === 'MANUAL_ATTENTION' || (j as any).printStatus === 'REQUIRES_ATTENTION').length
     };
   }, [jobs]);
 
@@ -62,21 +75,16 @@ export const QueueView: React.FC<QueueViewProps> = ({
           job.id.toLowerCase().includes(query) ||
           job.files.some((file) => file.fileName.toLowerCase().includes(query));
         if (!matchesQuery) return false;
-        if (printerFilter === '__unassigned__' && job.printerName) return false;
-        if (printerFilter && printerFilter !== '__unassigned__' && job.printerName !== printerFilter) return false;
+        if (printerFilter && job.printerName !== printerFilter) return false;
         if (filter === 'QUEUED') return job.printStatus === 'QUEUED' || job.printStatus === 'ASSIGNED';
         if (filter === 'PRINTING') return job.printStatus === 'PRINTING' || job.printStatus === 'DOWNLOADING';
         if (filter === 'COMPLETED') return job.printStatus === 'COMPLETED';
         if (filter === 'FAILED') return job.printStatus === 'FAILED' || job.printStatus === 'CANCELLED';
-        if (filter === 'MANUAL_ATTENTION') return job.printStatus === 'MANUAL_ATTENTION';
+        if (filter === 'MANUAL_ATTENTION') return job.printStatus === 'MANUAL_ATTENTION' || (job as any).printStatus === 'REQUIRES_ATTENTION';
         return true;
       })
-      .sort((left, right) => {
-        const leftTime = Date.parse(left.createdAt) || 0;
-        const rightTime = Date.parse(right.createdAt) || 0;
-        return sortOrder === 'NEWEST' ? rightTime - leftTime : leftTime - rightTime;
-      });
-  }, [jobs, search, filter, printerFilter, sortOrder]);
+      .sort((a, b) => (Date.parse(b.createdAt) || 0) - (Date.parse(a.createdAt) || 0));
+  }, [jobs, search, filter, printerFilter]);
 
   const refresh = async () => {
     if (isRefreshing) return;
@@ -88,36 +96,46 @@ export const QueueView: React.FC<QueueViewProps> = ({
     }
   };
 
+  const handleCopy = async (id: string) => {
+    if (window.electronAgentAPI?.copyText) {
+      await window.electronAgentAPI.copyText(id);
+    } else {
+      await navigator.clipboard.writeText(id);
+    }
+    setCopiedJobId(id);
+    setTimeout(() => setCopiedJobId(null), 2000);
+  };
+
   const retry = (job: PrintJobItem) => {
     if (
       job.retrySafe &&
-      window.confirm(`Retry job ${job.id}? The agent confirmed the failure occurred safely before physical printing started.`)
+      window.confirm(`Retry job ${job.id}? The agent confirmed no physical pages were printed.`)
     ) {
       onReprintJob(job.id);
     }
   };
 
   return (
-    <section className="space-y-4 animate-fade-in">
-      {/* Controls & Filter Card */}
-      <div className="pf-card p-4 space-y-3.5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+    <section className="space-y-5 animate-fade-in">
+      {/* Top Search & Filter Bar */}
+      <div className="pf-card p-6 border border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-2xl shadow-card space-y-4">
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3.5">
           {/* Search Box */}
-          <div className="relative min-w-56 flex-1">
-            <Search className="absolute left-3 top-2.5 h-4 w-4 text-[var(--text-faint)]" />
+          <div className="relative flex-1 min-w-[240px]">
+            <Search className="absolute left-3.5 top-3 h-4 w-4 text-[#94A3B8]" />
             <input
               type="search"
-              aria-label="Search jobs by order ID or document filename"
-              placeholder="Search by job ID or filename..."
+              aria-label="Search jobs"
+              placeholder="Search by job ID, document name..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              className="settings-input !pl-9 !text-xs"
+              className="settings-input !pl-10 !text-xs"
             />
             {search && (
               <button
                 type="button"
                 onClick={() => setSearch('')}
-                className="absolute right-2.5 top-2.5 text-[var(--text-faint)] hover:text-[var(--text-primary)]"
+                className="absolute right-3 top-3 text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white"
                 title="Clear search"
               >
                 <X className="w-3.5 h-3.5" />
@@ -125,95 +143,79 @@ export const QueueView: React.FC<QueueViewProps> = ({
             )}
           </div>
 
-          {/* Filters & Actions */}
-          <div className="flex flex-wrap items-center gap-2">
+          {/* Filter by Printer & Action Buttons */}
+          <div className="flex flex-wrap items-center gap-2.5">
             <select
-              aria-label="Filter jobs by printer"
+              aria-label="Filter by printer"
               value={printerFilter}
               onChange={(e) => setPrinterFilter(e.target.value)}
-              className="settings-input pf-form-select !w-auto min-w-36 !text-xs"
+              className="settings-input pf-form-select !w-auto min-w-[150px] !text-xs"
             >
               <option value="">All Printers</option>
-              {printers.map((printer) => (
-                <option key={printer.name} value={printer.name}>
-                  {printer.displayName}
+              {printers.map((p) => (
+                <option key={p.name} value={p.name}>
+                  {p.displayName}
                 </option>
               ))}
-              <option value="__unassigned__">Unassigned</option>
-            </select>
-
-            <select
-              aria-label="Sort jobs by creation time"
-              value={sortOrder}
-              onChange={(e) => setSortOrder(e.target.value as 'NEWEST' | 'OLDEST')}
-              className="settings-input pf-form-select !w-auto !text-xs"
-            >
-              <option value="NEWEST">Newest First</option>
-              <option value="OLDEST">Oldest First</option>
             </select>
 
             <button
               type="button"
-              onClick={() => void refresh()}
+              onClick={refresh}
               disabled={isRefreshing}
-              className="secondary-button !min-h-[36px] !text-xs"
-              title="Poll cloud backend for newly authorized print jobs"
+              className="secondary-button !min-h-[38px] !text-xs font-semibold"
             >
-              <RefreshCw className={`h-3.5 w-3.5 text-cyan-600 dark:text-cyan-400 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>Refresh</span>
+              <RefreshCw className={`w-3.5 h-3.5 text-[#2563EB] ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>{isRefreshing ? 'Syncing...' : 'Sync Cloud'}</span>
             </button>
 
-            <button
-              type="button"
-              onClick={() => {
-                if (window.confirm('Clear completed and cancelled jobs from local view? Active jobs and crash recovery data will be preserved.')) {
-                  onClearCompleted();
-                }
-              }}
-              className="secondary-button !min-h-[36px] !text-xs text-[var(--text-muted)] hover:text-red-600"
-              title="Remove finished and cancelled print jobs from local queue view"
-            >
-              <Trash2 className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Clear Done</span>
-            </button>
+            {counts.COMPLETED > 0 && (
+              <button
+                type="button"
+                onClick={onClearCompleted}
+                className="secondary-button !min-h-[38px] !text-xs font-semibold text-[#64748B] hover:text-[#EF4444]"
+                title="Remove finished jobs from the local screen buffer"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Clear Completed</span>
+              </button>
+            )}
           </div>
         </div>
 
-        {/* Status Segmented Tabs */}
-        <div className="flex flex-wrap gap-1.5 pt-1 border-t border-[var(--border-default)]" role="group" aria-label="Filter jobs by status">
+        {/* Status Filter Tabs */}
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 pt-1 border-t border-[#E2E8F0] dark:border-slate-800">
           {(
             [
-              { id: 'ALL', label: 'All Jobs' },
-              { id: 'QUEUED', label: 'Queued' },
-              { id: 'PRINTING', label: 'Printing' },
-              { id: 'COMPLETED', label: 'Completed' },
-              { id: 'FAILED', label: 'Failed' },
-              { id: 'MANUAL_ATTENTION', label: 'Needs Review' }
+              { key: 'ALL', label: 'All Jobs', count: counts.ALL },
+              { key: 'QUEUED', label: 'Pending', count: counts.QUEUED },
+              { key: 'PRINTING', label: 'Printing', count: counts.PRINTING },
+              { key: 'COMPLETED', label: 'Completed', count: counts.COMPLETED },
+              { key: 'FAILED', label: 'Failed', count: counts.FAILED },
+              { key: 'MANUAL_ATTENTION', label: 'Requires Attention', count: counts.MANUAL_ATTENTION }
             ] as const
           ).map((tab) => {
-            const count = counts[tab.id];
-            const isActive = filter === tab.id;
+            const isActive = filter === tab.key;
             return (
               <button
                 type="button"
-                key={tab.id}
-                aria-pressed={isActive}
-                onClick={() => setFilter(tab.id)}
-                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-1 text-xs font-semibold transition-all ${
+                key={tab.key}
+                onClick={() => setFilter(tab.key)}
+                className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors whitespace-nowrap cursor-pointer ${
                   isActive
-                    ? 'bg-blue-600 text-white shadow-xs'
-                    : 'bg-[var(--bg-subtle)] text-[var(--text-muted)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)]'
+                    ? 'bg-[#2563EB] text-white shadow-xs'
+                    : 'text-[#475569] dark:text-slate-400 hover:bg-[#F8FAFC] dark:hover:bg-slate-800 hover:text-[#0F172A] dark:hover:text-white'
                 }`}
               >
                 <span>{tab.label}</span>
                 <span
-                  className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono font-bold ${
+                  className={`px-1.5 py-0.2 rounded-full text-[10.5px] font-mono ${
                     isActive
-                      ? 'bg-white/20 text-white'
-                      : 'bg-[var(--border-default)] text-[var(--text-secondary)]'
+                      ? 'bg-white/20 text-white font-bold'
+                      : 'bg-[#F1F5F9] dark:bg-slate-800 text-[#64748B] dark:text-slate-400'
                   }`}
                 >
-                  {count}
+                  {tab.count}
                 </span>
               </button>
             );
@@ -221,182 +223,130 @@ export const QueueView: React.FC<QueueViewProps> = ({
         </div>
       </div>
 
-      {/* Main Table / Empty State Container */}
-      <div className="pf-card overflow-hidden">
+      {/* Main Jobs Table / Card List */}
+      <div className="pf-card border border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-2xl shadow-card overflow-hidden">
         {filtered.length === 0 ? (
-          <div className="space-y-3 py-16 text-center bg-[var(--bg-subtle)]">
-            <Printer className="mx-auto h-10 w-10 text-[var(--text-faint)]" />
-            <h3 className="text-sm font-bold text-[var(--text-secondary)]">
-              {jobs.length ? 'No jobs match your filter criteria' : 'Print queue is currently empty'}
-            </h3>
-            <p className="mx-auto max-w-sm text-xs text-[var(--text-muted)]">
-              {jobs.length
-                ? 'Try resetting the search terms or changing your status filter tabs above.'
-                : 'Click below to poll the PrintFlow cloud backend for newly paid customer orders.'}
-            </p>
-            <button
-              type="button"
-              onClick={() => void refresh()}
-              disabled={isRefreshing}
-              className="primary-button mx-auto mt-2"
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
-              <span>Check Cloud Queue</span>
-            </button>
+          <div className="py-16 text-center space-y-3 p-6">
+            <div className="w-12 h-12 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 text-[#94A3B8] flex items-center justify-center mx-auto border border-[#E2E8F0] dark:border-slate-800">
+              <Printer className="w-6 h-6 stroke-[1.75]" />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-bold text-[#0F172A] dark:text-white">No Print Jobs Found</h3>
+              <p className="text-xs text-[#64748B] dark:text-slate-400">
+                {search || filter !== 'ALL'
+                  ? 'No print jobs match the selected filter or search keyword.'
+                  : 'Your print queue is currently clear. Customer print orders will appear automatically.'}
+              </p>
+            </div>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full min-w-[780px] text-left text-xs">
-              <thead className="border-b border-[var(--border-default)] bg-[var(--bg-subtle)] text-[10.5px] uppercase tracking-wider text-[var(--text-muted)]">
-                <tr>
-                  <th className="px-4 py-3 font-bold">Job Reference</th>
-                  <th className="px-4 py-3 font-bold">Document &amp; Specs</th>
-                  <th className="px-4 py-3 font-bold">Printer</th>
-                  <th className="px-4 py-3 font-bold">Timestamp</th>
-                  <th className="px-4 py-3 font-bold">Status</th>
-                  <th className="px-4 py-3 font-bold text-right">Actions</th>
+            <table className="w-full text-left text-xs border-collapse">
+              <thead>
+                <tr className="border-b border-[#E2E8F0] dark:border-slate-800 bg-[#F8FAFC] dark:bg-slate-900/60 text-[#64748B] dark:text-slate-400">
+                  <th className="py-3 px-4 font-semibold">Job ID</th>
+                  <th className="py-3 px-4 font-semibold">Document</th>
+                  <th className="py-3 px-4 font-semibold">Pages / Specs</th>
+                  <th className="py-3 px-4 font-semibold">Target Printer</th>
+                  <th className="py-3 px-4 font-semibold">Time</th>
+                  <th className="py-3 px-4 font-semibold">Status</th>
+                  <th className="py-3 px-4 font-semibold text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-[var(--border-default)]">
+              <tbody className="divide-y divide-[#E2E8F0] dark:divide-slate-800">
                 {filtered.map((job) => {
-                  const isQueued = job.printStatus === 'QUEUED' || job.printStatus === 'ASSIGNED';
-                  const isSafeToRetry = job.printStatus === 'FAILED' && job.retrySafe === true;
-                  const fileName = job.files[0]?.fileName || 'Document Payload';
-                  const progress =
-                    job.printStatus === 'DOWNLOADING'
-                      ? job.downloadProgress
-                      : job.printStatus === 'PRINTING'
-                      ? job.printProgress
-                      : undefined;
+                  const firstFile = job.files[0];
+                  const totalPages = job.files.reduce((acc, f) => acc + (f.pageCount || 1) * (f.copies || 1), 0);
+                  const isAttention = job.printStatus === 'MANUAL_ATTENTION' || (job as any).printStatus === 'REQUIRES_ATTENTION';
 
                   return (
-                    <tr key={job.id} className="hover:bg-[var(--bg-hover)] transition-colors">
+                    <tr
+                      key={job.id}
+                      className="hover:bg-[#F8FAFC] dark:hover:bg-slate-800/40 transition-colors"
+                    >
                       {/* Job ID */}
-                      <td className="px-4 py-3.5 font-mono font-bold text-[var(--text-primary)]">
-                        <button
-                          type="button"
-                          onClick={() => setSelectedJob(job)}
-                          className="hover:text-blue-600 dark:hover:text-blue-400 hover:underline cursor-pointer"
-                        >
-                          {job.id}
-                        </button>
-                      </td>
-
-                      {/* Filename & Progress */}
-                      <td className="max-w-xs px-4 py-3.5">
-                        <div className="flex items-center gap-2">
-                          <FileText className="h-4 w-4 shrink-0 text-cyan-600 dark:text-cyan-400" />
+                      <td className="py-3.5 px-4 font-mono font-bold text-[#0F172A] dark:text-slate-200">
+                        <div className="flex items-center gap-1.5">
+                          <span>{job.id}</span>
                           <button
                             type="button"
-                            onClick={() => setSelectedJob(job)}
-                            className="truncate text-left font-medium text-[var(--text-secondary)] hover:text-blue-600 dark:hover:text-blue-400"
-                            title="Inspect full job details"
+                            onClick={() => handleCopy(job.id)}
+                            title="Copy Job ID"
+                            className="p-1 rounded text-[#94A3B8] hover:text-[#2563EB] cursor-pointer"
                           >
-                            {fileName}
+                            {copiedJobId === job.id ? <Check className="w-3 h-3 text-[#10B981]" /> : <Copy className="w-3 h-3" />}
                           </button>
                         </div>
+                      </td>
 
-                        <div className="flex items-center gap-2 text-[10.5px] text-[var(--text-muted)] mt-0.5">
-                          <span>{job.files[0]?.paperSize || 'A4'}</span>
-                          <span>•</span>
-                          <span>{job.files[0]?.colorMode === 'COLOR' ? 'Color' : 'B&W'}</span>
-                          <span>•</span>
-                          <span>{job.files[0]?.copies || 1} {job.files[0]?.copies === 1 ? 'copy' : 'copies'}</span>
+                      {/* Document Name */}
+                      <td className="py-3.5 px-4">
+                        <div className="flex items-center gap-2 max-w-[220px]">
+                          <FileText className="w-4 h-4 text-[#2563EB] shrink-0" />
+                          <span className="font-semibold text-[#0F172A] dark:text-white truncate" title={firstFile?.fileName || 'Document.pdf'}>
+                            {firstFile?.fileName || 'Document.pdf'}
+                          </span>
                         </div>
+                      </td>
 
-                        {progress !== undefined && (
-                          <div className="mt-1.5 space-y-1">
-                            <div className="flex justify-between text-[10px] text-cyan-600 dark:text-cyan-400 font-semibold">
-                              <span>{job.printStatus === 'DOWNLOADING' ? 'Downloading' : 'Spooling'}</span>
-                              <span className="font-mono">{progress}%</span>
-                            </div>
-                            <div className="h-1.5 w-full bg-[var(--border-default)] rounded-full overflow-hidden">
-                              <div
-                                className="h-full bg-gradient-to-r from-blue-600 to-cyan-500 rounded-full transition-all duration-300"
-                                style={{ width: `${progress}%` }}
-                              />
-                            </div>
-                          </div>
-                        )}
-
-                        {job.errorMessage && (
-                          <p
-                            className="mt-1 truncate text-[10.5px] text-red-600 dark:text-red-400 font-medium"
-                            title={formatPrintError(job.errorMessage)}
-                          >
-                            {formatPrintError(job.errorMessage)}
-                          </p>
-                        )}
+                      {/* Pages / Specs */}
+                      <td className="py-3.5 px-4 text-[#475569] dark:text-slate-300">
+                        <div className="space-y-0.5">
+                          <span className="font-medium">
+                            {totalPages} {totalPages === 1 ? 'page' : 'pages'}
+                          </span>
+                          <span className="text-[11px] text-[#94A3B8] block">
+                            {firstFile?.paperSize || 'A4'} · {firstFile?.colorMode || 'BW'}
+                          </span>
+                        </div>
                       </td>
 
                       {/* Assigned Printer */}
-                      <td className="px-4 py-3.5 text-[var(--text-secondary)]">
-                        {job.printerName ? (
-                          <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-[var(--bg-subtle)] border border-[var(--border-default)] text-xs font-medium">
-                            <Printer className="w-3 h-3 text-[var(--text-faint)]" />
-                            <span className="truncate max-w-[140px]">{job.printerName}</span>
-                          </span>
-                        ) : (
-                          <span className="text-[var(--text-faint)] italic">Pending assignment</span>
-                        )}
+                      <td className="py-3.5 px-4 text-[#475569] dark:text-slate-300">
+                        <span className="font-medium text-[#0F172A] dark:text-white truncate block max-w-[160px]">
+                          {job.printerName || 'Default Spooler'}
+                        </span>
                       </td>
 
-                      {/* Timestamp */}
-                      <td className="whitespace-nowrap px-4 py-3.5 text-[var(--text-muted)]">
-                        {new Date(job.createdAt).toLocaleString(undefined, {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+                      {/* Submission Time */}
+                      <td className="py-3.5 px-4 text-[#64748B] dark:text-slate-400 whitespace-nowrap">
+                        {new Date(job.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                       </td>
 
-                      {/* Status Badge */}
-                      <td className="px-4 py-3.5">
+                      {/* Status */}
+                      <td className="py-3.5 px-4 whitespace-nowrap">
                         <JobStatusBadge status={job.printStatus} />
                       </td>
 
                       {/* Actions */}
-                      <td className="px-4 py-3.5 text-right">
+                      <td className="py-3.5 px-4 text-right whitespace-nowrap">
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
                             onClick={() => setSelectedJob(job)}
-                            className="secondary-button !min-h-[28px] !px-2.5 !py-1 !text-[11px]"
-                            title="Inspect job specification"
+                            className="p-1.5 rounded-lg border border-[#E2E8F0] dark:border-slate-800 text-[#64748B] hover:text-[#0F172A] dark:hover:text-white hover:bg-white dark:hover:bg-slate-800"
+                            title="View Job Details"
                           >
-                            <Eye className="w-3 h-3" />
-                            <span>Details</span>
+                            <Eye className="w-3.5 h-3.5" />
                           </button>
 
-                          {isQueued && (
-                            <button
-                              type="button"
-                              onClick={() => onCancelJob(job.id)}
-                              className="danger-button !min-h-[28px] !px-2.5 !py-1 !text-[11px]"
-                              title="Cancel queued print job"
-                            >
-                              <Ban className="w-3 h-3" />
-                              <span>Cancel</span>
-                            </button>
-                          )}
-
-                          {isSafeToRetry && (
+                          {job.retrySafe && (
                             <button
                               type="button"
                               onClick={() => retry(job)}
-                              className="primary-button !min-h-[28px] !px-2.5 !py-1 !text-[11px]"
-                              title="Safe to reprint because the job failed before paper spooling started"
+                              className="p-1.5 rounded-lg border border-[#A7F3D0] bg-[#ECFDF5] text-[#047857] hover:bg-[#D1FAE5]"
+                              title="Retry Job (Safe - no duplicate physical print)"
                             >
-                              <RotateCcw className="w-3 h-3" />
-                              <span>Retry</span>
+                              <RotateCcw className="w-3.5 h-3.5" />
                             </button>
                           )}
 
-                          {job.printStatus === 'MANUAL_ATTENTION' && (
-                            <span className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400">
-                              <AlertTriangle className="h-3.5 w-3.5" />
-                              <span>Review First</span>
+                          {isAttention && (
+                            <span
+                              className="p-1.5 rounded-lg bg-[#FFF7ED] text-[#EA580C] border border-[#FFEDD5]"
+                              title="Verify printer tray output before re-spooling"
+                            >
+                              <AlertTriangle className="w-3.5 h-3.5" />
                             </span>
                           )}
                         </div>
@@ -410,132 +360,71 @@ export const QueueView: React.FC<QueueViewProps> = ({
         )}
       </div>
 
-      {/* 4. JOB DETAIL MODAL */}
+      {/* Duplicate Prevention & Reliability Assurance Footer */}
+      <div className="p-4 rounded-xl border border-[#E2E8F0] dark:border-slate-800 bg-[#F8FAFC] dark:bg-slate-900/40 text-xs text-[#64748B] dark:text-slate-400 flex items-center gap-2.5">
+        <ShieldCheck className="w-4 h-4 text-[#2563EB] shrink-0" />
+        <span>
+          <strong>Duplicate Spooling Protection:</strong> Each print job contains a deterministic UUID and is atomically locked by the backend to prevent duplicate physical paper prints.
+        </span>
+      </div>
+
+      {/* Job Details Modal */}
       {selectedJob && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-fade-in"
-          role="presentation"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setSelectedJob(null);
-          }}
-        >
-          <section
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="job-detail-title"
-            className="w-full max-w-lg space-y-4 p-6 bg-[var(--bg-surface)] border border-[var(--border-default)] rounded-2xl shadow-2xl animate-scale-in text-xs"
-          >
-            {/* Modal Header */}
-            <div className="flex items-start justify-between gap-3 pb-3 border-b border-[var(--border-default)]">
-              <div>
-                <h2 id="job-detail-title" className="text-base font-bold text-[var(--text-primary)]">
-                  Print Job Specification
-                </h2>
-                <p className="font-mono text-xs text-[var(--text-muted)] mt-0.5">{selectedJob.id}</p>
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+          <div className="w-full max-w-lg bg-white dark:bg-[#131D33] border border-[#E2E8F0] dark:border-slate-800 p-6 rounded-2xl shadow-xl space-y-4 text-xs">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0] dark:border-slate-800">
+              <div className="flex items-center gap-2">
+                <FileText className="w-4 h-4 text-[#2563EB]" />
+                <h3 className="text-sm font-bold text-[#0F172A] dark:text-white">Print Job Specification</h3>
               </div>
               <button
                 type="button"
                 onClick={() => setSelectedJob(null)}
-                className="p-1 rounded-lg text-[var(--text-faint)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-hover)] transition-colors"
-                title="Close modal (Esc)"
+                className="p-1 rounded text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            {/* Status & Overview */}
-            <div className="flex items-center justify-between gap-3 p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-default)]">
-              <span className="text-xs font-semibold text-[var(--text-secondary)]">Current Spool Status</span>
-              <JobStatusBadge status={selectedJob.printStatus} />
-            </div>
-
-            <div className="space-y-2">
-              <Detail label="Created Timestamp" value={new Date(selectedJob.createdAt).toLocaleString()} />
-              <Detail label="Target Windows Printer" value={selectedJob.printerName || 'Pending Spooler Assignment'} />
-              {selectedJob.customerName && <Detail label="Customer Name" value={selectedJob.customerName} />}
-              {selectedJob.customerPhone && <Detail label="Customer Phone" value={selectedJob.customerPhone} />}
-              {selectedJob.orderCode && <Detail label="Cloud Order Code" value={selectedJob.orderCode} />}
-              <Detail label="Shop Identifier" value={selectedJob.shopId} />
-            </div>
-
-            {/* Documents List */}
-            <div className="space-y-2 border-t border-[var(--border-default)] pt-3">
-              <h3 className="text-xs font-bold text-[var(--text-primary)]">Assigned Document Files ({selectedJob.files.length})</h3>
-              <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
-                {selectedJob.files.map((file) => (
-                  <div
-                    key={file.id}
-                    className="p-3 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-default)] space-y-1"
-                  >
-                    <div className="flex items-center gap-2 font-semibold text-[var(--text-primary)]">
-                      <FileText className="w-3.5 h-3.5 text-cyan-600 dark:text-cyan-400 shrink-0" />
-                      <span className="truncate">{file.fileName}</span>
-                    </div>
-                    <div className="grid grid-cols-2 gap-2 text-[11px] text-[var(--text-muted)] pt-1">
-                      <span>Pages: <strong className="text-[var(--text-secondary)]">{file.pageCount}</strong></span>
-                      <span>Copies: <strong className="text-[var(--text-secondary)]">{file.copies}</strong></span>
-                      <span>Color Mode: <strong className="text-[var(--text-secondary)]">{file.colorMode}</strong></span>
-                      <span>Paper Tray: <strong className="text-[var(--text-secondary)]">{file.paperSize}</strong></span>
-                      <span>Duplex: <strong className="text-[var(--text-secondary)]">{file.duplex ? 'Yes (Double-sided)' : 'No (Simplex)'}</strong></span>
-                    </div>
-                  </div>
-                ))}
+            <div className="grid grid-cols-2 gap-3 p-4 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800">
+              <div>
+                <span className="text-[#64748B] dark:text-slate-400 text-[11px] block">Job ID</span>
+                <span className="font-mono font-bold text-[#0F172A] dark:text-slate-200">{selectedJob.id}</span>
               </div>
+              <div>
+                <span className="text-[#64748B] dark:text-slate-400 text-[11px] block">Status</span>
+                <span className="font-semibold text-[#0F172A] dark:text-slate-200">{selectedJob.printStatus}</span>
+              </div>
+              <div>
+                <span className="text-[#64748B] dark:text-slate-400 text-[11px] block">Assigned Printer</span>
+                <span className="font-semibold text-[#0F172A] dark:text-slate-200">{selectedJob.printerName || 'Default'}</span>
+              </div>
+              <div>
+                <span className="text-[#64748B] dark:text-slate-400 text-[11px] block">Submitted At</span>
+                <span className="text-[#0F172A] dark:text-slate-200">{new Date(selectedJob.createdAt).toLocaleString()}</span>
+              </div>
+              {selectedJob.errorMessage && (
+                <div className="col-span-2 pt-2 border-t border-[#E2E8F0] dark:border-slate-800">
+                  <span className="text-[#EF4444] text-[11px] block font-semibold">Error / Note:</span>
+                  <span className="text-[#991B1B] dark:text-red-300 leading-relaxed font-mono text-[11.5px]">
+                    {formatPrintError(selectedJob.errorMessage)}
+                  </span>
+                </div>
+              )}
             </div>
 
-            {/* Error Message if any */}
-            {selectedJob.errorMessage && (
-              <div
-                role="alert"
-                className={`p-3.5 rounded-xl border text-xs ${
-                  selectedJob.printStatus === 'MANUAL_ATTENTION'
-                    ? 'border-amber-500/30 bg-amber-500/10 text-amber-800 dark:text-amber-300'
-                    : 'border-red-500/30 bg-red-500/10 text-red-800 dark:text-red-300'
-                }`}
-              >
-                {selectedJob.printStatus === 'MANUAL_ATTENTION' && (
-                  <p className="mb-1 flex items-center gap-1.5 font-bold">
-                    <AlertTriangle className="h-4 w-4" />
-                    <span>Requires Manual Shop Inspection</span>
-                  </p>
-                )}
-                <p className="font-mono text-[11px] leading-relaxed">{formatPrintError(selectedJob.errorMessage)}</p>
-              </div>
-            )}
-
-            {/* Footer Buttons */}
-            <div className="pt-3 border-t border-[var(--border-default)] flex items-center justify-end gap-2">
+            <div className="pt-2 flex justify-end">
               <button
                 type="button"
                 onClick={() => setSelectedJob(null)}
-                className="secondary-button"
+                className="secondary-button !min-h-[36px]"
               >
                 Close
               </button>
-              {selectedJob.printStatus === 'FAILED' && selectedJob.retrySafe && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    retry(selectedJob);
-                    setSelectedJob(null);
-                  }}
-                  className="primary-button"
-                >
-                  <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Retry Printing</span>
-                </button>
-              )}
             </div>
-          </section>
+          </div>
         </div>
       )}
     </section>
   );
 };
-
-const Detail: React.FC<{ label: string; value: React.ReactNode }> = ({ label, value }) => (
-  <div className="flex items-center justify-between gap-3 py-1.5 border-b border-[var(--border-subtle)] text-xs">
-    <span className="text-[var(--text-muted)]">{label}</span>
-    <span className="text-right font-medium text-[var(--text-secondary)] truncate max-w-[280px]">{value}</span>
-  </div>
-);
