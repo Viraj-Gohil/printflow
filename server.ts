@@ -53,6 +53,12 @@ import {
   savePrintAgentPrinters,
   getShopPrinterEntitlements,
   getShopPrintAgentPrinters,
+  getShopPrintersWithEntitlements,
+  syncShopAgentPrinters,
+  setShopPrinterRegistration,
+  updateShopPrinterCapabilities,
+  validateJobAgainstRegisteredPrinters,
+  getPublicShopCapabilities,
   getShopAgentDetails,
   isNeonDatabaseConfigured,
   insertPrintAgentJob,
@@ -4454,6 +4460,16 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
     });
   }
 
+  // Validate print requirements against registered online printers in this shop
+  const printerMatch = await validateJobAgainstRegisteredPrinters(shopId, preparedFiles);
+  if (!printerMatch.eligible) {
+    return res.status(422).json({
+      success: false,
+      code: printerMatch.code || 'INCOMPATIBLE_PRINTER',
+      error: printerMatch.error
+    });
+  }
+
   const now = new Date().toISOString();
   const job: BackendPrintJob = {
     id,
@@ -4468,6 +4484,7 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
     totalAmount,
     paymentStatus: 'SUCCESS',
     printStatus: 'QUEUED',
+    printerName: printerMatch.matchedPrinterName,
     createdAt: now,
     updatedAt: now
   };
@@ -4769,24 +4786,47 @@ app.post('/api/agent/printers/sync', async (req: Request, res: Response) => {
   if (!Array.isArray(printers) || printers.length > 100) {
     return res.status(400).json({ success: false, error: 'Printer list must be an array of at most 100 entries.' });
   }
-  const validStatuses = new Set(['READY', 'PRINTING', 'OFFLINE', 'BUSY', 'ERROR']);
-  if (printers.some((printer) =>
-    !printer ||
-    typeof printer !== 'object' ||
-    typeof printer.name !== 'string' ||
-    !printer.name.trim() ||
-    printer.name.length > 200 ||
-    !validStatuses.has(printer.status) ||
-    typeof printer.isOnline !== 'boolean' ||
-    typeof printer.isDefault !== 'boolean' ||
-    !printer.capabilities ||
-    !Array.isArray(printer.capabilities.paperSizes) ||
-    printer.capabilities.paperSizes.length > 20 ||
-    printer.capabilities.paperSizes.some((size: unknown) => typeof size !== 'string' || size.length > 30) ||
-    ![true, false, null].includes(printer.capabilities.supportsColor) ||
-    ![true, false, null].includes(printer.capabilities.supportsDuplex)
-  )) {
-    return res.status(400).json({ success: false, error: 'Printer registration contains invalid device data.' });
+
+  try {
+    const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken });
+    if (!agentCheck.valid || !agentCheck.shopId) {
+      return res.status(403).json({
+        success: false,
+        code: agentCheck.code || 'REVOKED',
+        error: agentCheck.error || 'Agent access unauthorized'
+      });
+    }
+
+    const syncResult = await syncShopAgentPrinters({
+      agentId,
+      shopId: agentCheck.shopId,
+      printers
+    });
+
+    return res.json({
+      success: true,
+      syncedCount: syncResult.syncedCount,
+      printers: syncResult.printers,
+      registeredCount: syncResult.registeredCount,
+      printerLimit: syncResult.printerLimit,
+      planName: syncResult.planName,
+      shopId: agentCheck.shopId,
+      syncedAt: new Date().toISOString()
+    });
+  } catch (error: any) {
+    logger.error('Print agent printer synchronization failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error?.message || 'Agent printer sync failed.' });
+  }
+});
+
+// Agent Register/Unregister Printer endpoint (validates subscription limit)
+app.post('/api/agent/printers/register', async (req: Request, res: Response) => {
+  const agentToken = req.headers['x-agent-token'] as string;
+  const agentId = req.headers['x-agent-id'] as string;
+  const { printerName, registered } = req.body || {};
+
+  if (!printerName || typeof printerName !== 'string' || typeof registered !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'printerName and registered boolean are required.' });
   }
 
   try {
@@ -4798,30 +4838,63 @@ app.post('/api/agent/printers/sync', async (req: Request, res: Response) => {
         error: agentCheck.error || 'Agent access unauthorized'
       });
     }
-    const entitlement = await getShopPrinterEntitlements(agentCheck.shopId);
-    const shopPrinters = await getShopPrintAgentPrinters(agentCheck.shopId);
-    const otherAgentCount = shopPrinters.filter((entry) => entry.agentId !== agentId).length;
-    if (otherAgentCount + printers.length > entitlement.printerLimit) {
-      return res.status(409).json({
+
+    const result = await setShopPrinterRegistration({
+      shopId: agentCheck.shopId,
+      printerNameOrId: printerName,
+      registered,
+      agentId
+    });
+
+    if (!result.success) {
+      const statusCode = result.code === 'LIMIT_REACHED' ? 409 : 400;
+      return res.status(statusCode).json(result);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    logger.error('Agent set printer registered failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error?.message || 'Failed to update printer registration.' });
+  }
+});
+
+// Agent Configure Printer Capabilities endpoint
+app.put('/api/agent/printers/:printerName/capabilities', async (req: Request, res: Response) => {
+  const agentToken = req.headers['x-agent-token'] as string;
+  const agentId = req.headers['x-agent-id'] as string;
+  const printerName = req.params.printerName;
+  const { capabilities, connectionType, isDefault } = req.body || {};
+
+  if (!capabilities || typeof capabilities !== 'object') {
+    return res.status(400).json({ success: false, error: 'capabilities object is required.' });
+  }
+
+  try {
+    const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken });
+    if (!agentCheck.valid || !agentCheck.shopId) {
+      return res.status(403).json({
         success: false,
-        error: `${entitlement.planName} plan allows up to ${entitlement.printerLimit} registered printers across all shop agents.`,
-        printerLimit: entitlement.printerLimit,
-        planName: entitlement.planName,
-        registeredCount: otherAgentCount + printers.length
+        code: agentCheck.code || 'REVOKED',
+        error: agentCheck.error || 'Agent access unauthorized'
       });
     }
-    const syncedCount = await savePrintAgentPrinters(agentId, printers);
-    return res.json({
-      success: true,
-      syncedCount,
-      printerLimit: entitlement.printerLimit,
-      planName: entitlement.planName,
+
+    const result = await updateShopPrinterCapabilities({
       shopId: agentCheck.shopId,
-      syncedAt: new Date().toISOString()
+      printerNameOrId: printerName,
+      capabilities,
+      connectionType,
+      isDefault
     });
-  } catch (error) {
-    logger.error('Print agent printer synchronization failed', { error: deepRedact(error) });
-    return res.status(503).json({ success: false, error: 'Agent credential storage is unavailable.' });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    logger.error('Agent update printer capabilities failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error?.message || 'Failed to update printer capabilities.' });
   }
 });
 
@@ -4833,17 +4906,139 @@ app.get('/api/agent/printer-entitlements', async (req: Request, res: Response) =
     if (!agentCheck.valid || !agentCheck.shopId) {
       return res.status(403).json({ success: false, error: agentCheck.error || 'Agent access unauthorized' });
     }
-    const entitlement = await getShopPrinterEntitlements(agentCheck.shopId);
-    const registeredPrinters = await getShopPrintAgentPrinters(agentCheck.shopId);
+    const info = await getShopPrintersWithEntitlements(agentCheck.shopId);
     return res.json({
       success: true,
-      ...entitlement,
-      registeredCount: registeredPrinters.length,
-      agentRegisteredCount: registeredPrinters.filter((printer) => printer.agentId === agentId).length
+      printerLimit: info.printerLimit,
+      planName: info.planName,
+      registeredCount: info.registeredCount,
+      isLimitReached: info.isLimitReached,
+      remainingSlots: info.remainingSlots
     });
   } catch (error) {
     logger.error('Print agent plan lookup failed', { error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Shop printer plan could not be verified.' });
+  }
+});
+
+// SaaS Web App: GET /api/shop/:shopId/printers
+app.get('/api/shop/:shopId/printers', requireShopOwnerRole, async (req: Request, res: Response) => {
+  const { shopId } = req.params;
+  const user = (req as any).authenticatedUser as ServerSession | undefined;
+  const isDemoShopOwner =
+    process.env.NODE_ENV !== 'production' &&
+    req.headers['x-user-role'] === 'SHOP_OWNER' &&
+    req.headers['x-shop-id'] === shopId;
+
+  const isAuthorized =
+    user?.role === 'ADMIN' ||
+    (user?.role === 'SHOP_OWNER' && user.shopId === shopId) ||
+    isDemoShopOwner;
+
+  let mappedAuthorized = false;
+  if (user?.role === 'SHOP_OWNER' && user.shopId !== shopId) {
+    try {
+      mappedAuthorized = (await resolvePrintFlowShopId(user.shopId || '')) === shopId;
+    } catch {
+      mappedAuthorized = false;
+    }
+  }
+
+  if (!isAuthorized && !mappedAuthorized) {
+    return res.status(403).json({ success: false, error: 'You cannot view another shop’s printers.' });
+  }
+
+  try {
+    const data = await getShopPrintersWithEntitlements(shopId);
+    return res.json({ success: true, ...data });
+  } catch (error: any) {
+    logger.error('Get shop printers failed', { shopId, error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve shop printers.' });
+  }
+});
+
+// SaaS Web App: POST /api/shop/:shopId/printers/:printerId/register
+app.post('/api/shop/:shopId/printers/:printerId/register', requireShopOwnerRole, async (req: Request, res: Response) => {
+  const { shopId, printerId } = req.params;
+  const { registered } = req.body || {};
+  const user = (req as any).authenticatedUser as ServerSession | undefined;
+  const isDemoShopOwner =
+    process.env.NODE_ENV !== 'production' &&
+    req.headers['x-user-role'] === 'SHOP_OWNER' &&
+    req.headers['x-shop-id'] === shopId;
+
+  const isAuthorized =
+    user?.role === 'ADMIN' ||
+    (user?.role === 'SHOP_OWNER' && user.shopId === shopId) ||
+    isDemoShopOwner;
+
+  if (!isAuthorized) {
+    return res.status(403).json({ success: false, error: 'You cannot modify another shop’s printers.' });
+  }
+
+  if (typeof registered !== 'boolean') {
+    return res.status(400).json({ success: false, error: 'registered boolean is required.' });
+  }
+
+  try {
+    const result = await setShopPrinterRegistration({
+      shopId,
+      printerNameOrId: printerId,
+      registered
+    });
+
+    if (!result.success) {
+      const statusCode = result.code === 'LIMIT_REACHED' ? 409 : 400;
+      return res.status(statusCode).json(result);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    logger.error('Shop set printer registered failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error?.message || 'Failed to update printer registration.' });
+  }
+});
+
+// SaaS Web App: PUT /api/shop/:shopId/printers/:printerId/capabilities
+app.put('/api/shop/:shopId/printers/:printerId/capabilities', requireShopOwnerRole, async (req: Request, res: Response) => {
+  const { shopId, printerId } = req.params;
+  const { capabilities, connectionType, isDefault } = req.body || {};
+  const user = (req as any).authenticatedUser as ServerSession | undefined;
+  const isDemoShopOwner =
+    process.env.NODE_ENV !== 'production' &&
+    req.headers['x-user-role'] === 'SHOP_OWNER' &&
+    req.headers['x-shop-id'] === shopId;
+
+  const isAuthorized =
+    user?.role === 'ADMIN' ||
+    (user?.role === 'SHOP_OWNER' && user.shopId === shopId) ||
+    isDemoShopOwner;
+
+  if (!isAuthorized) {
+    return res.status(403).json({ success: false, error: 'You cannot modify another shop’s printers.' });
+  }
+
+  if (!capabilities || typeof capabilities !== 'object') {
+    return res.status(400).json({ success: false, error: 'capabilities object is required.' });
+  }
+
+  try {
+    const result = await updateShopPrinterCapabilities({
+      shopId,
+      printerNameOrId: printerId,
+      capabilities,
+      connectionType,
+      isDefault
+    });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    logger.error('Shop update printer capabilities failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error?.message || 'Failed to update printer capabilities.' });
   }
 });
 
@@ -5503,8 +5698,10 @@ app.get('/api/public/shops/:slug', requireNeonPool, async (req: Request, res: Re
     if (!shop) return res.status(404).json({ success: false, error: 'Shop not found.' });
 
     let agentStatus = null;
+    let supportedCapabilities = null;
     try {
       agentStatus = await getShopAgentAvailability(shop.id);
+      supportedCapabilities = await getPublicShopCapabilities(shop.id);
     } catch (e) {
       logger.warn('Could not check agent availability in public shop endpoint', { slug, error: deepRedact(e) });
     }
@@ -5529,6 +5726,14 @@ app.get('/api/public/shops/:slug', requireNeonPool, async (req: Request, res: Re
         message: 'This print shop is currently offline. Please try again later or select another available shop.',
         agentOnline: false,
         printerReady: false
+      },
+      supportedCapabilities: supportedCapabilities || {
+        supportedPaperSizes: ['A4'],
+        hasColorPrinter: false,
+        hasDuplexPrinter: false,
+        registeredPrintersCount: 0,
+        onlineRegisteredPrintersCount: 0,
+        isReadyForPrinting: false
       }
     });
   } catch (error) {

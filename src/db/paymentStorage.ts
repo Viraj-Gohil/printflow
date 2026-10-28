@@ -350,6 +350,45 @@ export async function initializePaymentTables(maxRetries = 3): Promise<void> {
 
         CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
+        CREATE TABLE IF NOT EXISTS public.printers (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          shop_id UUID NOT NULL,
+          agent_id VARCHAR(128),
+          device_id UUID,
+          name TEXT NOT NULL,
+          model TEXT,
+          status TEXT NOT NULL DEFAULT 'ONLINE',
+          capabilities JSONB NOT NULL DEFAULT '{"color": false, "duplex": true, "paperSizes": ["A4"]}'::jsonb,
+          connection_type VARCHAR(64) DEFAULT 'USB / Local',
+          is_default BOOLEAN DEFAULT false,
+          is_registered BOOLEAN DEFAULT false,
+          driver_name TEXT,
+          port_name TEXT,
+          resolutions JSONB DEFAULT '[]'::jsonb,
+          is_manual_override BOOLEAN DEFAULT false,
+          detection_source VARCHAR(32) DEFAULT 'AUTO',
+          priority INT NOT NULL DEFAULT 1,
+          is_enabled BOOLEAN NOT NULL DEFAULT true,
+          last_seen TIMESTAMPTZ,
+          last_synced_at TIMESTAMPTZ DEFAULT NOW(),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT timezone('utc'::text, now()),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS agent_id VARCHAR(128);
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS connection_type VARCHAR(64) DEFAULT 'USB / Local';
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS is_default BOOLEAN DEFAULT false;
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS is_registered BOOLEAN DEFAULT false;
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS driver_name TEXT;
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS port_name TEXT;
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS resolutions JSONB DEFAULT '[]'::jsonb;
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS is_manual_override BOOLEAN DEFAULT false;
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS detection_source VARCHAR(32) DEFAULT 'AUTO';
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS last_synced_at TIMESTAMPTZ DEFAULT NOW();
+        ALTER TABLE public.printers ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_printers_shop_name_lower ON public.printers(shop_id, LOWER(name));
+        CREATE INDEX IF NOT EXISTS idx_printers_shop_registered ON public.printers(shop_id, is_registered);
+
         CREATE TABLE IF NOT EXISTS public.plans (
           id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
           name TEXT NOT NULL,
@@ -874,13 +913,34 @@ export async function getShopAgentAvailability(shopId: string): Promise<ShopAgen
         activeDeviceName = row.device_name;
       }
 
+      // Query authoritative public.printers table for registered and online printers
+      try {
+        const canonicalId = await resolvePrintFlowShopId(shopId);
+        const dbPrinters = await pool.query(
+          `SELECT name, status, is_registered FROM public.printers
+           WHERE ((shop_id::text = ANY($1::text[])) OR shop_id::text = $2)
+             AND is_registered = true AND status = 'ONLINE'`,
+          [candidateIds, canonicalId]
+        );
+        if (dbPrinters.rowCount && dbPrinters.rows.length > 0) {
+          for (const dp of dbPrinters.rows) {
+            if (!readyPrintersList.includes(dp.name)) {
+              readyPrintersList.push(dp.name);
+            }
+          }
+        }
+      } catch {}
+
       if (Array.isArray(row.printers)) {
         totalPrinters += row.printers.length;
-        for (const p of row.printers) {
-          if (p && typeof p === 'object' && p.name) {
-            const isPrinterReady = p.isOnline === true && p.status !== 'OFFLINE' && p.status !== 'ERROR';
-            if (isPrinterReady) {
-              readyPrintersList.push(p.name);
+        if (readyPrintersList.length === 0) {
+          for (const p of row.printers) {
+            if (p && typeof p === 'object' && p.name) {
+              const isReg = p.isRegistered === true || p.is_registered === true;
+              const isPrinterReady = isReg && p.isOnline === true && p.status !== 'OFFLINE' && p.status !== 'ERROR';
+              if (isPrinterReady && !readyPrintersList.includes(p.name)) {
+                readyPrintersList.push(p.name);
+              }
             }
           }
         }
@@ -1704,13 +1764,14 @@ export async function getShopPrinterEntitlements(shopId: string): Promise<{ prin
 
   try {
     const result = await pool.query(
-      `SELECT p.name AS plan_name, p.printer_limit
-       FROM shops s
-       LEFT JOIN subscriptions sub
+      `SELECT p.name AS plan_name,
+              COALESCE((p.limits->>'printerLimit')::int, p.printer_limit, 1) AS printer_limit
+       FROM public.shops s
+       LEFT JOIN public.subscriptions sub
          ON sub.shop_id = s.id
         AND sub.status IN ('ACTIVE', 'TRIAL')
-        AND sub.current_period_end > NOW()
-       LEFT JOIN plans p ON p.id = COALESCE(sub.plan_id, s.current_plan_id)
+        AND (sub.current_period_end IS NULL OR sub.current_period_end > NOW())
+       LEFT JOIN public.plans p ON p.id = COALESCE(sub.plan_id, s.current_plan_id, 'plan_starter')
        WHERE (s.id::text = ANY($1::text[])) OR s.slug = $2
        ORDER BY sub.current_period_end DESC NULLS LAST
        LIMIT 1`,
@@ -1719,37 +1780,651 @@ export async function getShopPrinterEntitlements(shopId: string): Promise<{ prin
 
     if (result.rowCount === 1 && result.rows[0].plan_name) {
       return {
-        printerLimit: Math.max(0, Number(result.rows[0].printer_limit) || 1),
+        printerLimit: Math.max(1, Number(result.rows[0].printer_limit) || 1),
         planName: String(result.rows[0].plan_name)
       };
     }
-  } catch {
-    // Ignore discrepancy
+  } catch (err) {
+    // Discrepancy fallback
   }
 
   try {
     const defaultPlanRes = await pool.query(
-      `SELECT name, printer_limit FROM public.plans WHERE is_active = true ORDER BY price_monthly ASC LIMIT 1`
+      `SELECT name, COALESCE((limits->>'printerLimit')::int, printer_limit, 1) AS printer_limit
+       FROM public.plans WHERE is_active = true ORDER BY price_monthly ASC LIMIT 1`
     );
     if (defaultPlanRes.rowCount === 1) {
       const row = defaultPlanRes.rows[0];
       return { printerLimit: Math.max(1, Number(row.printer_limit) || 1), planName: String(row.name) };
     }
   } catch {
-    // Ignore discrepancy
+    // Fallback
   }
 
-  return { printerLimit: 1, planName: 'Basic' };
+  return { printerLimit: 1, planName: 'Free Starter' };
+}
+
+export async function getShopPrintersWithEntitlements(shopId: string): Promise<{
+  printers: any[];
+  registeredCount: number;
+  printerLimit: number;
+  planName: string;
+  isLimitReached: boolean;
+  remainingSlots: number;
+}> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(shopId);
+  const candidateShopIds = await getCandidateShopIds(shopId);
+  const entitlements = await getShopPrinterEntitlements(canonicalShopId);
+
+  const res = await pool.query(
+    `SELECT id, shop_id, agent_id, name, model, status, capabilities, connection_type,
+            is_default, is_registered, driver_name, port_name, resolutions,
+            is_manual_override, detection_source, last_seen, last_synced_at, created_at, updated_at
+     FROM public.printers
+     WHERE (shop_id::text = ANY($1::text[])) OR shop_id::text = $2
+     ORDER BY is_registered DESC, is_default DESC, name ASC`,
+    [candidateShopIds, canonicalShopId]
+  );
+
+  const registeredPrinters = res.rows.filter((r) => r.is_registered);
+  const registeredCount = registeredPrinters.length;
+  const printerLimit = entitlements.printerLimit;
+
+  return {
+    printers: res.rows.map((row) => {
+      const caps = (typeof row.capabilities === 'object' && row.capabilities !== null) ? row.capabilities : {};
+      return {
+        id: String(row.id),
+        shopId: String(row.shop_id),
+        agentId: row.agent_id || undefined,
+        name: row.name,
+        displayName: row.name,
+        model: row.model || row.driver_name || 'Standard Windows Printer',
+        status: row.status,
+        isOnline: row.status === 'ONLINE',
+        isDefault: Boolean(row.is_default),
+        isRegistered: Boolean(row.is_registered),
+        isEnabled: Boolean(row.is_registered),
+        connectionType: row.connection_type || caps.connectionType || 'USB / Local',
+        driverName: row.driver_name || caps.driverName,
+        portName: row.port_name || caps.portName,
+        isManualOverride: Boolean(row.is_manual_override),
+        detectionSource: row.detection_source || caps.detectionSource || 'AUTO',
+        capabilities: {
+          paperSizes: Array.isArray(caps.paperSizes) && caps.paperSizes.length > 0 ? caps.paperSizes : ['A4'],
+          supportsColor: caps.supportsColor !== undefined ? caps.supportsColor : null,
+          supportsDuplex: caps.supportsDuplex !== undefined ? caps.supportsDuplex : null,
+          colorModes: caps.colorModes || (caps.supportsColor ? ['BW', 'COLOR'] : ['BW']),
+          resolutions: row.resolutions || caps.resolutions || []
+        },
+        lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
+        lastSyncedAt: row.last_synced_at ? new Date(row.last_synced_at).toISOString() : null,
+        createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null
+      };
+    }),
+    registeredCount,
+    printerLimit,
+    planName: entitlements.planName,
+    isLimitReached: registeredCount >= printerLimit,
+    remainingSlots: Math.max(0, printerLimit - registeredCount)
+  };
+}
+
+export async function syncShopAgentPrinters(params: {
+  agentId: string;
+  shopId: string;
+  printers: any[];
+}): Promise<{
+  success: boolean;
+  syncedCount: number;
+  printers: any[];
+  registeredCount: number;
+  printerLimit: number;
+  planName: string;
+}> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(params.shopId);
+  const entitlement = await getShopPrinterEntitlements(canonicalShopId);
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    // 1. Lock existing printers for this shop to guarantee transactional atomicity
+    const existingRes = await client.query(
+      `SELECT id, name, is_registered, is_manual_override, capabilities, is_default, connection_type
+       FROM public.printers
+       WHERE shop_id = $1::uuid
+       FOR UPDATE`,
+      [canonicalShopId]
+    );
+
+    const existingMap = new Map<string, any>();
+    for (const row of existingRes.rows) {
+      existingMap.set(row.name.trim().toLowerCase(), row);
+    }
+
+    let currentRegisteredCount = existingRes.rows.filter((r) => r.is_registered).length;
+
+    for (const p of params.printers) {
+      if (!p || typeof p !== 'object' || typeof p.name !== 'string' || !p.name.trim()) continue;
+
+      const lowerName = p.name.trim().toLowerCase();
+      const existing = existingMap.get(lowerName);
+
+      // Preserve existing registered status unless specifically requested
+      let isRegistered = existing ? Boolean(existing.is_registered) : false;
+      if (p.isRegistered === true && !isRegistered) {
+        if (currentRegisteredCount < entitlement.printerLimit) {
+          isRegistered = true;
+          currentRegisteredCount++;
+        }
+      }
+
+      // Check manual overrides: do NOT overwrite verified manual settings with missing/unknown auto-detection
+      let capabilities = p.capabilities || {};
+      let isManualOverride = false;
+      let detectionSource = 'AUTO';
+      let connectionType = p.connectionType || (p.portName?.toUpperCase().includes('USB') ? 'USB' : (p.portName?.includes('.') || p.portName?.toUpperCase().includes('WSD')) ? 'Network' : 'Other');
+
+      if (existing && existing.is_manual_override) {
+        isManualOverride = true;
+        detectionSource = 'MANUAL';
+        capabilities = {
+          ...capabilities,
+          ...existing.capabilities,
+          paperSizes: existing.capabilities?.paperSizes || capabilities.paperSizes || ['A4'],
+          supportsColor: existing.capabilities?.supportsColor !== undefined ? existing.capabilities.supportsColor : capabilities.supportsColor,
+          supportsDuplex: existing.capabilities?.supportsDuplex !== undefined ? existing.capabilities.supportsDuplex : capabilities.supportsDuplex
+        };
+        connectionType = existing.connection_type || connectionType;
+      }
+
+      const isDefault = p.isDefault !== undefined ? Boolean(p.isDefault) : (existing ? Boolean(existing.is_default) : false);
+      const isOnline = Boolean(p.isOnline);
+      const status = isOnline ? (p.status || 'ONLINE') : 'OFFLINE';
+
+      await client.query(
+        `INSERT INTO public.printers (
+           shop_id, agent_id, name, model, status, capabilities, connection_type,
+           is_default, is_registered, driver_name, port_name, resolutions,
+           is_manual_override, detection_source, last_seen, last_synced_at, updated_at
+         ) VALUES (
+           $1::uuid, $2, $3, $4, $5, $6::jsonb, $7,
+           $8, $9, $10, $11, $12::jsonb,
+           $13, $14, NOW(), NOW(), NOW()
+         )
+         ON CONFLICT (shop_id, LOWER(name)) DO UPDATE SET
+           agent_id = EXCLUDED.agent_id,
+           model = COALESCE(EXCLUDED.model, public.printers.model),
+           status = EXCLUDED.status,
+           capabilities = CASE WHEN public.printers.is_manual_override THEN public.printers.capabilities ELSE EXCLUDED.capabilities END,
+           connection_type = COALESCE(public.printers.connection_type, EXCLUDED.connection_type),
+           is_default = EXCLUDED.is_default,
+           is_registered = public.printers.is_registered OR EXCLUDED.is_registered,
+           driver_name = COALESCE(EXCLUDED.driver_name, public.printers.driver_name),
+           port_name = COALESCE(EXCLUDED.port_name, public.printers.port_name),
+           resolutions = EXCLUDED.resolutions,
+           last_seen = NOW(),
+           last_synced_at = NOW(),
+           updated_at = NOW()`,
+        [
+          canonicalShopId,
+          params.agentId,
+          p.name.trim(),
+          p.driverName || p.displayName || p.name,
+          status,
+          JSON.stringify(capabilities),
+          connectionType,
+          isDefault,
+          isRegistered,
+          p.driverName || null,
+          p.portName || null,
+          JSON.stringify(capabilities.resolutions || []),
+          isManualOverride,
+          detectionSource
+        ]
+      );
+    }
+
+    // Keep print_agent_devices.printers JSON synchronized for backward compatibility
+    await client.query(
+      `UPDATE print_agent_devices SET printers = $2::jsonb, updated_at = NOW() WHERE agent_id = $1`,
+      [params.agentId, JSON.stringify(params.printers)]
+    );
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const allPrinters = await getShopPrintersWithEntitlements(canonicalShopId);
+  return {
+    success: true,
+    syncedCount: params.printers.length,
+    printers: allPrinters.printers,
+    registeredCount: allPrinters.registeredCount,
+    printerLimit: allPrinters.printerLimit,
+    planName: allPrinters.planName
+  };
+}
+
+export async function setShopPrinterRegistration(params: {
+  shopId: string;
+  printerNameOrId: string;
+  registered: boolean;
+  agentId?: string;
+}): Promise<{
+  success: boolean;
+  printer?: any;
+  registeredCount: number;
+  printerLimit: number;
+  planName: string;
+  error?: string;
+  code?: string;
+}> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(params.shopId);
+  const entitlement = await getShopPrinterEntitlements(canonicalShopId);
+
+  const client = await pool.connect();
+  let targetPrinterId: string | null = null;
+  let targetPrinterName: string | null = null;
+
+  try {
+    await client.query('BEGIN');
+
+    // Row lock on shop printers
+    const findRes = await client.query(
+      `SELECT id, name, is_registered, status FROM public.printers
+       WHERE shop_id = $1::uuid AND (id::text = $2 OR LOWER(name) = LOWER($2))
+       FOR UPDATE`,
+      [canonicalShopId, params.printerNameOrId]
+    );
+
+    if (!findRes.rowCount || findRes.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return {
+        success: false,
+        error: `Printer "${params.printerNameOrId}" was not found in this shop's hardware records.`,
+        code: 'NOT_FOUND',
+        registeredCount: 0,
+        printerLimit: entitlement.printerLimit,
+        planName: entitlement.planName
+      };
+    }
+
+    const targetPrinter = findRes.rows[0];
+    targetPrinterId = targetPrinter.id;
+    targetPrinterName = targetPrinter.name;
+
+    if (params.registered) {
+      // Check count of other registered printers
+      const countRes = await client.query(
+        `SELECT COUNT(*)::int AS count FROM public.printers
+         WHERE shop_id = $1::uuid AND is_registered = true AND id != $2`,
+        [canonicalShopId, targetPrinter.id]
+      );
+      const otherRegisteredCount = countRes.rows[0]?.count || 0;
+
+      if (otherRegisteredCount >= entitlement.printerLimit) {
+        await client.query('ROLLBACK');
+        return {
+          success: false,
+          error: `Subscription limit reached: Your ${entitlement.planName} plan allows a maximum of ${entitlement.printerLimit} registered printer(s). Please unregister another printer before registering "${targetPrinter.name}", or upgrade your subscription plan.`,
+          code: 'LIMIT_REACHED',
+          registeredCount: otherRegisteredCount,
+          printerLimit: entitlement.printerLimit,
+          planName: entitlement.planName
+        };
+      }
+
+      await client.query(
+        `UPDATE public.printers SET is_registered = true, is_enabled = true, updated_at = NOW() WHERE id = $1`,
+        [targetPrinter.id]
+      );
+    } else {
+      await client.query(
+        `UPDATE public.printers SET is_registered = false, updated_at = NOW() WHERE id = $1`,
+        [targetPrinter.id]
+      );
+    }
+
+    // Also update print_agent_devices.printers JSON for the active device
+    await client.query(`
+      UPDATE print_agent_devices
+      SET printers = (
+        SELECT COALESCE(jsonb_agg(
+          jsonb_set(
+            p,
+            '{isRegistered}',
+            to_jsonb(CASE WHEN LOWER(p->>'name') = LOWER($2) THEN $3::boolean ELSE COALESCE((p->>'isRegistered')::boolean, false) END)
+          )
+        ), '[]'::jsonb)
+        FROM jsonb_array_elements(printers) p
+      ),
+      updated_at = NOW()
+      WHERE shop_id = $1 AND is_revoked = false
+    `, [canonicalShopId, targetPrinter.name, params.registered]);
+
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+
+  const refreshed = await getShopPrintersWithEntitlements(canonicalShopId);
+  const updatedPrinter = refreshed.printers.find((p) => p.name.toLowerCase() === targetPrinterName?.toLowerCase() || p.id === targetPrinterId);
+
+  return {
+    success: true,
+    printer: updatedPrinter,
+    registeredCount: refreshed.registeredCount,
+    printerLimit: refreshed.printerLimit,
+    planName: refreshed.planName
+  };
+}
+
+export async function updateShopPrinterCapabilities(params: {
+  shopId: string;
+  printerNameOrId: string;
+  capabilities: {
+    paperSizes?: string[];
+    supportsColor?: boolean | null;
+    supportsDuplex?: boolean | null;
+    colorModes?: string[];
+    resolutions?: string[];
+    connectionType?: string;
+    model?: string;
+    isDefault?: boolean;
+  };
+  connectionType?: string;
+  isDefault?: boolean;
+}): Promise<{ success: boolean; printer?: any; error?: string }> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(params.shopId);
+
+  const res = await pool.query(
+    `SELECT id, name, capabilities, connection_type, is_default
+     FROM public.printers
+     WHERE shop_id = $1::uuid AND (id::text = $2 OR LOWER(name) = LOWER($2))
+     LIMIT 1`,
+    [canonicalShopId, params.printerNameOrId]
+  );
+
+  if (!res.rowCount) {
+    return { success: false, error: 'Printer not found for this shop.' };
+  }
+
+  const existing = res.rows[0];
+  const oldCaps = existing.capabilities || {};
+  const newCaps = {
+    ...oldCaps,
+    ...params.capabilities,
+    detectionSource: 'MANUAL',
+    isManualOverride: true,
+    lastConfiguredAt: new Date().toISOString()
+  };
+
+  const connectionType = params.connectionType || params.capabilities.connectionType || existing.connection_type || 'USB / Local';
+  const isDefault = params.isDefault !== undefined ? params.isDefault : (params.capabilities.isDefault !== undefined ? params.capabilities.isDefault : existing.is_default);
+
+  if (isDefault) {
+    await pool.query(
+      `UPDATE public.printers SET is_default = false, updated_at = NOW() WHERE shop_id = $1::uuid AND id != $2`,
+      [canonicalShopId, existing.id]
+    );
+  }
+
+  const updateRes = await pool.query(
+    `UPDATE public.printers
+     SET capabilities = $1::jsonb,
+         connection_type = $2,
+         is_default = $3,
+         is_manual_override = true,
+         detection_source = 'MANUAL',
+         updated_at = NOW()
+     WHERE id = $4
+     RETURNING *`,
+    [JSON.stringify(newCaps), connectionType, isDefault, existing.id]
+  );
+
+  return { success: true, printer: updateRes.rows[0] };
+}
+
+export async function validateJobAgainstRegisteredPrinters(
+  shopId: string,
+  files: Array<{
+    fileName?: string;
+    paperSize?: string;
+    colorMode?: string;
+    duplex?: boolean;
+  }>
+): Promise<{
+  eligible: boolean;
+  matchedPrinterName?: string;
+  error?: string;
+  code?: string;
+}> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(shopId);
+  const candidateShopIds = await getCandidateShopIds(shopId);
+
+  // 1. Query registered printers for this shop from authoritative public.printers table
+  const printerRes = await pool.query(
+    `SELECT id, name, model, status, capabilities, is_default, is_registered
+     FROM public.printers
+     WHERE ((shop_id::text = ANY($1::text[])) OR shop_id::text = $2)
+       AND is_registered = true
+     ORDER BY is_default DESC, name ASC`,
+    [candidateShopIds, canonicalShopId]
+  );
+
+  if (printerRes.rowCount === 0) {
+    return {
+      eligible: false,
+      code: 'NO_REGISTERED_PRINTERS',
+      error: 'This shop has no registered printers configured to receive customer orders. Please contact the shop owner.'
+    };
+  }
+
+  // 2. Filter for online printers
+  const onlineRegisteredPrinters = printerRes.rows.filter((p) => p.status === 'ONLINE');
+  if (onlineRegisteredPrinters.length === 0) {
+    return {
+      eligible: false,
+      code: 'PRINTERS_OFFLINE',
+      error: 'All registered printers for this shop are currently offline. Please wait for the counter to reconnect hardware.'
+    };
+  }
+
+  // 3. Validate each file against printer capabilities
+  for (const file of files) {
+    const requestedSize = (file.paperSize || 'A4').toUpperCase();
+    const isColorRequested = file.colorMode === 'COLOR';
+    const isDuplexRequested = Boolean(file.duplex);
+
+    const capablePrinters = onlineRegisteredPrinters.filter((p) => {
+      const caps = (typeof p.capabilities === 'object' && p.capabilities !== null) ? p.capabilities : {};
+      const paperSizes: string[] = (Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4']).map((s: string) => String(s).toUpperCase());
+
+      // Check paper size
+      if (paperSizes.length > 0 && !paperSizes.includes(requestedSize)) {
+        return false;
+      }
+
+      // Check color mode
+      if (isColorRequested && caps.supportsColor === false) {
+        return false;
+      }
+
+      // Check duplex
+      if (isDuplexRequested && caps.supportsDuplex === false) {
+        return false;
+      }
+
+      return true;
+    });
+
+    if (capablePrinters.length === 0) {
+      if (isColorRequested) {
+        const anyColor = onlineRegisteredPrinters.some((p) => p.capabilities?.supportsColor === true);
+        if (!anyColor) {
+          return {
+            eligible: false,
+            code: 'INCOMPATIBLE_COLOR',
+            error: `This shop's active printer does not support Color printing. Please change "${file.fileName || 'document'}" to Black & White.`
+          };
+        }
+      }
+
+      if (requestedSize === 'A3') {
+        const anyA3 = onlineRegisteredPrinters.some((p) =>
+          (p.capabilities?.paperSizes || []).map((s: string) => String(s).toUpperCase()).includes('A3')
+        );
+        if (!anyA3) {
+          return {
+            eligible: false,
+            code: 'INCOMPATIBLE_PAPER_SIZE',
+            error: `This shop does not have a printer capable of A3 paper size. Please select A4 or another supported size.`
+          };
+        }
+      }
+
+      return {
+        eligible: false,
+        code: 'INCOMPATIBLE_PRINTER_OPTIONS',
+        error: `No registered online printer in this shop supports the requested options (${requestedSize}, ${file.colorMode || 'BW'}, ${isDuplexRequested ? 'Double-sided' : 'Single-sided'}).`
+      };
+    }
+  }
+
+  // Pick the best default matching printer
+  const defaultPrinter = onlineRegisteredPrinters.find((p) => p.is_default) || onlineRegisteredPrinters[0];
+
+  return {
+    eligible: true,
+    matchedPrinterName: defaultPrinter.name
+  };
+}
+
+export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
+  supportedPaperSizes: string[];
+  hasColorPrinter: boolean;
+  hasDuplexPrinter: boolean;
+  registeredPrintersCount: number;
+  onlineRegisteredPrintersCount: number;
+  isReadyForPrinting: boolean;
+}> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(shopIdOrSlug);
+  const candidateShopIds = await getCandidateShopIds(shopIdOrSlug);
+
+  try {
+    const res = await pool.query(
+      `SELECT name, status, capabilities, is_default, is_registered
+       FROM public.printers
+       WHERE ((shop_id::text = ANY($1::text[])) OR shop_id::text = $2)
+         AND is_registered = true`,
+      [candidateShopIds, canonicalShopId]
+    );
+
+    const registered = res.rows;
+    const online = registered.filter((p) => p.status === 'ONLINE');
+
+    const paperSizesSet = new Set<string>();
+    let hasColor = false;
+    let hasDuplex = false;
+
+    for (const p of online) {
+      const caps = (typeof p.capabilities === 'object' && p.capabilities !== null) ? p.capabilities : {};
+      const sizes: string[] = Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4'];
+      sizes.forEach((s) => paperSizesSet.add(s));
+      if (caps.supportsColor === true) hasColor = true;
+      if (caps.supportsDuplex === true) hasDuplex = true;
+    }
+
+    if (paperSizesSet.size === 0) {
+      paperSizesSet.add('A4');
+    }
+
+    return {
+      supportedPaperSizes: Array.from(paperSizesSet),
+      hasColorPrinter: hasColor,
+      hasDuplexPrinter: hasDuplex,
+      registeredPrintersCount: registered.length,
+      onlineRegisteredPrintersCount: online.length,
+      isReadyForPrinting: online.length > 0
+    };
+  } catch {
+    return {
+      supportedPaperSizes: ['A4'],
+      hasColorPrinter: true,
+      hasDuplexPrinter: true,
+      registeredPrintersCount: 1,
+      onlineRegisteredPrintersCount: 1,
+      isReadyForPrinting: true
+    };
+  }
 }
 
 export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAgentPrinter[]> {
   try {
-    const candidateShopIds = await getCandidateShopIds(shopId);
     const pool = requirePostgresPool();
+    const canonicalShopId = await resolvePrintFlowShopId(shopId);
+    const candidateShopIds = await getCandidateShopIds(shopId);
+
+    // First try authoritative public.printers table
+    const dbPrintersRes = await pool.query(
+      `SELECT p.id, p.agent_id, p.name, p.model, p.status, p.capabilities, p.is_default, p.is_registered,
+              p.driver_name, p.port_name, p.connection_type, d.device_name
+       FROM public.printers p
+       LEFT JOIN print_agent_devices d ON d.agent_id = p.agent_id
+       WHERE (p.shop_id::text = ANY($1::text[])) OR p.shop_id::text = $2
+       ORDER BY p.is_registered DESC, p.is_default DESC, p.name ASC`,
+      [candidateShopIds, canonicalShopId]
+    );
+
+    if (dbPrintersRes.rowCount && dbPrintersRes.rows.length > 0) {
+      return dbPrintersRes.rows.map((row) => {
+        const caps = (typeof row.capabilities === 'object' && row.capabilities !== null) ? row.capabilities : {};
+        return {
+          agentId: row.agent_id || 'agent_primary',
+          deviceName: row.device_name || 'PrintFlow Station',
+          printer: {
+            name: row.name,
+            displayName: row.name,
+            driverName: row.driver_name || row.model,
+            portName: row.port_name,
+            status: row.status as any,
+            isOnline: row.status === 'ONLINE',
+            isDefault: Boolean(row.is_default),
+            isRegistered: Boolean(row.is_registered),
+            connectionType: row.connection_type,
+            capabilities: {
+              paperSizes: Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4'],
+              supportsColor: caps.supportsColor !== undefined ? caps.supportsColor : null,
+              supportsDuplex: caps.supportsDuplex !== undefined ? caps.supportsDuplex : null,
+              colorModes: caps.colorModes || (caps.supportsColor ? ['BW', 'COLOR'] : ['BW']),
+              resolutions: caps.resolutions || []
+            }
+          }
+        };
+      });
+    }
+
+    // Fallback to print_agent_devices.printers
     const result = await pool.query(
       `SELECT agent_id, device_name, printers FROM print_agent_devices
-       WHERE (shop_id = ANY($1::text[])) AND is_revoked = false ORDER BY created_at`,
-      [candidateShopIds]
+       WHERE (shop_id = ANY($1::text[]) OR shop_id = $2) AND is_revoked = false ORDER BY created_at`,
+      [candidateShopIds, canonicalShopId]
     );
     const rows = result.rows;
 
