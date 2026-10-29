@@ -27,6 +27,8 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
   rescanPrinters: (): Promise<DiscoveredPrinter[]> => ipcRenderer.invoke('printer:rescan'),
   setPrinterRegistered: (printerName: string, registered: boolean): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('printer:set-registered', printerName, registered),
+  setPrinterEnabled: (printerName: string, enabled: boolean): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('printer:set-enabled', printerName, enabled),
   testPrint: (printerName: string): Promise<TestPrintResult> => ipcRenderer.invoke('printer:test-print', printerName),
 
   // Jobs Queue

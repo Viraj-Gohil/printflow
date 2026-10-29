@@ -293,18 +293,39 @@ export class PrintAgentService {
       throw new Error(entitlement.error || 'Could not verify the shop printer plan.');
     }
     let registeredNames = config.registeredPrinterNames;
-    if (!registeredNames) {
-      const preferred = config.selectedPrinterName || printers.find((printer) => printer.isDefault && printer.isOnline)?.name;
-      registeredNames = preferred && printers.some((printer) => printer.name === preferred && printer.isOnline) ? [preferred] : [];
-    }
-    const ownRegisteredCount = entitlement.agentRegisteredCount ?? registeredNames.length;
+    const ownRegisteredCount = entitlement.agentRegisteredCount ?? (registeredNames ? registeredNames.length : 0);
     const otherRegisteredCount = Math.max(0, (entitlement.registeredCount ?? ownRegisteredCount) - ownRegisteredCount);
     const agentCapacity = Math.max(0, entitlement.printerLimit - otherRegisteredCount);
+
+    if (!registeredNames || registeredNames.length === 0) {
+      // Auto-register preferred physical printer (e.g. HP LaserJet P1007 or default online printer) if capacity allows
+      const preferred =
+        config.selectedPrinterName ||
+        printers.find((p) => p.isOnline && !/pdf|xps|onenote|fax/i.test(p.name))?.name ||
+        printers.find((p) => p.isDefault && p.isOnline)?.name ||
+        printers.find((p) => p.isOnline)?.name;
+      registeredNames = preferred && agentCapacity > 0 ? [preferred] : [];
+    }
+
     registeredNames = registeredNames.slice(0, agentCapacity);
-    localVault.saveConfig({ printerLimit: entitlement.printerLimit, registeredPrinterNames: registeredNames });
+    localVault.saveConfig({
+      printerLimit: entitlement.printerLimit,
+      registeredPrinterNames: registeredNames,
+      selectedPrinterName: config.selectedPrinterName || registeredNames[0] || ''
+    });
     this.apiClient.updateConfig(localVault.getConfig());
-    const result = await this.apiClient.syncPrinters(printers.filter((printer) => registeredNames?.includes(printer.name)));
-    if (!result.success) throw new Error(result.error || 'Could not sync registered printers to the shop.');
+
+    // CRITICAL FIX: Send ALL discovered printers to the backend with their real registration & enablement state.
+    // Do NOT filter out unregistered printers — the backend needs to know all installed printers so shop owners
+    // can view and manage them.
+    const syncPayload = printers.map((printer) => ({
+      ...printer,
+      isRegistered: (registeredNames || []).includes(printer.name),
+      isEnabled: !(config.disabledPrinterNames || []).includes(printer.name)
+    }));
+
+    const result = await this.apiClient.syncPrinters(syncPayload as any);
+    if (!result.success) throw new Error(result.error || 'Could not sync printers to the shop.');
     return printers;
   }
 
@@ -335,11 +356,54 @@ export class PrintAgentService {
       };
     }
 
-    const result = await this.apiClient.syncPrinters(printers.filter((item) => next.includes(item.name)));
-    if (!result.success) return { success: false, error: result.error || 'Could not update registered printers.' };
+    // Call backend registration endpoint first to validate and persist
+    const regResult = await this.apiClient.registerPrinter(printerName, registered);
+    if (!regResult.success) {
+      return { success: false, error: regResult.error || 'Backend rejected printer registration update.' };
+    }
 
-    localVault.saveConfig({ registeredPrinterNames: next, printerLimit: entitlement.printerLimit });
+    // Sync all discovered printers with updated registration status
+    const syncPayload = printers.map((item) => ({
+      ...item,
+      isRegistered: next.includes(item.name),
+      isEnabled: !(config.disabledPrinterNames || []).includes(item.name)
+    }));
+    await this.apiClient.syncPrinters(syncPayload as any);
+
+    localVault.saveConfig({
+      registeredPrinterNames: next,
+      printerLimit: entitlement.printerLimit,
+      selectedPrinterName: next.includes(config.selectedPrinterName || '') ? config.selectedPrinterName : (next[0] || '')
+    });
     this.apiClient.updateConfig(localVault.getConfig());
+    return { success: true };
+  }
+
+  public async setPrinterEnabled(
+    printerName: string,
+    enabled: boolean
+  ): Promise<{ success: boolean; error?: string }> {
+    const config = localVault.getConfig();
+    const currentDisabled = new Set(config.disabledPrinterNames || []);
+    if (enabled) {
+      currentDisabled.delete(printerName);
+    } else {
+      currentDisabled.add(printerName);
+    }
+    const nextDisabled = Array.from(currentDisabled);
+    localVault.saveConfig({ disabledPrinterNames: nextDisabled });
+    this.apiClient.updateConfig(localVault.getConfig());
+
+    // Sync updated enabled state to backend
+    const printers = this.printerManager.getCachedPrinters();
+    const registeredNames = config.registeredPrinterNames || [];
+    const syncPayload = printers.map((item) => ({
+      ...item,
+      isRegistered: registeredNames.includes(item.name),
+      isEnabled: !nextDisabled.includes(item.name)
+    }));
+    await this.apiClient.syncPrinters(syncPayload as any);
+
     return { success: true };
   }
 

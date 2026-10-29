@@ -254,6 +254,29 @@ export class ApiClient {
     }
   }
 
+  public async registerPrinter(
+    printerName: string,
+    registered: boolean
+  ): Promise<{ success: boolean; error?: string; code?: string }> {
+    const url = `${this.getBaseUrl()}/api/agent/printers/register`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ printerName, registered })
+      });
+
+      const data = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string; code?: string };
+      return {
+        success: response.ok && Boolean(data.success),
+        error: data.error || (!response.ok ? `HTTP ${response.status}` : undefined),
+        code: data.code
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
   /**
    * Fetches queued print jobs authorized for this shop
    */

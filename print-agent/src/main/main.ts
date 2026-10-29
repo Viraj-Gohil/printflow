@@ -295,6 +295,13 @@ ipcMain.handle('printer:set-registered', async (_event, printerName: unknown, re
   return agentService.setPrinterRegistered(printerName, registered);
 });
 
+ipcMain.handle('printer:set-enabled', async (_event, printerName: unknown, enabled: unknown) => {
+  if (typeof printerName !== 'string' || !printerName.trim() || typeof enabled !== 'boolean') {
+    return { success: false, error: 'Select a valid printer enablement action.' };
+  }
+  return agentService.setPrinterEnabled(printerName, enabled);
+});
+
 ipcMain.handle('printer:test-print', async (_event, printerName: unknown) => {
   if (typeof printerName !== 'string' || !printerName.trim()) {
     return { success: false, printerName: '', message: 'Select a valid installed printer.' };

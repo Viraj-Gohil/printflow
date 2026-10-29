@@ -158,6 +158,7 @@ export interface ElectronAgentAPI {
   getPrinters: () => Promise<DiscoveredPrinter[]>;
   rescanPrinters: () => Promise<DiscoveredPrinter[]>;
   setPrinterRegistered: (printerName: string, registered: boolean) => Promise<{ success: boolean; error?: string }>;
+  setPrinterEnabled: (printerName: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   testPrint: (printerName: string) => Promise<TestPrintResult>;
   
   // Jobs Queue

@@ -58,6 +58,9 @@ export interface PrintAgentPrinter {
     status: 'READY' | 'PRINTING' | 'OFFLINE' | 'BUSY' | 'ERROR';
     isOnline: boolean;
     isDefault: boolean;
+    isRegistered?: boolean;
+    is_registered?: boolean;
+    connectionType?: string;
     capabilities: {
       paperSizes: string[];
       supportsColor: boolean | null;
@@ -952,6 +955,19 @@ export async function getShopAgentAvailability(shopId: string): Promise<ShopAgen
     }
   }
 
+  if (totalPrinters === 0) {
+    try {
+      const canonicalId = await resolvePrintFlowShopId(shopId);
+      const countRes = await pool.query(
+        `SELECT COUNT(*)::int AS count FROM public.printers WHERE ((shop_id::text = ANY($1::text[])) OR shop_id::text = $2)`,
+        [candidateIds, canonicalId]
+      );
+      if (countRes.rowCount && countRes.rows[0]) {
+        totalPrinters = Number(countRes.rows[0].count) || 0;
+      }
+    } catch {}
+  }
+
   if (!anyAgentOnline) {
     return {
       isAvailable: false,
@@ -1697,7 +1713,11 @@ export async function getActivePrintAgentForShop(shopId: string): Promise<{
 
   const res = await pool.query(
     `SELECT agent_id, device_name, status, last_seen, created_at, updated_at, is_revoked,
-            jsonb_array_length(printers) AS printer_count
+            COALESCE(
+              NULLIF((SELECT COUNT(*)::int FROM public.printers p WHERE (p.shop_id::text = ANY($1::text[]) OR p.shop_id::text = $2)), 0),
+              CASE WHEN jsonb_typeof(printers) = 'array' THEN jsonb_array_length(printers) ELSE 0 END,
+              0
+            ) AS printer_count
      FROM print_agent_devices
      WHERE (shop_id = ANY($1::text[]) OR shop_id = $2) AND is_revoked = false
      ORDER BY last_seen DESC NULLS LAST
@@ -1759,7 +1779,12 @@ export async function getPrintAgentStatus(agentId: string, shopId: string): Prom
 } | null> {
   const candidateShopIds = await getCandidateShopIds(shopId);
   const result = await requirePostgresPool().query(
-    `SELECT status, last_seen, is_revoked, jsonb_array_length(printers) AS printer_count
+    `SELECT status, last_seen, is_revoked,
+            COALESCE(
+              NULLIF((SELECT COUNT(*)::int FROM public.printers p WHERE p.agent_id = $1 OR (p.shop_id::text = ANY($2::text[]))), 0),
+              CASE WHEN jsonb_typeof(printers) = 'array' THEN jsonb_array_length(printers) ELSE 0 END,
+              0
+            ) AS printer_count
      FROM print_agent_devices WHERE agent_id = $1 AND (shop_id = ANY($2::text[]))`,
     [agentId, candidateShopIds]
   );
@@ -1997,7 +2022,9 @@ export async function syncShopAgentPrinters(params: {
 
       const isDefault = p.isDefault !== undefined ? Boolean(p.isDefault) : (existing ? Boolean(existing.is_default) : false);
       const isOnline = Boolean(p.isOnline);
-      const status = isOnline ? (p.status || 'ONLINE') : 'OFFLINE';
+      const status = !isOnline || p.status === 'OFFLINE'
+        ? 'OFFLINE'
+        : (p.status === 'BUSY' ? 'BUSY' : (p.status === 'PAUSED' ? 'PAUSED' : 'ONLINE'));
 
       await client.query(
         `INSERT INTO public.printers (
@@ -2555,7 +2582,8 @@ export async function getShopAgentDetails(agentId: string, shopId: string): Prom
   const deviceName = deviceRes.rowCount === 1 ? deviceRes.rows[0].device_name : 'PrintFlow Agent';
 
   const entitlement = await getShopPrinterEntitlements(canonicalShopId);
-  const registeredPrinters = await getShopPrintAgentPrinters(canonicalShopId);
+  const allShopPrinters = await getShopPrintAgentPrinters(canonicalShopId);
+  const registeredPrinters = allShopPrinters.filter((p) => p.printer.isRegistered);
   const agentRegisteredPrinters = registeredPrinters.filter((p) => p.agentId === agentId);
 
   let subStatus: 'ACTIVE' | 'TRIAL' | 'EXPIRED' | 'SUSPENDED' | 'CANCELLED' = 'ACTIVE';
