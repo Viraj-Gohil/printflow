@@ -4285,6 +4285,7 @@ interface BackendPrintJob {
     paperSize: 'A4' | 'A3' | 'A5' | 'Letter' | 'Legal';
     duplex: boolean;
     pagesToPrint?: string;
+    mime?: string;
   }>;
   totalAmount: number;
   paymentStatus: 'SUCCESS';
@@ -4493,7 +4494,7 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
     shopId,
     customerName: typeof customerName === 'string' ? customerName.trim() || 'Guest Customer' : 'Guest Customer',
     customerPhone: typeof customerPhone === 'string' ? customerPhone : '',
-    files: preparedFiles.map(({ storageKey, buffer, mime, sanitizedFilename, ...file }) => file),
+    files: preparedFiles.map(({ storageKey, buffer, sanitizedFilename, ...file }) => file),
     totalAmount,
     paymentStatus: 'SUCCESS',
     printStatus: 'QUEUED',
@@ -5413,8 +5414,27 @@ app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
           const ext = path.extname(targetFile.fileName) || '.pdf';
           const objectPath = buildObjectPath(job.shopId, job.id, targetFile.id, ext);
           const buffer = await getStorageProvider().download(objectPath);
+
+          // Authoritative binary signature inspection on downloaded buffer
+          const sig = verifyFileSignature(buffer);
+          let mime = sig.isValid && sig.mimeType ? sig.mimeType : undefined;
+          if (!mime && (targetFile as any).mime) {
+            mime = (targetFile as any).mime;
+          }
+          if (!mime) {
+            const dbFile = await getPrintAgentJobFile(job.id, targetFile.id);
+            if (dbFile?.mime) mime = dbFile.mime;
+          }
+          if (!mime) {
+            const lowerExt = ext.toLowerCase();
+            if (lowerExt === '.png') mime = 'image/png';
+            else if (lowerExt === '.jpg' || lowerExt === '.jpeg') mime = 'image/jpeg';
+            else if (lowerExt === '.webp') mime = 'image/webp';
+            else mime = 'application/pdf';
+          }
+
           storedFile = {
-            mime: (targetFile as any).mime || 'application/pdf',
+            mime,
             filename: targetFile.fileName,
             buffer
           };
@@ -5429,7 +5449,15 @@ app.get('/api/agent/jobs/:id/file', async (req: Request, res: Response) => {
       const file = requestedFileId
         ? job.files.find((item) => item.id === requestedFileId)
         : job.files.length === 1 ? job.files[0] : undefined;
-      if (file) storedFile = await getPrintAgentJobFile(job.id, file.id);
+      if (file) {
+        storedFile = await getPrintAgentJobFile(job.id, file.id);
+        if (storedFile && storedFile.buffer) {
+          const sig = verifyFileSignature(storedFile.buffer);
+          if (sig.isValid && sig.mimeType) {
+            storedFile.mime = sig.mimeType;
+          }
+        }
+      }
     }
   } catch (error) {
     logger.error('Neon print document lookup failed', { jobId: req.params.id, error: deepRedact(error) });

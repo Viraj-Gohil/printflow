@@ -395,18 +395,17 @@ export class ApiClient {
       });
 
       if (!response.ok) {
+        const ct = response.headers.get('content-type')?.toLowerCase() || '';
+        if (ct.includes('application/json')) {
+          try {
+            const errData = await response.json();
+            return { success: false, error: errData.error || `Server rejected document download with HTTP ${response.status}` };
+          } catch {}
+        }
+        if (ct.includes('text/html')) {
+          return { success: false, error: `Document download failed: Server returned an HTML error page (HTTP ${response.status}).` };
+        }
         return { success: false, error: `Document download failed with HTTP ${response.status}` };
-      }
-
-      const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase();
-      const extensionByMime: Record<string, string> = {
-        'application/pdf': '.pdf',
-        'image/jpeg': '.jpg',
-        'image/png': '.png',
-        'image/webp': '.webp'
-      };
-      if (!contentType || !extensionByMime[contentType]) {
-        return { success: false, error: `Unsupported document content type: ${contentType || 'unknown'}` };
       }
 
       const contentLength = Number(response.headers.get('content-length'));
@@ -429,15 +428,58 @@ export class ApiClient {
       }
       if (totalBytes === 0) return { success: false, error: 'Downloaded document is empty.' };
       const buffer = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)));
-      const signatureValid = contentType === 'application/pdf'
-        ? buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))
-        : contentType === 'image/jpeg'
-          ? buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
-          : contentType === 'image/png'
-            ? buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
-            : buffer.toString('ascii', 0, 4) === 'RIFF' && buffer.toString('ascii', 8, 12) === 'WEBP';
-      if (!signatureValid) {
-        return { success: false, error: 'Downloaded file content does not match its declared document type.' };
+
+      // Inspect binary magic numbers directly from the downloaded buffer
+      let detectedFormat: 'pdf' | 'png' | 'jpeg' | 'webp' | null = null;
+      if (buffer.length >= 5 && buffer.subarray(0, 5).equals(Buffer.from('%PDF-'))) {
+        detectedFormat = 'pdf';
+      } else if (
+        buffer.length >= 8 &&
+        buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+      ) {
+        detectedFormat = 'png';
+      } else if (
+        buffer.length >= 3 &&
+        buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff
+      ) {
+        detectedFormat = 'jpeg';
+      } else if (
+        buffer.length >= 12 &&
+        buffer.toString('ascii', 0, 4) === 'RIFF' &&
+        buffer.toString('ascii', 8, 12) === 'WEBP'
+      ) {
+        detectedFormat = 'webp';
+      }
+
+      // If buffer is not any recognized printable document/image:
+      if (!detectedFormat) {
+        const preview = buffer.toString('utf8', 0, Math.min(256, buffer.length)).trim().toLowerCase();
+        if (preview.startsWith('<!doctype') || preview.includes('<html')) {
+          return { success: false, error: 'Downloaded file is an HTML web page rather than a printable document.' };
+        }
+        if (preview.startsWith('{') || preview.startsWith('[')) {
+          return { success: false, error: 'Downloaded file is a JSON payload rather than a printable document.' };
+        }
+        return { success: false, error: 'Downloaded file content does not match genuine document/image binary signatures (expected PDF, PNG, JPEG, or WEBP).' };
+      }
+
+      const extensionByFormat: Record<string, string> = {
+        pdf: '.pdf',
+        jpeg: '.jpg',
+        png: '.png',
+        webp: '.webp'
+      };
+
+      const formatByMime: Record<string, 'pdf' | 'jpeg' | 'png' | 'webp'> = {
+        'application/pdf': 'pdf',
+        'image/jpeg': 'jpeg',
+        'image/png': 'png',
+        'image/webp': 'webp'
+      };
+
+      const contentType = response.headers.get('content-type')?.split(';')[0].trim().toLowerCase() || '';
+      if (contentType && formatByMime[contentType] && formatByMime[contentType] !== detectedFormat) {
+        logger.warn('NETWORK', `Declared Content-Type (${contentType}) differed from binary payload signature (${detectedFormat}). Using verified binary payload.`);
       }
 
       const tempDir = path.join(os.tmpdir(), 'PrintFlow_Spool');
@@ -447,11 +489,11 @@ export class ApiClient {
 
       const filePath = path.join(
         tempDir,
-        `${M2MCrypto.sanitizeFilename(jobId)}_${crypto.randomUUID()}${extensionByMime[contentType]}`
+        `${M2MCrypto.sanitizeFilename(jobId)}_${crypto.randomUUID()}${extensionByFormat[detectedFormat]}`
       );
       fs.writeFileSync(filePath, buffer, { flag: 'wx', mode: 0o600 });
 
-      logger.info('NETWORK', `Document downloaded (${buffer.length} bytes) saved to ${filePath}`);
+      logger.info('NETWORK', `Document downloaded (${buffer.length} bytes, format: ${detectedFormat}) saved to ${filePath}`);
       return { success: true, filePath };
     } catch (err: any) {
       logger.error('NETWORK', `Error downloading document for ${jobId}: ${err.message}`);

@@ -1912,6 +1912,14 @@ export async function getShopPrintersWithEntitlements(shopId: string): Promise<{
   return {
     printers: res.rows.map((row) => {
       const caps = (typeof row.capabilities === 'object' && row.capabilities !== null) ? row.capabilities : {};
+      const isKnownMono = /(laserjet.*(p100|p110|101|102|1005|1020)|p1007|p1008|p1102|1020|1018|lbp2900|monochrome)/i.test(`${row.name} ${row.driver_name || ''} ${row.model || ''}`);
+      const supportsColor = caps.supportsColor !== undefined && caps.supportsColor !== null
+        ? caps.supportsColor
+        : (isKnownMono ? false : null);
+      const supportsDuplex = caps.supportsDuplex !== undefined && caps.supportsDuplex !== null
+        ? caps.supportsDuplex
+        : (isKnownMono ? false : null);
+
       return {
         id: String(row.id),
         shopId: String(row.shop_id),
@@ -1931,9 +1939,9 @@ export async function getShopPrintersWithEntitlements(shopId: string): Promise<{
         detectionSource: row.detection_source || caps.detectionSource || 'AUTO',
         capabilities: {
           paperSizes: Array.isArray(caps.paperSizes) && caps.paperSizes.length > 0 ? caps.paperSizes : ['A4'],
-          supportsColor: caps.supportsColor !== undefined ? caps.supportsColor : null,
-          supportsDuplex: caps.supportsDuplex !== undefined ? caps.supportsDuplex : null,
-          colorModes: caps.colorModes || (caps.supportsColor ? ['BW', 'COLOR'] : ['BW']),
+          supportsColor,
+          supportsDuplex,
+          colorModes: caps.colorModes || (supportsColor ? ['BW', 'COLOR'] : ['BW']),
           resolutions: row.resolutions || caps.resolutions || []
         },
         lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
@@ -2006,6 +2014,14 @@ export async function syncShopAgentPrinters(params: {
       let isManualOverride = false;
       let detectionSource = 'AUTO';
       let connectionType = p.connectionType || (p.portName?.toUpperCase().includes('USB') ? 'USB' : (p.portName?.includes('.') || p.portName?.toUpperCase().includes('WSD')) ? 'Network' : 'Other');
+
+      const isKnownMono = /(laserjet.*(p100|p110|101|102|1005|1020)|p1007|p1008|p1102|1020|1018|lbp2900|monochrome)/i.test(`${p.name} ${p.driverName || ''} ${p.displayName || ''}`);
+      if (capabilities.supportsColor === undefined || capabilities.supportsColor === null) {
+        if (isKnownMono) capabilities.supportsColor = false;
+      }
+      if (capabilities.supportsDuplex === undefined || capabilities.supportsDuplex === null) {
+        if (isKnownMono) capabilities.supportsDuplex = false;
+      }
 
       if (existing && existing.is_manual_override) {
         isManualOverride = true;
@@ -2475,6 +2491,14 @@ export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAg
     if (dbPrintersRes.rowCount && dbPrintersRes.rows.length > 0) {
       return dbPrintersRes.rows.map((row) => {
         const caps = (typeof row.capabilities === 'object' && row.capabilities !== null) ? row.capabilities : {};
+        const isKnownMono = /(laserjet.*(p100|p110|101|102|1005|1020)|p1007|p1008|p1102|1020|1018|lbp2900|monochrome)/i.test(`${row.name} ${row.driver_name || ''} ${row.model || ''}`);
+        const supportsColor = caps.supportsColor !== undefined && caps.supportsColor !== null
+          ? caps.supportsColor
+          : (isKnownMono ? false : null);
+        const supportsDuplex = caps.supportsDuplex !== undefined && caps.supportsDuplex !== null
+          ? caps.supportsDuplex
+          : (isKnownMono ? false : null);
+
         return {
           agentId: row.agent_id || 'agent_primary',
           deviceName: row.device_name || 'PrintFlow Station',
@@ -2490,9 +2514,9 @@ export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAg
             connectionType: row.connection_type,
             capabilities: {
               paperSizes: Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4'],
-              supportsColor: caps.supportsColor !== undefined ? caps.supportsColor : null,
-              supportsDuplex: caps.supportsDuplex !== undefined ? caps.supportsDuplex : null,
-              colorModes: caps.colorModes || (caps.supportsColor ? ['BW', 'COLOR'] : ['BW']),
+              supportsColor,
+              supportsDuplex,
+              colorModes: caps.colorModes || (supportsColor ? ['BW', 'COLOR'] : ['BW']),
               resolutions: caps.resolutions || []
             }
           }
