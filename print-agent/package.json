@@ -15,9 +15,10 @@
     "dist": "electron-builder"
   },
   "dependencies": {
+    "@napi-rs/canvas": "^1.1.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.546.0",
-    "pdf-to-printer": "^5.8.1",
+    "pdfjs-dist": "^6.4.299",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "tailwind-merge": "^3.5.0"

@@ -87,6 +87,8 @@ export interface PrintFileItem {
   colorMode: 'BW' | 'COLOR';
   paperSize: 'A4' | 'A3' | 'A5' | 'Letter' | 'Legal';
   duplex: boolean;
+  orientation?: 'PORTRAIT' | 'LANDSCAPE' | 'AUTO';
+  pageRange?: string;
   pagesToPrint?: string;
 }
 

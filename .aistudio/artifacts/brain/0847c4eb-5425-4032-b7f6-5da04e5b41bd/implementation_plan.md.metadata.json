@@ -1,0 +1,6 @@
+{
+  "summary":  "Architectural blueprint for integrating the verified Universal Windows Print Engine (.NET System.Drawing.Printing, PDF.js, @napi-rs/canvas, and PowerShell) into the PrintFlow Electron Desktop Agent, replacing SumatraPDF with native rendering and spooler monitoring.",
+  "updatedAt":  "2026-10-31T14:13:52.329987789Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}

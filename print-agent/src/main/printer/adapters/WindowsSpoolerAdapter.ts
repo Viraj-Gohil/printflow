@@ -15,6 +15,7 @@ try {
 } catch {
   app = null;
 }
+import { universalPrintService } from '../engine/UniversalPrintService.js';
 import {
   IPrinterAdapter,
   PrinterCategory,
@@ -186,107 +187,31 @@ export class WindowsSpoolerAdapter implements IPrinterAdapter {
     const { printerName, tempFilePath, fileItem, timeoutMs } = options;
     const effectiveTimeoutMs = Math.max(30000, timeoutMs || 30000);
 
-    const packageEntry = require.resolve('pdf-to-printer');
-    let packageDirectory = path.dirname(packageEntry);
-    if (app && app.isPackaged) {
-      packageDirectory = packageDirectory.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
-    }
-
-    const sumatraFile = fs.readdirSync(packageDirectory).find((name) => /^SumatraPDF-.+\.exe$/i.test(name));
-    if (!sumatraFile) {
-      return {
-        success: false,
-        submitted: false,
-        adapterName: this.adapterName,
-        error: 'The bundled Windows print engine (SumatraPDF) is missing. Repair or reinstall PrintFlow Agent.'
-      };
-    }
-
-    const commandArgs = PrintSettingsAdapter.adaptSettings(
-      fileItem,
-      printerName,
-      tempFilePath,
-      effectiveTimeoutMs,
-      path.join(packageDirectory, sumatraFile)
-    );
-
-    logger.info('SPOOLER', `[WindowsSpoolerAdapter] Spooling job to printer "${printerName}"`, {
-      copies: commandArgs.copies,
-      paperSize: commandArgs.paperSize,
-      duplex: commandArgs.duplexMode,
-      color: commandArgs.color
+    logger.info('SPOOLER', `[WindowsSpoolerAdapter] Spooling job to printer "${printerName}" via UniversalPrintService`, {
+      copies: fileItem.copies,
+      paperSize: fileItem.paperSize,
+      color: fileItem.colorMode
     });
 
-    const scriptPath = path.join(
-      os.tmpdir(),
-      `printflow_spool_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.ps1`
-    );
-    fs.writeFileSync(scriptPath, commandArgs.powershellCommand, { encoding: 'utf8' });
+    const result = await universalPrintService.printFile({
+      jobId: fileItem.id || `file_${Date.now()}`,
+      filePath: tempFilePath,
+      printerName,
+      copies: fileItem.copies || 1,
+      paperSize: fileItem.paperSize || 'A4',
+      orientation: (fileItem.orientation?.toUpperCase() as any) || 'PORTRAIT',
+      colorMode: fileItem.colorMode === 'COLOR' ? 'COLOR' : 'BW',
+      pageRange: fileItem.pagesToPrint || (fileItem as any).pageRange,
+      timeoutMs: effectiveTimeoutMs
+    });
 
-    try {
-      const { stdout, stderr } = await execAsync(
-        `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
-        { timeout: effectiveTimeoutMs + 5000 }
-      );
-
-      const lines = (stdout || '')
-        .trim()
-        .split(/\r?\n/)
-        .map((l) => l.trim())
-        .filter(Boolean);
-
-      let result: { success?: boolean; submitted?: boolean; error?: string } | null = null;
-      for (let i = lines.length - 1; i >= 0; i--) {
-        try {
-          if (lines[i].startsWith('{') && lines[i].endsWith('}')) {
-            result = JSON.parse(lines[i]);
-            break;
-          }
-        } catch {}
-      }
-
-      if (!result) {
-        const detail = (stderr?.trim() || stdout?.trim() || 'Windows spooler script returned invalid output').slice(0, 300);
-        return {
-          success: false,
-          submitted: false,
-          adapterName: this.adapterName,
-          error: `Windows print submission failed: ${detail}`
-        };
-      }
-
-      if (!result.success) {
-        return {
-          success: false,
-          submitted: Boolean(result.submitted),
-          adapterName: this.adapterName,
-          error: result.error || 'Windows spooler reported print rejection.'
-        };
-      }
-
-      return {
-        success: true,
-        submitted: true,
-        adapterName: this.adapterName
-      };
-    } catch (err: any) {
-      const errDetail = (err.stderr?.trim() || err.stdout?.trim() || err.message || '').slice(0, 300);
-      const error = err.killed
-        ? `Timed out waiting for printer "${printerName}". Check connection and spooler queue.`
-        : errDetail
-          ? `Windows print error on "${printerName}": ${errDetail}`
-          : `Windows Print Spooler check failed for "${printerName}".`;
-      return {
-        success: false,
-        submitted: Boolean(err.killed),
-        adapterName: this.adapterName,
-        error
-      };
-    } finally {
-      try {
-        fs.unlinkSync(scriptPath);
-      } catch {}
-    }
+    return {
+      success: result.success,
+      submitted: result.submitted,
+      jobId: result.jobId,
+      adapterName: this.adapterName,
+      error: result.errorMessage
+    };
   }
 
   public async cancelJob(_jobId: string): Promise<boolean> {
