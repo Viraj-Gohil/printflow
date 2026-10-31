@@ -115,6 +115,17 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
         </button>
       </div>
 
+      {/* Discovery Loading Indicator */}
+      {isScanning && (
+        <div className="p-3.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl text-xs text-blue-700 dark:text-blue-300 flex items-center justify-between animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <RefreshCw className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400" />
+            <span className="font-medium">Discovering installed Windows printers and status...</span>
+          </div>
+          <span className="text-[11px] opacity-80 font-semibold px-2 py-0.5 bg-blue-100 dark:bg-blue-900/60 rounded-full">Auto Discovery Active</span>
+        </div>
+      )}
+
       {/* Test Print Result Toast */}
       {testResult && (
         <div

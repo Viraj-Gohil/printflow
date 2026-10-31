@@ -71,7 +71,7 @@ export interface DiscoveredPrinter {
   driverName?: string;
   portName?: string;
   capabilities: {
-    paperSizes: Array<'A4' | 'A3' | 'A5' | 'Letter' | 'Legal'>;
+    paperSizes: Array<'A4' | 'A3' | 'A5' | 'Letter' | 'Legal' | 'Roll_80mm' | 'Roll_58mm'>;
     supportsColor: boolean | null;
     supportsDuplex: boolean | null;
   };
@@ -156,6 +156,7 @@ export interface ElectronAgentAPI {
   
   // Printers
   getPrinters: () => Promise<DiscoveredPrinter[]>;
+  getIsScanning?: () => Promise<boolean>;
   rescanPrinters: () => Promise<DiscoveredPrinter[]>;
   setPrinterRegistered: (printerName: string, registered: boolean) => Promise<{ success: boolean; error?: string }>;
   setPrinterEnabled: (printerName: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
@@ -184,6 +185,7 @@ export interface ElectronAgentAPI {
   onJobUpdated: (callback: (job: PrintJobItem) => void) => () => void;
   onLogAdded: (callback: (log: AgentLogEntry) => void) => () => void;
   onPrintersUpdated: (callback: (printers: DiscoveredPrinter[]) => void) => () => void;
+  onPrinterScanningChanged?: (callback: (isScanning: boolean) => void) => () => void;
   copyText: (text: string) => Promise<boolean>;
 }
 

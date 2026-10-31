@@ -24,6 +24,7 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
 
   // Printers
   getPrinters: (): Promise<DiscoveredPrinter[]> => ipcRenderer.invoke('printer:get-list'),
+  getIsScanning: (): Promise<boolean> => ipcRenderer.invoke('printer:is-scanning'),
   rescanPrinters: (): Promise<DiscoveredPrinter[]> => ipcRenderer.invoke('printer:rescan'),
   setPrinterRegistered: (printerName: string, registered: boolean): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('printer:set-registered', printerName, registered),
@@ -72,5 +73,11 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
     const handler = (_event: Electron.IpcRendererEvent, printers: DiscoveredPrinter[]) => callback(printers);
     ipcRenderer.on('event:printers-updated', handler);
     return () => ipcRenderer.removeListener('event:printers-updated', handler);
+  },
+
+  onPrinterScanningChanged: (callback: (isScanning: boolean) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, isScanning: boolean) => callback(isScanning);
+    ipcRenderer.on('event:printer-scanning', handler);
+    return () => ipcRenderer.removeListener('event:printer-scanning', handler);
   }
 });

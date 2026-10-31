@@ -123,9 +123,10 @@ export const App: React.FC = () => {
       api.getMetrics(),
       api.getPrinters(),
       api.getJobs(),
-      api.getLogs()
+      api.getLogs(),
+      api.getIsScanning ? api.getIsScanning() : Promise.resolve(false)
     ])
-      .then(([loadedConfig, loadedStatus, loadedMetrics, loadedPrinters, loadedJobs, loadedLogs]) => {
+      .then(([loadedConfig, loadedStatus, loadedMetrics, loadedPrinters, loadedJobs, loadedLogs, scanningState]) => {
         if (!active) return;
         setConfig(loadedConfig);
         setStatus(loadedStatus.status);
@@ -134,6 +135,7 @@ export const App: React.FC = () => {
         setPrinters(loadedPrinters);
         setJobs(loadedJobs);
         setLogs(loadedLogs);
+        setIsScanning(Boolean(scanningState));
       })
       .catch((error: unknown) => {
         if (!active) return;
@@ -173,7 +175,15 @@ export const App: React.FC = () => {
       setLogs((previous) => [newLog, ...previous.slice(0, 199)])
     );
 
-    const unsubPrinters = api.onPrintersUpdated(setPrinters);
+    const unsubPrinters = api.onPrintersUpdated((updatedPrinters) => {
+      setPrinters(updatedPrinters);
+    });
+
+    const unsubScanning = api.onPrinterScanningChanged
+      ? api.onPrinterScanningChanged((scanning) => {
+          setIsScanning(scanning);
+        })
+      : () => {};
 
     return () => {
       active = false;
@@ -181,6 +191,7 @@ export const App: React.FC = () => {
       unsubJob();
       unsubLog();
       unsubPrinters();
+      unsubScanning();
     };
   }, []);
 

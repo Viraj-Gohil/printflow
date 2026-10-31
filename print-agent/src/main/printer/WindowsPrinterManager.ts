@@ -16,6 +16,7 @@ const require = createRequire(import.meta.url);
 export class WindowsPrinterManager {
   private static instance: WindowsPrinterManager;
   private cachedPrinters: DiscoveredPrinter[] = [];
+  private activeScanPromise: Promise<DiscoveredPrinter[]> | null = null;
 
   private constructor() {}
 
@@ -28,87 +29,137 @@ export class WindowsPrinterManager {
 
   /**
    * Discovers installed Windows printers using Electron APIs and PowerShell WMI
+   * Avoids overlapping scans using an active promise lock.
    */
   public async discoverPrinters(mainWindow?: BrowserWindow | null): Promise<DiscoveredPrinter[]> {
-    logger.info('SPOOLER', 'Scanning for connected Windows printers...');
-    const discoveredByName = new Map<string, DiscoveredPrinter>();
-
-    // 1. Try Electron native getPrintersAsync if window is available
-    if (mainWindow && mainWindow.webContents) {
-      try {
-        const electronPrinters = await mainWindow.webContents.getPrintersAsync();
-        for (const ep of electronPrinters) {
-          const isVirtual = PrintSettingsAdapter.isVirtualPrinter(ep.name);
-          discoveredByName.set(ep.name, {
-            name: ep.name,
-            displayName: ep.displayName || ep.name,
-            isDefault: ep.isDefault,
-            status: isVirtual ? 'ERROR' : ep.status === 0 ? 'READY' : 'ERROR',
-            isOnline: !isVirtual && ep.status === 0,
-            capabilities: {
-              paperSizes: [],
-              supportsColor: null,
-              supportsDuplex: null
-            }
-          });
-        }
-      } catch (err: any) {
-        logger.warn('SPOOLER', 'Electron native printer discovery failed', { error: err.message });
-      }
+    if (this.activeScanPromise) {
+      logger.info('SPOOLER', 'Discovery scan already in progress, returning existing scan operation.');
+      return this.activeScanPromise;
     }
 
-    // 2. Refresh Windows status so offline queues are not mistaken for connected printers.
-    if (process.platform === 'win32') {
+    this.activeScanPromise = (async () => {
       try {
-        const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_Printer | Select-Object Name, DriverName, Default, PrinterStatus, WorkOffline, DetectedErrorState, PortName | ConvertTo-Json"`;
-        const { stdout } = await execAsync(psCommand, { timeout: 10000 });
-        if (stdout && stdout.trim()) {
-          const parsed = JSON.parse(stdout);
-          const list = Array.isArray(parsed) ? parsed : [parsed];
-          for (const item of list) {
-            const name = item.Name;
-            if (typeof name !== 'string' || !name) continue;
-            const isVirtual = PrintSettingsAdapter.isVirtualPrinter(name);
-            const isOffline = Boolean(item.WorkOffline) ||
-              item.PrinterStatus === 6 ||
-              item.PrinterStatus === 7 ||
-              item.DetectedErrorState === 10;
-            const hasDeviceError = [4, 5, 8, 9, 11, 12].includes(Number(item.DetectedErrorState));
-            const statusIsKnownOnline = [3, 4, 5].includes(Number(item.PrinterStatus));
-            const isOnline = !isVirtual && !isOffline && !hasDeviceError && statusIsKnownOnline;
-            const electronPrinter = discoveredByName.get(name);
-            const status = isVirtual || hasDeviceError || (!isOnline && !isOffline)
-              ? 'ERROR'
-              : isOffline
-                ? 'OFFLINE'
-                : item.PrinterStatus === 4
-                  ? 'PRINTING'
-                  : 'READY';
-            discoveredByName.set(name, {
-              name,
-              displayName: electronPrinter?.displayName || name,
-              isDefault: Boolean(item.Default) || Boolean(electronPrinter?.isDefault),
-              status,
-              isOnline,
-              driverName: item.DriverName || electronPrinter?.driverName,
-              portName: item.PortName,
-              capabilities: electronPrinter?.capabilities || {
-                paperSizes: [],
-                supportsColor: null,
-                supportsDuplex: null
-              }
-            });
+        logger.info('SPOOLER', 'Scanning for connected Windows printers...');
+        const discoveredByName = new Map<string, DiscoveredPrinter>();
+        const existingCacheMap = new Map<string, DiscoveredPrinter>();
+        for (const cp of this.cachedPrinters) {
+          existingCacheMap.set(cp.name.trim().toLowerCase(), cp);
+        }
+
+        // 1. Try Electron native getPrintersAsync if window webContents is active
+        if (mainWindow && mainWindow.webContents) {
+          try {
+            const electronPrinters = await mainWindow.webContents.getPrintersAsync();
+            for (const ep of electronPrinters) {
+              if (!ep.name || !ep.name.trim()) continue;
+              const key = ep.name.trim().toLowerCase();
+              const isVirtual = PrintSettingsAdapter.isVirtualPrinter(ep.name);
+              const cached = existingCacheMap.get(key);
+
+              discoveredByName.set(key, {
+                name: ep.name,
+                displayName: ep.displayName || ep.name,
+                isDefault: ep.isDefault,
+                status: isVirtual ? 'ERROR' : ep.status === 0 ? 'READY' : 'ERROR',
+                isOnline: !isVirtual && ep.status === 0,
+                capabilities: cached?.capabilities || {
+                  paperSizes: [],
+                  supportsColor: null,
+                  supportsDuplex: null
+                }
+              });
+            }
+          } catch (err: any) {
+            logger.warn('SPOOLER', 'Electron native printer discovery notice', { error: err.message });
           }
         }
-      } catch (err: any) {
-        logger.warn('SPOOLER', 'PowerShell printer query failed', { error: err.message });
-      }
-    }
 
-    const discovered = Array.from(discoveredByName.values());
-    this.cachedPrinters = discovered;
-    logger.info('SPOOLER', `Discovered ${discovered.length} active printer device(s)`);
-    return discovered;
+        // 2. Refresh Windows status & driver capabilities via PowerShell WMI
+        if (process.platform === 'win32') {
+          try {
+            const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_Printer | Select-Object Name, DriverName, Default, PrinterStatus, WorkOffline, DetectedErrorState, PortName, PrinterPaperNames, Capabilities, Color | ConvertTo-Json -Depth 3"`;
+            const { stdout } = await execAsync(psCommand, { timeout: 12000 });
+            if (stdout && stdout.trim()) {
+              const parsed = JSON.parse(stdout);
+              const list = Array.isArray(parsed) ? parsed : [parsed];
+
+              for (const item of list) {
+                const name = item.Name;
+                if (typeof name !== 'string' || !name || !name.trim()) continue;
+                const key = name.trim().toLowerCase();
+                const isVirtual = PrintSettingsAdapter.isVirtualPrinter(name);
+
+                const isOffline = Boolean(item.WorkOffline) ||
+                  item.PrinterStatus === 6 ||
+                  item.PrinterStatus === 7 ||
+                  item.DetectedErrorState === 10;
+                const hasDeviceError = [4, 5, 8, 9, 11, 12].includes(Number(item.DetectedErrorState));
+                const statusIsKnownOnline = [3, 4, 5].includes(Number(item.PrinterStatus));
+                const isOnline = !isVirtual && !isOffline && !hasDeviceError && statusIsKnownOnline;
+
+                const existingEntry = discoveredByName.get(key) || existingCacheMap.get(key);
+                const status = isVirtual || hasDeviceError || (!isOnline && !isOffline)
+                  ? 'ERROR'
+                  : isOffline
+                    ? 'OFFLINE'
+                    : item.PrinterStatus === 4
+                      ? 'PRINTING'
+                      : 'READY';
+
+                // Capabilities parsing
+                const isKnownMonoModel = /(laserjet.*(p100|p110|101|102|1005|1020)|p1007|p1008|p1102|1020|1018|lbp2900|monochrome)/i.test(`${name} ${item.DriverName || ''}`);
+                const rawColor = item.Color === true || (Array.isArray(item.Capabilities) && item.Capabilities.includes(2));
+                const supportsColor = isKnownMonoModel ? false : (typeof item.Color === 'boolean' ? item.Color : (rawColor ? true : existingEntry?.capabilities?.supportsColor ?? null));
+                const rawDuplex = Array.isArray(item.Capabilities) && (item.Capabilities.includes(3) || item.Capabilities.includes(13) || item.Capabilities.includes(14));
+                const supportsDuplex = isKnownMonoModel ? false : (rawDuplex ? true : (existingEntry?.capabilities?.supportsDuplex ?? null));
+
+                // Paper sizes parsing
+                const detectedPaperSizes: Array<'A4' | 'A3' | 'A5' | 'Letter' | 'Legal' | 'Roll_80mm' | 'Roll_58mm'> = [];
+                if (Array.isArray(item.PrinterPaperNames)) {
+                  for (const pn of item.PrinterPaperNames) {
+                    const str = String(pn || '').trim().toUpperCase();
+                    if (str.includes('A4') && !detectedPaperSizes.includes('A4')) detectedPaperSizes.push('A4');
+                    else if (str.includes('A3') && !detectedPaperSizes.includes('A3')) detectedPaperSizes.push('A3');
+                    else if (str.includes('A5') && !detectedPaperSizes.includes('A5')) detectedPaperSizes.push('A5');
+                    else if (str.includes('LETTER') && !detectedPaperSizes.includes('Letter')) detectedPaperSizes.push('Letter');
+                    else if (str.includes('LEGAL') && !detectedPaperSizes.includes('Legal')) detectedPaperSizes.push('Legal');
+                  }
+                }
+                if (detectedPaperSizes.length === 0) {
+                  detectedPaperSizes.push(...(existingEntry?.capabilities?.paperSizes || ['A4']));
+                }
+
+                discoveredByName.set(key, {
+                  name,
+                  displayName: existingEntry?.displayName || name,
+                  isDefault: Boolean(item.Default) || Boolean(existingEntry?.isDefault),
+                  status,
+                  isOnline,
+                  driverName: item.DriverName || existingEntry?.driverName,
+                  portName: item.PortName || existingEntry?.portName,
+                  capabilities: {
+                    paperSizes: Array.from(new Set(detectedPaperSizes)),
+                    supportsColor,
+                    supportsDuplex
+                  }
+                });
+              }
+            }
+          } catch (err: any) {
+            logger.warn('SPOOLER', 'PowerShell printer query notice', { error: err.message });
+          }
+        }
+
+        const discovered = Array.from(discoveredByName.values());
+        this.cachedPrinters = discovered;
+        logger.info('SPOOLER', `Discovered ${discovered.length} active printer device(s)`);
+        return discovered;
+      } finally {
+        this.activeScanPromise = null;
+      }
+    })();
+
+    return this.activeScanPromise;
   }
 
   public getCachedPrinters(): DiscoveredPrinter[] {
@@ -173,97 +224,38 @@ export class WindowsPrinterManager {
     }
 
     const effectiveTimeoutMs = Math.max(30000, timeoutMs);
-    const packageEntry = require.resolve('pdf-to-printer');
-    let packageDirectory = path.dirname(packageEntry);
-    if (app.isPackaged) {
-      packageDirectory = packageDirectory.replace(`${path.sep}app.asar${path.sep}`, `${path.sep}app.asar.unpacked${path.sep}`);
-    }
-    const sumatraFile = fs.readdirSync(packageDirectory).find((name) => /^SumatraPDF-.+\.exe$/i.test(name));
-    if (!sumatraFile) {
-      return { success: false, submitted: false, error: 'The bundled Windows print engine is missing. Repair or reinstall PrintFlow Agent.' };
-    }
-    const commandArgs = PrintSettingsAdapter.adaptSettings(
-      file,
-      actualPrinterName,
-      tempFilePath,
-      effectiveTimeoutMs,
-      path.join(packageDirectory, sumatraFile)
-    );
 
-    logger.info('SPOOLER', `Spooling document to printer "${actualPrinterName}"`, {
-      copies: commandArgs.copies,
-      paperSize: commandArgs.paperSize,
-      duplex: commandArgs.duplexMode,
-      color: commandArgs.color
+    // 1. Validate print job parameters against physical adapter capabilities and rules
+    const { adapterRegistry } = await import('./AdapterRegistry.js');
+    const validation = await adapterRegistry.validateJob(actualPrinterName, file, selectedPrinter.driverName);
+    if (!validation.isValid) {
+      logger.warn('SPOOLER', `Job validation rejected for "${actualPrinterName}": ${validation.error}`);
+      return {
+        success: false,
+        submitted: false,
+        error: validation.error || 'Job settings violate printer hardware capabilities or policy.'
+      };
+    }
+
+    // 2. Dispatch print job through the appropriate modular printer adapter
+    const printResult = await adapterRegistry.printJob({
+      printerName: actualPrinterName,
+      tempFilePath,
+      fileItem: file,
+      timeoutMs: effectiveTimeoutMs
     });
 
-    if (process.platform === 'win32') {
-      const scriptPath = path.join(
-        os.tmpdir(),
-        `printflow_spool_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.ps1`
-      );
-      fs.writeFileSync(scriptPath, commandArgs.powershellCommand, { encoding: 'utf8' });
-
-      try {
-        const { stdout, stderr } = await execAsync(
-          `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
-          { timeout: effectiveTimeoutMs + 5000 }
-        );
-
-        const lines = (stdout || '')
-          .trim()
-          .split(/\r?\n/)
-          .map((l) => l.trim())
-          .filter(Boolean);
-
-        let result: { success?: boolean; submitted?: boolean; error?: string } | null = null;
-        for (let i = lines.length - 1; i >= 0; i--) {
-          try {
-            if (lines[i].startsWith('{') && lines[i].endsWith('}')) {
-              result = JSON.parse(lines[i]);
-              break;
-            }
-          } catch {}
-        }
-
-        if (!result) {
-          const detail = (stderr?.trim() || stdout?.trim() || 'Windows spooler script returned invalid output').slice(0, 300);
-          logger.error('SPOOLER', `Windows spooler output unparseable for "${actualPrinterName}": ${detail}`);
-          return {
-            success: false,
-            submitted: false,
-            error: `Windows print submission failed: ${detail}`
-          };
-        }
-
-        if (!result.success) {
-          logger.warn('SPOOLER', `Windows spooler reported rejection for "${actualPrinterName}": ${result.error}`);
-          return {
-            success: false,
-            submitted: Boolean(result.submitted),
-            error: result.error || 'Windows could not confirm that the printer completed the job.'
-          };
-        }
-
-        logger.info('SPOOLER', `Windows confirmed print job completed on "${actualPrinterName}"`);
-        return { success: true, submitted: true };
-      } catch (err: any) {
-        const errDetail = (err.stderr?.trim() || err.stdout?.trim() || err.message || '').slice(0, 300);
-        const error = err.killed
-          ? `Timed out waiting for printer "${actualPrinterName}". Check its connection and queue before retrying.`
-          : errDetail
-            ? `Windows print error on "${actualPrinterName}": ${errDetail}`
-            : `Windows could not check the printer queue for "${actualPrinterName}". Verify the Print Spooler service and printer driver.`;
-        logger.error('SPOOLER', `Windows spooler execution failed for "${actualPrinterName}": ${error}`);
-        return { success: false, submitted: Boolean(err.killed), error };
-      } finally {
-        try {
-          fs.unlinkSync(scriptPath);
-        } catch {}
-      }
+    if (printResult.success) {
+      logger.info('SPOOLER', `Printer adapter (${printResult.adapterName}) confirmed job submission for "${actualPrinterName}"`);
+    } else {
+      logger.warn('SPOOLER', `Printer adapter (${printResult.adapterName}) reported rejection for "${actualPrinterName}": ${printResult.error}`);
     }
 
-    return { success: false, submitted: false, error: 'Physical printing is supported only by the Windows desktop agent.' };
+    return {
+      success: printResult.success,
+      submitted: printResult.submitted,
+      error: printResult.error
+    };
   }
 
   /**

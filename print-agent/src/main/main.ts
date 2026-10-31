@@ -280,6 +280,10 @@ ipcMain.handle('printer:get-list', () => {
   return printerManager.getCachedPrinters();
 });
 
+ipcMain.handle('printer:is-scanning', () => {
+  return agentService.getIsScanningPrinters();
+});
+
 ipcMain.handle('printer:rescan', async () => {
   const printers = await agentService.rescanPrinters();
   if (mainWindow && !mainWindow.isDestroyed()) {

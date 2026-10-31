@@ -14,6 +14,7 @@ export class JobQueueManager {
   private activeDownloadsCount = 0;
   private maxConcurrentDownloads = 3;
 
+  // Runtime queue begins empty; authoritative jobs are reconciled from Neon on startup
   constructor(apiClient: ApiClient, printerManager: WindowsPrinterManager) {
     this.apiClient = apiClient;
     this.printerManager = printerManager;

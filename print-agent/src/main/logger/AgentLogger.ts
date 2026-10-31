@@ -1,7 +1,16 @@
 import fs from 'fs';
 import path from 'path';
-import { app } from 'electron';
+import { createRequire } from 'module';
 import { AgentLogEntry } from '../../renderer/types/agent.js';
+
+const require = createRequire(import.meta.url);
+let app: any = null;
+try {
+  const electron = require('electron');
+  app = electron?.app || null;
+} catch {
+  app = null;
+}
 
 export class AgentLogger {
   private static instance: AgentLogger;

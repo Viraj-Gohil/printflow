@@ -58,6 +58,113 @@ export class PrintAgentService {
     }
   }
 
+  private isScanningPrinters = false;
+  private printerScanTimer?: NodeJS.Timeout;
+  private syncedPrinterCache: Map<string, string> = new Map();
+  private pendingReconciliation = true;
+
+  private notifyPrinterScanning(isScanning: boolean): void {
+    this.isScanningPrinters = isScanning;
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('event:printer-scanning', isScanning);
+    }
+  }
+
+  public getIsScanningPrinters(): boolean {
+    return this.isScanningPrinters;
+  }
+
+  /**
+   * Evaluates changes between currently discovered printers and previously synced cache.
+   */
+  private detectPrinterChanges(currentPrinters: any[]): {
+    hasChanges: boolean;
+    events: Array<{
+      printerName: string;
+      eventType: 'PRINTER_ADDED' | 'PRINTER_REMOVED' | 'STATUS_CHANGED' | 'CONFIG_CHANGED';
+      changedFields: string[];
+    }>;
+    currentPrinterMap: Map<string, { printer: any; stateKey: string }>;
+  } {
+    const events: Array<{
+      printerName: string;
+      eventType: 'PRINTER_ADDED' | 'PRINTER_REMOVED' | 'STATUS_CHANGED' | 'CONFIG_CHANGED';
+      changedFields: string[];
+    }> = [];
+
+    const currentPrinterMap = new Map<string, { printer: any; stateKey: string }>();
+
+    for (const printer of currentPrinters) {
+      const key = printer.name.trim().toLowerCase();
+      const stateObj = {
+        name: printer.name,
+        status: printer.status,
+        isOnline: Boolean(printer.isOnline),
+        isDefault: Boolean(printer.isDefault),
+        driverName: printer.driverName || '',
+        portName: printer.portName || '',
+        capabilities: printer.capabilities || {},
+        isRegistered: Boolean(printer.isRegistered),
+        isEnabled: Boolean(printer.isEnabled)
+      };
+      const stateKey = JSON.stringify(stateObj);
+      currentPrinterMap.set(key, { printer, stateKey });
+
+      const cachedStateKey = this.syncedPrinterCache.get(key);
+      if (!cachedStateKey) {
+        events.push({
+          printerName: printer.name,
+          eventType: 'PRINTER_ADDED',
+          changedFields: ['new_device_detected']
+        });
+      } else if (cachedStateKey !== stateKey) {
+        const changedFields: string[] = [];
+        try {
+          const oldObj = JSON.parse(cachedStateKey);
+          if (oldObj.status !== stateObj.status) changedFields.push(`status (${oldObj.status} -> ${stateObj.status})`);
+          if (oldObj.isOnline !== stateObj.isOnline) changedFields.push(`isOnline (${oldObj.isOnline} -> ${stateObj.isOnline})`);
+          if (oldObj.isDefault !== stateObj.isDefault) changedFields.push(`isDefault (${oldObj.isDefault} -> ${stateObj.isDefault})`);
+          if (oldObj.isRegistered !== stateObj.isRegistered) changedFields.push(`isRegistered (${oldObj.isRegistered} -> ${stateObj.isRegistered})`);
+          if (oldObj.isEnabled !== stateObj.isEnabled) changedFields.push(`isEnabled (${oldObj.isEnabled} -> ${stateObj.isEnabled})`);
+          if (JSON.stringify(oldObj.capabilities) !== JSON.stringify(stateObj.capabilities)) changedFields.push('capabilities');
+          if (oldObj.driverName !== stateObj.driverName) changedFields.push('driverName');
+          if (oldObj.portName !== stateObj.portName) changedFields.push('portName');
+        } catch {
+          changedFields.push('state_mismatch');
+        }
+
+        const isStatusChange = changedFields.some((f) => f.startsWith('status') || f.startsWith('isOnline'));
+        events.push({
+          printerName: printer.name,
+          eventType: isStatusChange ? 'STATUS_CHANGED' : 'CONFIG_CHANGED',
+          changedFields: changedFields.length > 0 ? changedFields : ['configuration_updated']
+        });
+      }
+    }
+
+    // Check for removed printers
+    for (const [cachedKey, cachedStateKey] of this.syncedPrinterCache.entries()) {
+      if (!currentPrinterMap.has(cachedKey)) {
+        let origName = cachedKey;
+        try {
+          const parsed = JSON.parse(cachedStateKey);
+          if (parsed.name) origName = parsed.name;
+        } catch {}
+        events.push({
+          printerName: origName,
+          eventType: 'PRINTER_REMOVED',
+          changedFields: ['device_removed']
+        });
+      }
+    }
+
+    return {
+      hasChanges: events.length > 0,
+      events,
+      currentPrinterMap
+    };
+  }
+
   /**
    * Initializes agent lifecycle, recovery audit, and background sync
    */
@@ -67,8 +174,13 @@ export class PrintAgentService {
     // 1. Crash recovery audit
     CrashRecoveryManager.performStartupRecovery();
 
-    // 2. Discover local printers
-    await this.printerManager.discoverPrinters(this.mainWindow);
+    // 2. Discover local printers automatically on app startup with initial reconciliation
+    try {
+      this.pendingReconciliation = true;
+      await this.rescanPrinters(true);
+    } catch (error) {
+      logger.warn('SPOOLER', `Initial printer discovery completed with notice: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
 
     const config = localVault.getConfig();
     this.apiClient.updateConfig(config);
@@ -80,11 +192,6 @@ export class PrintAgentService {
 
     // 3. Initial heartbeat & sync
     await this.triggerHeartbeat();
-    try {
-      await this.rescanPrinters();
-    } catch (error) {
-      logger.warn('NETWORK', `Could not sync registered printers at startup: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    }
 
     // 4. Initial job poll
     await this.pollPendingJobs();
@@ -97,6 +204,7 @@ export class PrintAgentService {
     this.backgroundLoopsActive = false;
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.pollingTimer) clearTimeout(this.pollingTimer);
+    if (this.printerScanTimer) clearInterval(this.printerScanTimer);
     this.setStatus('OFFLINE');
     logger.info('AGENT', 'PrintFlow Agent service stopped.');
   }
@@ -109,11 +217,19 @@ export class PrintAgentService {
     // Clear existing
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.pollingTimer) clearTimeout(this.pollingTimer);
+    if (this.printerScanTimer) clearInterval(this.printerScanTimer);
 
     // Heartbeat loop (every 10s)
     this.heartbeatTimer = setInterval(() => {
       this.triggerHeartbeat();
     }, 10000);
+
+    // Automatic background printer hardware status refresh (every 20s)
+    this.printerScanTimer = setInterval(() => {
+      if (this.backgroundLoopsActive && !this.isScanningPrinters) {
+        this.rescanPrinters(false).catch(() => {});
+      }
+    }, 20000);
 
     // Job polling loop
     this.pollFailureCount = 0;
@@ -190,8 +306,13 @@ export class PrintAgentService {
 
         this.setStatus('ONLINE');
         if (shouldResumeQueue) {
+          this.pendingReconciliation = true;
           await this.recoverInterruptedDownloads();
           this.queueManager.reloadPendingJobs();
+          // Perform full printer reconciliation on initial connect or reconnect
+          this.rescanPrinters(true).catch((err) => {
+            logger.warn('SPOOLER', `Reconnect printer reconciliation notice: ${err instanceof Error ? err.message : err}`);
+          });
         }
         return { success: true, status: res.status };
       }
@@ -283,50 +404,87 @@ export class PrintAgentService {
     }
   }
 
-  public async rescanPrinters(): Promise<DiscoveredPrinter[]> {
-    const printers = await this.printerManager.discoverPrinters(this.mainWindow);
-    const config = localVault.getConfig();
-    if (!config.agentId || !config.authToken) return printers;
+  public async rescanPrinters(forceSync = false): Promise<DiscoveredPrinter[]> {
+    this.notifyPrinterScanning(true);
+    try {
+      const printers = await this.printerManager.discoverPrinters(this.mainWindow);
+      if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+        this.mainWindow.webContents.send('event:printers-updated', printers);
+      }
 
-    const entitlement = await this.apiClient.getPrinterEntitlements();
-    if (!entitlement.success || entitlement.printerLimit === undefined) {
-      throw new Error(entitlement.error || 'Could not verify the shop printer plan.');
+      const config = localVault.getConfig();
+      if (!config.agentId || !config.authToken) return printers;
+
+      try {
+        const entitlement = await this.apiClient.getPrinterEntitlements();
+        if (entitlement.success && entitlement.printerLimit !== undefined) {
+          let registeredNames = config.registeredPrinterNames;
+          const ownRegisteredCount = entitlement.agentRegisteredCount ?? (registeredNames ? registeredNames.length : 0);
+          const otherRegisteredCount = Math.max(0, (entitlement.registeredCount ?? ownRegisteredCount) - ownRegisteredCount);
+          const agentCapacity = Math.max(0, entitlement.printerLimit - otherRegisteredCount);
+
+          if (!registeredNames || registeredNames.length === 0) {
+            // Auto-register preferred physical printer (e.g. HP LaserJet P1007 or default online printer) if capacity allows
+            const preferred =
+              config.selectedPrinterName ||
+              printers.find((p) => p.isOnline && !/pdf|xps|onenote|fax/i.test(p.name))?.name ||
+              printers.find((p) => p.isDefault && p.isOnline)?.name ||
+              printers.find((p) => p.isOnline)?.name;
+            registeredNames = preferred && agentCapacity > 0 ? [preferred] : [];
+          }
+
+          registeredNames = registeredNames.slice(0, agentCapacity);
+          localVault.saveConfig({
+            printerLimit: entitlement.printerLimit,
+            registeredPrinterNames: registeredNames,
+            selectedPrinterName: config.selectedPrinterName || registeredNames[0] || ''
+          });
+          this.apiClient.updateConfig(localVault.getConfig());
+
+          // Send ALL discovered printers to the backend with their real registration & enablement state.
+          const syncPayload = printers.map((printer) => ({
+            ...printer,
+            isRegistered: (registeredNames || []).includes(printer.name),
+            isEnabled: !(config.disabledPrinterNames || []).includes(printer.name)
+          }));
+
+          // Evaluate event-driven delta between current state and previously synced cache
+          const diff = this.detectPrinterChanges(syncPayload);
+
+          if (forceSync || this.pendingReconciliation || diff.hasChanges) {
+            logger.info('SPOOLER', `Executing printer hardware sync with backend (forceSync: ${forceSync}, pendingReconciliation: ${this.pendingReconciliation}, eventCount: ${diff.events.length})`, {
+              eventDetails: diff.events.map((e) => `${e.printerName}: [${e.eventType}] fields: (${e.changedFields.join(', ')})`),
+              totalPrinters: syncPayload.length
+            });
+
+            const syncRes = await this.apiClient.syncPrinters(syncPayload as any);
+            if (syncRes.success) {
+              this.syncedPrinterCache.clear();
+              for (const [key, value] of diff.currentPrinterMap.entries()) {
+                this.syncedPrinterCache.set(key, value.stateKey);
+              }
+              this.pendingReconciliation = false;
+              logger.info('SPOOLER', `Successfully synchronized ${syncPayload.length} printer(s) with backend.`, {
+                syncedCount: syncPayload.length,
+                eventsProcessed: diff.events.map((e) => `${e.printerName}:${e.eventType}`)
+              });
+            } else {
+              this.pendingReconciliation = true;
+              logger.warn('SPOOLER', `Printer hardware sync API request failed: ${syncRes.error}. Queued for retry on next scan or heartbeat reconciliation.`);
+            }
+          } else {
+            logger.info('SPOOLER', 'Background printer hardware scan complete: No printer state or configuration changes detected. Skipped backend API request.');
+          }
+        }
+      } catch (syncErr: any) {
+        this.pendingReconciliation = true;
+        logger.warn('SPOOLER', 'Printer backend sync notice during rescan', { error: syncErr?.message || syncErr });
+      }
+
+      return printers;
+    } finally {
+      this.notifyPrinterScanning(false);
     }
-    let registeredNames = config.registeredPrinterNames;
-    const ownRegisteredCount = entitlement.agentRegisteredCount ?? (registeredNames ? registeredNames.length : 0);
-    const otherRegisteredCount = Math.max(0, (entitlement.registeredCount ?? ownRegisteredCount) - ownRegisteredCount);
-    const agentCapacity = Math.max(0, entitlement.printerLimit - otherRegisteredCount);
-
-    if (!registeredNames || registeredNames.length === 0) {
-      // Auto-register preferred physical printer (e.g. HP LaserJet P1007 or default online printer) if capacity allows
-      const preferred =
-        config.selectedPrinterName ||
-        printers.find((p) => p.isOnline && !/pdf|xps|onenote|fax/i.test(p.name))?.name ||
-        printers.find((p) => p.isDefault && p.isOnline)?.name ||
-        printers.find((p) => p.isOnline)?.name;
-      registeredNames = preferred && agentCapacity > 0 ? [preferred] : [];
-    }
-
-    registeredNames = registeredNames.slice(0, agentCapacity);
-    localVault.saveConfig({
-      printerLimit: entitlement.printerLimit,
-      registeredPrinterNames: registeredNames,
-      selectedPrinterName: config.selectedPrinterName || registeredNames[0] || ''
-    });
-    this.apiClient.updateConfig(localVault.getConfig());
-
-    // CRITICAL FIX: Send ALL discovered printers to the backend with their real registration & enablement state.
-    // Do NOT filter out unregistered printers — the backend needs to know all installed printers so shop owners
-    // can view and manage them.
-    const syncPayload = printers.map((printer) => ({
-      ...printer,
-      isRegistered: (registeredNames || []).includes(printer.name),
-      isEnabled: !(config.disabledPrinterNames || []).includes(printer.name)
-    }));
-
-    const result = await this.apiClient.syncPrinters(syncPayload as any);
-    if (!result.success) throw new Error(result.error || 'Could not sync printers to the shop.');
-    return printers;
   }
 
   public async setPrinterRegistered(
@@ -362,20 +520,15 @@ export class PrintAgentService {
       return { success: false, error: regResult.error || 'Backend rejected printer registration update.' };
     }
 
-    // Sync all discovered printers with updated registration status
-    const syncPayload = printers.map((item) => ({
-      ...item,
-      isRegistered: next.includes(item.name),
-      isEnabled: !(config.disabledPrinterNames || []).includes(item.name)
-    }));
-    await this.apiClient.syncPrinters(syncPayload as any);
-
     localVault.saveConfig({
       registeredPrinterNames: next,
       printerLimit: entitlement.printerLimit,
       selectedPrinterName: next.includes(config.selectedPrinterName || '') ? config.selectedPrinterName : (next[0] || '')
     });
     this.apiClient.updateConfig(localVault.getConfig());
+
+    // Trigger explicit sync to refresh backend and synced printer cache
+    await this.rescanPrinters(true);
     return { success: true };
   }
 
@@ -394,16 +547,8 @@ export class PrintAgentService {
     localVault.saveConfig({ disabledPrinterNames: nextDisabled });
     this.apiClient.updateConfig(localVault.getConfig());
 
-    // Sync updated enabled state to backend
-    const printers = this.printerManager.getCachedPrinters();
-    const registeredNames = config.registeredPrinterNames || [];
-    const syncPayload = printers.map((item) => ({
-      ...item,
-      isRegistered: registeredNames.includes(item.name),
-      isEnabled: !nextDisabled.includes(item.name)
-    }));
-    await this.apiClient.syncPrinters(syncPayload as any);
-
+    // Trigger explicit sync to refresh backend and synced printer cache
+    await this.rescanPrinters(true);
     return { success: true };
   }
 
