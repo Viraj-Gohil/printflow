@@ -63,77 +63,92 @@ export class PrintSettingsAdapter {
 
     const timeoutSeconds = Math.max(30, Math.ceil(timeoutMs / 1000));
     const powershellCommand = `
-      $ErrorActionPreference = 'Stop'
-      $submitted = $false
-      $filePath = '${safePath}'
-      $printer = '${safePrinter}'
-      $sumatra = '${safeSumatraPath}'
-      $settings = '${settings}'
-      $documentName = [System.IO.Path]::GetFileName($filePath)
-      $deadline = [DateTime]::UtcNow.AddSeconds(${timeoutSeconds})
-      try {
-        if ($printer -match 'Microsoft Print to PDF|Microsoft XPS Document Writer|OneNote|Fax|Adobe PDF|Foxit PDF|PDFCreator|Print to PDF') {
-          throw "Printer '$printer' is a virtual/document printer, not a physical printer. Select a connected shop printer."
-        }
-        if (-not (Test-Path -LiteralPath $filePath)) {
-          throw 'The downloaded print document is missing.'
-        }
-        try {
-          $printerInfo = Get-Printer -Name $printer -ErrorAction Stop
-        } catch {
-          throw "Printer '$printer' is not installed or available to Windows. Reconnect it, then rescan printers."
-        }
-        if ($printerInfo.PrinterStatus -match 'Offline') {
-          throw "Printer '$printer' is offline or disconnected. Reconnect it in Windows, then rescan printers."
-        }
-        if ($printerInfo.PrinterStatus -match 'Error|NotAvailable|Paused|PaperOut|PaperJam|DoorOpen|UserIntervention|NoToner') {
-          throw "Printer '$printer' is not ready ($($printerInfo.PrinterStatus)). Resolve the printer issue, then retry."
-        }
-        $existingJobIds = @(
-          Get-PrintJob -PrinterName $printer -ErrorAction Stop |
-            ForEach-Object { [int]$_.ID }
-        )
-        try {
-          if (-not (Test-Path -LiteralPath $sumatra)) {
-            throw 'The bundled Windows print engine is missing.'
-          }
-          $arguments = '-print-to "' + $printer + '" -silent -print-settings "' + $settings + '" "' + $filePath + '"'
-          Start-Process -FilePath $sumatra -ArgumentList $arguments -ErrorAction Stop | Out-Null
-        } catch {
-          throw "Windows could not send the document to printer '$printer'. Check the printer and its driver."
-        }
-        $submitted = $true
-        $printJob = $null
-        while ([DateTime]::UtcNow -lt $deadline -and -not $printJob) {
-          $printJob = Get-PrintJob -PrinterName $printer -ErrorAction Stop |
-            Where-Object { $_.DocumentName -eq $documentName -and $existingJobIds -notcontains [int]$_.ID } |
-            Sort-Object ID |
-            Select-Object -First 1
-          if (-not $printJob) { Start-Sleep -Milliseconds 500 }
-        }
-        if (-not $printJob) {
-          throw "Windows did not add '$documentName' to the '$printer' print queue."
-        }
-        $printJobId = [int]$printJob.ID
-        while ([DateTime]::UtcNow -lt $deadline) {
-          $printJob = Get-PrintJob -PrinterName $printer -ID $printJobId -ErrorAction SilentlyContinue
-          if (-not $printJob) {
-            throw "Windows removed the print job before confirming it printed."
-          }
-          if ($printJob.IsInError -or $printJob.IsOffline -or $printJob.IsPaperOut -or $printJob.IsPaused) {
-            throw "Printer '$printer' reported a problem while printing. Check paper, connection, and printer status."
-          }
-          if ($printJob.IsPrinted -or $printJob.IsCompleted -or $printJob.JobStatus -match 'Printed|Completed') {
-            [PSCustomObject]@{ success = $true; submitted = $true; error = $null } | ConvertTo-Json -Compress
-            exit 0
-          }
-          Start-Sleep -Milliseconds 500
-        }
-        throw "Timed out waiting for printer '$printer' to confirm printing."
-      } catch {
-        [PSCustomObject]@{ success = $false; submitted = $submitted; error = $_.Exception.Message } | ConvertTo-Json -Compress
-        exit 0
-      }
+$ErrorActionPreference = 'Stop'
+$submitted = $false
+$filePath = '${safePath}'
+$printer = '${safePrinter}'
+$sumatra = '${safeSumatraPath}'
+$settings = '${settings}'
+$timeoutSec = ${timeoutSeconds}
+try {
+  if ($printer -match 'Microsoft Print to PDF|Microsoft XPS Document Writer|OneNote|Fax|Adobe PDF|Foxit PDF|PDFCreator|Print to PDF') {
+    throw "Printer '$printer' is a virtual/document printer, not a physical printer. Select a connected shop printer."
+  }
+  if (-not (Test-Path -LiteralPath $filePath)) {
+    throw 'The downloaded print document is missing.'
+  }
+
+  # 1. Authoritative Printer Discovery & Health Check via universal WMI/CIM
+  $printerInfo = $null
+  try {
+    $printerInfo = Get-CimInstance Win32_Printer -ErrorAction SilentlyContinue |
+      Where-Object { $_.Name -eq $printer -or $_.Name.Trim().ToLower() -eq $printer.Trim().ToLower() } |
+      Select-Object -First 1
+  } catch {}
+  if (-not $printerInfo) {
+    try {
+      $printerInfo = Get-Printer -Name $printer -ErrorAction SilentlyContinue
+    } catch {}
+  }
+  if (-not $printerInfo) {
+    throw "Printer '$printer' is not installed or available to Windows. Reconnect it, then rescan printers."
+  }
+
+  $isOffline = $false
+  if ($printerInfo.PSObject.Properties['WorkOffline'] -and $printerInfo.WorkOffline) {
+    $isOffline = $true
+  }
+  if ($printerInfo.PSObject.Properties['PrinterStatus'] -and ($printerInfo.PrinterStatus -eq 7 -or "$($printerInfo.PrinterStatus)" -match 'Offline')) {
+    $isOffline = $true
+  }
+  if ($isOffline) {
+    throw "Printer '$printer' is offline or disconnected. Reconnect it in Windows, then rescan printers."
+  }
+
+  if ($printerInfo.PSObject.Properties['DetectedErrorState'] -and @(4, 5, 8, 9, 11, 12) -contains [int]$printerInfo.DetectedErrorState) {
+    $errMap = @{ 4='Paper Low'; 5='Paper Out'; 8='Door Open'; 9='Paper Jam'; 11='User Intervention Required'; 12='Output Bin Full' }
+    $reason = $errMap[[int]$printerInfo.DetectedErrorState]
+    if (-not $reason) { $reason = "Hardware state $($printerInfo.DetectedErrorState)" }
+    throw "Printer '$printer' is not ready ($reason). Resolve the printer issue, then retry."
+  }
+
+  # 2. Dispatch Document directly to bundled SumatraPDF
+  if (-not (Test-Path -LiteralPath $sumatra)) {
+    throw 'The bundled Windows print engine is missing. Repair or reinstall PrintFlow Agent.'
+  }
+
+  $argList = @('-print-to', $printer, '-silent')
+  if ($settings) {
+    $argList += @('-print-settings', $settings)
+  }
+  $argList += $filePath
+
+  $proc = Start-Process -FilePath $sumatra -ArgumentList $argList -Wait -PassThru -ErrorAction Stop
+  if ($proc.ExitCode -ne 0) {
+    throw "Windows print engine (SumatraPDF) exited with code $($proc.ExitCode) for printer '$printer'."
+  }
+  $submitted = $true
+
+  # 3. Post-Spool Queue Verification (Checks for active spooler errors without blocking fast despooling)
+  $errorJob = $null
+  try {
+    $errorJob = Get-CimInstance Win32_PrintJob -ErrorAction SilentlyContinue |
+      Where-Object { ($_.Name -like "*$printer*" -or $_.Caption -like "*$printer*") -and ($_.Status -match 'Error|Degraded' -or $_.JobStatus -match 'Error|PaperOut|Blocked|UserIntervention') } |
+      Select-Object -First 1
+  } catch {}
+
+  if ($errorJob) {
+    $jobErr = if ($errorJob.JobStatus) { $errorJob.JobStatus.Trim() } else { 'Printer reported an error in queue' }
+    throw "Printer '$printer' reported an issue during printing: $jobErr. Check paper, toner, and queue."
+  }
+
+  # 4. Success confirmation
+  [PSCustomObject]@{ success = $true; submitted = $true; error = $null } | ConvertTo-Json -Compress
+  exit 0
+} catch {
+  [PSCustomObject]@{ success = $false; submitted = $submitted; error = $_.Exception.Message } | ConvertTo-Json -Compress
+  exit 0
+}
     `.trim();
 
     return {

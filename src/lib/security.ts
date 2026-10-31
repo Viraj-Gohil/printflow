@@ -1401,8 +1401,29 @@ export function sanitizeClientStorage(storageInterface: { removeItem: (key: stri
   return removedKeys;
 }
 
+/**
+ * Detects whether an error is a transient database connection, DNS resolution, or network routing failure.
+ */
+export function isDatabaseNetworkError(err: any): boolean {
+  if (!err) return false;
+  const msg = String(err.message || err || '');
+  const code = String(err.code || '');
+  const syscall = String(err.syscall || '');
+  return (
+    code === 'EAI_AGAIN' ||
+    code === 'ENOTFOUND' ||
+    code === 'ECONNREFUSED' ||
+    code === 'ENETUNREACH' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EHOSTUNREACH' ||
+    syscall === 'getaddrinfo' ||
+    /ECONNREFUSED|ENETUNREACH|EAI_AGAIN|getaddrinfo|ENOTFOUND|ETIMEDOUT|EHOSTUNREACH|timeout/i.test(msg)
+  );
+}
+
 export * from './logger';
 export * from './ssrfProtection';
+
 
 
 

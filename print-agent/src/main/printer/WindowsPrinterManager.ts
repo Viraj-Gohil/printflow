@@ -3,6 +3,7 @@ import util from 'util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
 import { app, BrowserWindow } from 'electron';
 import { createRequire } from 'module';
 import { DiscoveredPrinter, PrintFileItem, TestPrintResult } from '../../renderer/types/agent.js';
@@ -123,31 +124,51 @@ export class WindowsPrinterManager {
     targetPrinterName?: string,
     timeoutMs = 30000
   ): Promise<{ success: boolean; submitted: boolean; error?: string }> {
-    const printerName = targetPrinterName || this.cachedPrinters.find((p) => p.isDefault)?.name || this.cachedPrinters[0]?.name;
+    if (this.cachedPrinters.length === 0) {
+      await this.discoverPrinters();
+    }
 
-    if (!printerName) {
+    const defaultPrinter = this.cachedPrinters.find((p) => p.isDefault)?.name || this.cachedPrinters[0]?.name;
+    const requestedName = targetPrinterName || defaultPrinter;
+
+    if (!requestedName) {
       return { success: false, submitted: false, error: 'No Windows printer is configured. Connect a physical printer, then rescan.' };
     }
-    if (PrintSettingsAdapter.isVirtualPrinter(printerName)) {
+    if (PrintSettingsAdapter.isVirtualPrinter(requestedName)) {
       return {
         success: false,
         submitted: false,
-        error: `"${printerName}" is a virtual/document printer, not a physical printer. Select a connected shop printer.`
+        error: `"${requestedName}" is a virtual/document printer, not a physical printer. Select a connected shop printer.`
       };
     }
-    const selectedPrinter = this.cachedPrinters.find((printer) => printer.name === printerName);
+
+    // Robust printer name resolution: exact, then case-insensitive trimmed, then partial/contains
+    let selectedPrinter = this.cachedPrinters.find((p) => p.name === requestedName);
+    if (!selectedPrinter) {
+      const lowerReq = requestedName.trim().toLowerCase();
+      selectedPrinter = this.cachedPrinters.find((p) => p.name.trim().toLowerCase() === lowerReq);
+    }
+    if (!selectedPrinter) {
+      const lowerReq = requestedName.trim().toLowerCase();
+      selectedPrinter = this.cachedPrinters.find(
+        (p) => p.name.trim().toLowerCase().includes(lowerReq) || lowerReq.includes(p.name.trim().toLowerCase())
+      );
+    }
+
+    const actualPrinterName = selectedPrinter ? selectedPrinter.name : requestedName;
+
     if (!selectedPrinter) {
       return {
         success: false,
         submitted: false,
-        error: `Printer "${printerName}" is not available to Windows. Connect it and rescan printers.`
+        error: `Printer "${requestedName}" is not available to Windows. Connect it and rescan printers.`
       };
     }
     if (!selectedPrinter.isOnline) {
       return {
         success: false,
         submitted: false,
-        error: `Printer "${printerName}" is offline or disconnected. Reconnect it in Windows, then rescan printers.`
+        error: `Printer "${actualPrinterName}" is offline or disconnected. Reconnect it in Windows, then rescan printers.`
       };
     }
 
@@ -163,13 +184,13 @@ export class WindowsPrinterManager {
     }
     const commandArgs = PrintSettingsAdapter.adaptSettings(
       file,
-      printerName,
+      actualPrinterName,
       tempFilePath,
       effectiveTimeoutMs,
       path.join(packageDirectory, sumatraFile)
     );
-    const encodedCommand = Buffer.from(commandArgs.powershellCommand, 'utf16le').toString('base64');
-    logger.info('SPOOLER', `Spooling document to printer "${printerName}"`, {
+
+    logger.info('SPOOLER', `Spooling document to printer "${actualPrinterName}"`, {
       copies: commandArgs.copies,
       paperSize: commandArgs.paperSize,
       duplex: commandArgs.duplexMode,
@@ -177,27 +198,68 @@ export class WindowsPrinterManager {
     });
 
     if (process.platform === 'win32') {
+      const scriptPath = path.join(
+        os.tmpdir(),
+        `printflow_spool_${Date.now()}_${crypto.randomBytes(4).toString('hex')}.ps1`
+      );
+      fs.writeFileSync(scriptPath, commandArgs.powershellCommand, { encoding: 'utf8' });
+
       try {
-        const { stdout } = await execAsync(`powershell -NoProfile -EncodedCommand ${encodedCommand}`, {
-          timeout: effectiveTimeoutMs + 5000
-        });
-        const resultLine = stdout.trim().split(/\r?\n/).pop();
-        const result = JSON.parse(resultLine || '{}') as { success?: boolean; submitted?: boolean; error?: string };
+        const { stdout, stderr } = await execAsync(
+          `powershell -NoProfile -ExecutionPolicy Bypass -File "${scriptPath}"`,
+          { timeout: effectiveTimeoutMs + 5000 }
+        );
+
+        const lines = (stdout || '')
+          .trim()
+          .split(/\r?\n/)
+          .map((l) => l.trim())
+          .filter(Boolean);
+
+        let result: { success?: boolean; submitted?: boolean; error?: string } | null = null;
+        for (let i = lines.length - 1; i >= 0; i--) {
+          try {
+            if (lines[i].startsWith('{') && lines[i].endsWith('}')) {
+              result = JSON.parse(lines[i]);
+              break;
+            }
+          } catch {}
+        }
+
+        if (!result) {
+          const detail = (stderr?.trim() || stdout?.trim() || 'Windows spooler script returned invalid output').slice(0, 300);
+          logger.error('SPOOLER', `Windows spooler output unparseable for "${actualPrinterName}": ${detail}`);
+          return {
+            success: false,
+            submitted: false,
+            error: `Windows print submission failed: ${detail}`
+          };
+        }
+
         if (!result.success) {
+          logger.warn('SPOOLER', `Windows spooler reported rejection for "${actualPrinterName}": ${result.error}`);
           return {
             success: false,
             submitted: Boolean(result.submitted),
             error: result.error || 'Windows could not confirm that the printer completed the job.'
           };
         }
-        logger.info('SPOOLER', `Windows confirmed print job completed on ${printerName}`);
+
+        logger.info('SPOOLER', `Windows confirmed print job completed on "${actualPrinterName}"`);
         return { success: true, submitted: true };
       } catch (err: any) {
+        const errDetail = (err.stderr?.trim() || err.stdout?.trim() || err.message || '').slice(0, 300);
         const error = err.killed
-          ? `Timed out waiting for printer "${printerName}". Check its connection and queue before retrying.`
-          : 'Windows could not check the printer queue. Verify the Print Spooler service and printer driver.';
-        logger.error('SPOOLER', `Windows spooler execution failed for "${printerName}"`);
-        return { success: false, submitted: Boolean(err.killed || err.stdout), error };
+          ? `Timed out waiting for printer "${actualPrinterName}". Check its connection and queue before retrying.`
+          : errDetail
+            ? `Windows print error on "${actualPrinterName}": ${errDetail}`
+            : `Windows could not check the printer queue for "${actualPrinterName}". Verify the Print Spooler service and printer driver.`;
+        logger.error('SPOOLER', `Windows spooler execution failed for "${actualPrinterName}": ${error}`);
+        return { success: false, submitted: Boolean(err.killed), error };
+      } finally {
+        try {
+          fs.unlinkSync(scriptPath);
+        } catch {}
       }
     }
 
@@ -208,22 +270,37 @@ export class WindowsPrinterManager {
    * Generates and executes a test print to verify hardware connectivity
    */
   public async executeTestPrint(printerName: string): Promise<TestPrintResult> {
-    const printer = this.cachedPrinters.find((item) => item.name === printerName);
-    if (PrintSettingsAdapter.isVirtualPrinter(printerName)) {
+    if (this.cachedPrinters.length === 0) {
+      await this.discoverPrinters();
+    }
+    let printer = this.cachedPrinters.find((item) => item.name === printerName);
+    if (!printer && printerName) {
+      const lower = printerName.trim().toLowerCase();
+      printer = this.cachedPrinters.find((item) => item.name.trim().toLowerCase() === lower);
+    }
+    if (!printer && printerName) {
+      const lower = printerName.trim().toLowerCase();
+      printer = this.cachedPrinters.find(
+        (item) => item.name.trim().toLowerCase().includes(lower) || lower.includes(item.name.trim().toLowerCase())
+      );
+    }
+    const resolvedName = printer ? printer.name : printerName;
+
+    if (PrintSettingsAdapter.isVirtualPrinter(resolvedName)) {
       return {
         success: false,
-        printerName,
-        message: `"${printerName}" is a virtual/document printer, not a physical printer.`
+        printerName: resolvedName,
+        message: `"${resolvedName}" is a virtual/document printer, not a physical printer.`
       };
     }
     if (!printer || !printer.isOnline) {
       return {
         success: false,
-        printerName,
-        message: `Printer "${printerName}" is offline or disconnected. Reconnect it in Windows, then rescan printers.`
+        printerName: resolvedName,
+        message: `Printer "${resolvedName}" is offline or disconnected. Reconnect it in Windows, then rescan printers.`
       };
     }
-    logger.info('SPOOLER', `Initiating test print on device: ${printerName}`);
+    logger.info('SPOOLER', `Initiating test print on device: ${resolvedName}`);
     const tempDir = os.tmpdir();
     const testDocPath = path.join(tempDir, `printflow_test_${Date.now()}.pdf`);
 

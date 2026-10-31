@@ -398,8 +398,8 @@ export class ApiClient {
         const ct = response.headers.get('content-type')?.toLowerCase() || '';
         if (ct.includes('application/json')) {
           try {
-            const errData = await response.json();
-            return { success: false, error: errData.error || `Server rejected document download with HTTP ${response.status}` };
+            const errData = (await response.json()) as any;
+            return { success: false, error: errData?.error || `Server rejected document download with HTTP ${response.status}` };
           } catch {}
         }
         if (ct.includes('text/html')) {
@@ -482,18 +482,39 @@ export class ApiClient {
         logger.warn('NETWORK', `Declared Content-Type (${contentType}) differed from binary payload signature (${detectedFormat}). Using verified binary payload.`);
       }
 
-      const tempDir = path.join(os.tmpdir(), 'PrintFlow_Spool');
-      if (!fs.existsSync(tempDir)) {
+      const osTemp = os.tmpdir();
+      const tempDir = path.join(osTemp, 'PrintFlow_Spool');
+      const existedBefore = fs.existsSync(tempDir);
+
+      if (!existedBefore) {
+        logger.info('NETWORK', `Spool directory does not exist yet. Creating: ${tempDir} (os.tmpdir: ${osTemp})`);
         fs.mkdirSync(tempDir, { recursive: true, mode: 0o700 });
       }
+
+      const existedAfter = fs.existsSync(tempDir);
+      logger.info('NETWORK', `Spool directory status for ${jobId}:`, {
+        osTmpDir: osTemp,
+        resolvedTempDir: tempDir,
+        existedBeforeCreation: existedBefore,
+        existsNow: existedAfter
+      });
 
       const filePath = path.join(
         tempDir,
         `${M2MCrypto.sanitizeFilename(jobId)}_${crypto.randomUUID()}${extensionByFormat[detectedFormat]}`
       );
       fs.writeFileSync(filePath, buffer, { flag: 'wx', mode: 0o600 });
+      const fileSavedSuccessfully = fs.existsSync(filePath);
+      const actualSize = fileSavedSuccessfully ? fs.statSync(filePath).size : 0;
 
-      logger.info('NETWORK', `Document downloaded (${buffer.length} bytes, format: ${detectedFormat}) saved to ${filePath}`);
+      logger.info('NETWORK', `Document download & local disk write complete for ${jobId}:`, {
+        targetFilePath: filePath,
+        bufferSize: buffer.length,
+        diskFileSize: actualSize,
+        detectedFormat,
+        fileExistsOnDisk: fileSavedSuccessfully
+      });
+
       return { success: true, filePath };
     } catch (err: any) {
       logger.error('NETWORK', `Error downloading document for ${jobId}: ${err.message}`);

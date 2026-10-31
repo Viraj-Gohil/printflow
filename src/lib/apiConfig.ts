@@ -59,4 +59,46 @@ export async function authenticatedFetch(endpoint: string, options: RequestInit 
   return fetch(url, fetchOptions);
 }
 
-
+export async function safeJsonFetch<T = any>(
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<{ ok: boolean; status: number; data: T; error?: string }> {
+  try {
+    const response = await authenticatedFetch(endpoint, options);
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.toLowerCase().includes('application/json')) {
+      try {
+        const data = await response.json();
+        return {
+          ok: response.ok,
+          status: response.status,
+          data,
+          error: !response.ok ? (data?.error || `Request failed with status ${response.status}`) : undefined
+        };
+      } catch {
+        return {
+          ok: false,
+          status: response.status,
+          data: {} as T,
+          error: `Server returned invalid JSON response (Status ${response.status}).`
+        };
+      }
+    } else {
+      return {
+        ok: false,
+        status: response.status,
+        data: {} as T,
+        error: response.ok
+          ? `Server returned non-JSON response.`
+          : `Server returned error status ${response.status}.`
+      };
+    }
+  } catch (err: any) {
+    return {
+      ok: false,
+      status: 0,
+      data: {} as T,
+      error: err?.message || 'Network connection failure.'
+    };
+  }
+}

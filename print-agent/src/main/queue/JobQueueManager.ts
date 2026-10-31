@@ -219,6 +219,16 @@ export class JobQueueManager {
             throw new Error(downloadResult.error || `Failed to download ${file.fileName}.`);
           }
           tempFilePaths.push(downloadResult.filePath);
+
+          const exists = fs.existsSync(downloadResult.filePath);
+          const sizeBytes = exists ? fs.statSync(downloadResult.filePath).size : 0;
+          logger.info('AGENT', `Downloaded & verified document local storage for ${job.id}:`, {
+            originalFileName: file.fileName,
+            absoluteFilePath: downloadResult.filePath,
+            sizeBytes,
+            fileExistsBeforePrinting: exists
+          });
+
           job.downloadProgress = Math.round(((i + 1) / job.files.length) * 100);
           this.notify(job);
         }
@@ -300,8 +310,13 @@ export class JobQueueManager {
       // Clean up temp files safely
       for (const filePath of tempFilePaths) {
         try {
-          if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-        } catch {}
+          if (fs.existsSync(filePath)) {
+            fs.unlinkSync(filePath);
+            logger.info('AGENT', `Deleted temporary spool file after print execution: ${filePath}`);
+          }
+        } catch (unlinkErr: any) {
+          logger.warn('AGENT', `Notice during temp file deletion (${filePath}): ${unlinkErr?.message || unlinkErr}`);
+        }
       }
     }
   }

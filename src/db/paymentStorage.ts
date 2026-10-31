@@ -5,6 +5,7 @@ import dotenv from 'dotenv';
 import dns from 'dns';
 import { Pool } from 'pg';
 import { encryptSecret, decryptSecret, maskKeyId } from '../lib/crypto/credentialCrypto';
+import { isDatabaseNetworkError } from '../lib/security';
 
 dotenv.config({ override: true });
 
@@ -628,7 +629,7 @@ export async function initializePaymentTables(maxRetries = 3): Promise<void> {
       console.log('[PaymentStorage] Supabase PostgreSQL payment and PrintFlow Agent tables verified successfully.');
       return;
     } catch (err: any) {
-      const isNetworkErr = err?.code === 'ENETUNREACH' || err?.code === 'EAI_AGAIN' || err?.code === 'ETIMEDOUT' || err?.message?.includes('ENETUNREACH');
+      const isNetworkErr = isDatabaseNetworkError(err);
       console.warn(`[PaymentStorage] Database initialization attempt ${attempt}/${maxRetries} failed (${err?.message || err}). ${isNetworkErr ? 'Network/DNS routing issue detected on Render/Neon.' : ''}`);
       if (attempt >= maxRetries) {
         console.warn('[PaymentStorage] Could not run database migrations on Neon pool (non-fatal after max retries):', err);
@@ -821,8 +822,29 @@ export interface ShopAgentAvailability {
 }
 
 export async function getShopAgentAvailability(shopId: string): Promise<ShopAgentAvailability> {
+  const defaultOffline: ShopAgentAvailability = {
+    isAvailable: false,
+    reason: 'NO_AGENT_REGISTERED',
+    message: 'This print shop is currently offline. Please try again later.',
+    agentOnline: false,
+    printerReady: false,
+    printersCount: 0,
+    readyPrintersCount: 0,
+    readyPrinters: []
+  };
+
+  if (!isNeonDatabaseConfigured()) {
+    return defaultOffline;
+  }
+
+  let pool: Pool;
+  try {
+    pool = requirePostgresPool();
+  } catch {
+    return defaultOffline;
+  }
+
   const candidateIds = await getCandidateShopIds(shopId);
-  const pool = requirePostgresPool();
 
   try {
     const shopRes = await pool.query(
@@ -845,7 +867,7 @@ export async function getShopAgentAvailability(shopId: string): Promise<ShopAgen
       }
     }
   } catch (shopCheckErr: any) {
-    if (!shopCheckErr?.message?.includes('ECONNREFUSED') && !shopCheckErr?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(shopCheckErr)) {
       console.warn('[getShopAgentAvailability] shop check notice:', shopCheckErr);
     }
   }
@@ -860,7 +882,7 @@ export async function getShopAgentAvailability(shopId: string): Promise<ShopAgen
       [candidateIds]
     );
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       console.warn('[getShopAgentAvailability] error:', err);
     }
     return {
@@ -1111,7 +1133,7 @@ export async function listPrintAgentJobs(
     );
     return result.rows.map((row) => decodeStoredJob(row));
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       console.warn('[listPrintAgentJobs] error:', err);
     }
     return [];
@@ -1218,7 +1240,7 @@ export async function getPrintFlowAppState(scopeId: string): Promise<Record<stri
     );
     return Object.fromEntries(result.rows.map((row) => [row.data_key, row.state_data]));
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       console.warn('[getPrintFlowAppState] error:', err);
     }
     return {};
@@ -1306,7 +1328,7 @@ export async function resolvePrintFlowShopId(shopId: string): Promise<string> {
       return String(defaultRes.rows[0].id);
     }
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       console.warn('[resolvePrintFlowShopId] Warning during shop resolution:', err);
     }
   }
@@ -1826,7 +1848,14 @@ export async function getPrintAgentStatus(agentId: string, shopId: string): Prom
 }
 
 export async function savePrintAgentPrinters(agentId: string, printers: unknown[]): Promise<number> {
-  const result = await requirePostgresPool().query(
+  if (!isNeonDatabaseConfigured()) return 0;
+  let pool: Pool;
+  try {
+    pool = requirePostgresPool();
+  } catch {
+    return 0;
+  }
+  const result = await pool.query(
     `UPDATE print_agent_devices SET printers = $2::jsonb, updated_at = NOW()
      WHERE agent_id = $1 AND is_revoked = false`,
     [agentId, JSON.stringify(printers)]
@@ -1836,7 +1865,15 @@ export async function savePrintAgentPrinters(agentId: string, printers: unknown[
 }
 
 export async function getShopPrinterEntitlements(shopId: string): Promise<{ printerLimit: number; planName: string }> {
-  const pool = requirePostgresPool();
+  const fallback = { printerLimit: 1, planName: 'Free Starter' };
+  if (!isNeonDatabaseConfigured()) return fallback;
+  let pool: Pool;
+  try {
+    pool = requirePostgresPool();
+  } catch {
+    return fallback;
+  }
+
   const canonicalShopId = await resolvePrintFlowShopId(shopId);
   const candidateShopIds = await getCandidateShopIds(shopId);
 
@@ -1879,7 +1916,7 @@ export async function getShopPrinterEntitlements(shopId: string): Promise<{ prin
     // Fallback
   }
 
-  return { printerLimit: 1, planName: 'Free Starter' };
+  return fallback;
 }
 
 export async function getShopPrintersWithEntitlements(shopId: string): Promise<{
@@ -1890,72 +1927,95 @@ export async function getShopPrintersWithEntitlements(shopId: string): Promise<{
   isLimitReached: boolean;
   remainingSlots: number;
 }> {
-  const pool = requirePostgresPool();
+  const fallbackResult = {
+    printers: [],
+    registeredCount: 0,
+    printerLimit: 1,
+    planName: 'Starter Plan',
+    isLimitReached: false,
+    remainingSlots: 1
+  };
+
+  if (!isNeonDatabaseConfigured()) {
+    return fallbackResult;
+  }
+
+  let pool: Pool;
+  try {
+    pool = requirePostgresPool();
+  } catch {
+    return fallbackResult;
+  }
+
   const canonicalShopId = await resolvePrintFlowShopId(shopId);
   const candidateShopIds = await getCandidateShopIds(shopId);
   const entitlements = await getShopPrinterEntitlements(canonicalShopId);
 
-  const res = await pool.query(
-    `SELECT id, shop_id, agent_id, name, model, status, capabilities, connection_type,
-            is_default, is_registered, driver_name, port_name, resolutions,
-            is_manual_override, detection_source, last_seen, last_synced_at, created_at, updated_at
-     FROM public.printers
-     WHERE (shop_id::text = ANY($1::text[])) OR shop_id::text = $2
-     ORDER BY is_registered DESC, is_default DESC, name ASC`,
-    [candidateShopIds, canonicalShopId]
-  );
+  try {
+    const res = await pool.query(
+      `SELECT id, shop_id, agent_id, name, model, status, capabilities, connection_type,
+              is_default, is_registered, driver_name, port_name, resolutions,
+              is_manual_override, detection_source, last_seen, last_synced_at, created_at, updated_at
+       FROM public.printers
+       WHERE (shop_id::text = ANY($1::text[])) OR shop_id::text = $2
+       ORDER BY is_registered DESC, is_default DESC, name ASC`,
+      [candidateShopIds, canonicalShopId]
+    );
 
-  const registeredPrinters = res.rows.filter((r) => r.is_registered);
-  const registeredCount = registeredPrinters.length;
-  const printerLimit = entitlements.printerLimit;
+    const registeredPrinters = res.rows.filter((r) => r.is_registered);
+    const registeredCount = registeredPrinters.length;
+    const printerLimit = entitlements.printerLimit;
 
-  return {
-    printers: res.rows.map((row) => {
-      const caps = (typeof row.capabilities === 'object' && row.capabilities !== null) ? row.capabilities : {};
-      const isKnownMono = /(laserjet.*(p100|p110|101|102|1005|1020)|p1007|p1008|p1102|1020|1018|lbp2900|monochrome)/i.test(`${row.name} ${row.driver_name || ''} ${row.model || ''}`);
-      const supportsColor = caps.supportsColor !== undefined && caps.supportsColor !== null
-        ? caps.supportsColor
-        : (isKnownMono ? false : null);
-      const supportsDuplex = caps.supportsDuplex !== undefined && caps.supportsDuplex !== null
-        ? caps.supportsDuplex
-        : (isKnownMono ? false : null);
+    return {
+      printers: res.rows.map((row) => {
+        const caps = (typeof row.capabilities === 'object' && row.capabilities !== null) ? row.capabilities : {};
+        const isKnownMono = /(laserjet.*(p100|p110|101|102|1005|1020)|p1007|p1008|p1102|1020|1018|lbp2900|monochrome)/i.test(`${row.name} ${row.driver_name || ''} ${row.model || ''}`);
+        const supportsColor = caps.supportsColor !== undefined && caps.supportsColor !== null
+          ? caps.supportsColor
+          : (isKnownMono ? false : null);
+        const supportsDuplex = caps.supportsDuplex !== undefined && caps.supportsDuplex !== null
+          ? caps.supportsDuplex
+          : (isKnownMono ? false : null);
 
-      return {
-        id: String(row.id),
-        shopId: String(row.shop_id),
-        agentId: row.agent_id || undefined,
-        name: row.name,
-        displayName: row.name,
-        model: row.model || row.driver_name || 'Standard Windows Printer',
-        status: row.status,
-        isOnline: row.status === 'ONLINE',
-        isDefault: Boolean(row.is_default),
-        isRegistered: Boolean(row.is_registered),
-        isEnabled: Boolean(row.is_registered),
-        connectionType: row.connection_type || caps.connectionType || 'USB / Local',
-        driverName: row.driver_name || caps.driverName,
-        portName: row.port_name || caps.portName,
-        isManualOverride: Boolean(row.is_manual_override),
-        detectionSource: row.detection_source || caps.detectionSource || 'AUTO',
-        capabilities: {
-          paperSizes: Array.isArray(caps.paperSizes) && caps.paperSizes.length > 0 ? caps.paperSizes : ['A4'],
-          supportsColor,
-          supportsDuplex,
-          colorModes: caps.colorModes || (supportsColor ? ['BW', 'COLOR'] : ['BW']),
-          resolutions: row.resolutions || caps.resolutions || []
-        },
-        lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
-        lastSyncedAt: row.last_synced_at ? new Date(row.last_synced_at).toISOString() : null,
-        createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
-        updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null
-      };
-    }),
-    registeredCount,
-    printerLimit,
-    planName: entitlements.planName,
-    isLimitReached: registeredCount >= printerLimit,
-    remainingSlots: Math.max(0, printerLimit - registeredCount)
-  };
+        return {
+          id: String(row.id),
+          shopId: String(row.shop_id),
+          agentId: row.agent_id || undefined,
+          name: row.name,
+          displayName: row.name,
+          model: row.model || row.driver_name || 'Standard Windows Printer',
+          status: row.status,
+          isOnline: row.status === 'ONLINE',
+          isDefault: Boolean(row.is_default),
+          isRegistered: Boolean(row.is_registered),
+          isEnabled: Boolean(row.is_registered),
+          connectionType: row.connection_type || caps.connectionType || 'USB / Local',
+          driverName: row.driver_name || caps.driverName,
+          portName: row.port_name || caps.portName,
+          isManualOverride: Boolean(row.is_manual_override),
+          detectionSource: row.detection_source || caps.detectionSource || 'AUTO',
+          capabilities: {
+            paperSizes: Array.isArray(caps.paperSizes) && caps.paperSizes.length > 0 ? caps.paperSizes : ['A4'],
+            supportsColor,
+            supportsDuplex,
+            colorModes: caps.colorModes || (supportsColor ? ['BW', 'COLOR'] : ['BW']),
+            resolutions: row.resolutions || caps.resolutions || []
+          },
+          lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
+          lastSyncedAt: row.last_synced_at ? new Date(row.last_synced_at).toISOString() : null,
+          createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
+          updatedAt: row.updated_at ? new Date(row.updated_at).toISOString() : null
+        };
+      }),
+      registeredCount,
+      printerLimit,
+      planName: entitlements.planName,
+      isLimitReached: registeredCount >= printerLimit,
+      remainingSlots: Math.max(0, printerLimit - registeredCount)
+    };
+  } catch {
+    return fallbackResult;
+  }
 }
 
 export async function syncShopAgentPrinters(params: {
@@ -1970,11 +2030,35 @@ export async function syncShopAgentPrinters(params: {
   printerLimit: number;
   planName: string;
 }> {
-  const pool = requirePostgresPool();
+  const fallbackSync = {
+    success: false,
+    syncedCount: 0,
+    printers: [],
+    registeredCount: 0,
+    printerLimit: 1,
+    planName: 'Free Starter'
+  };
+
+  if (!isNeonDatabaseConfigured()) {
+    return fallbackSync;
+  }
+
+  let pool: Pool;
+  try {
+    pool = requirePostgresPool();
+  } catch {
+    return fallbackSync;
+  }
+
   const canonicalShopId = await resolvePrintFlowShopId(params.shopId);
   const entitlement = await getShopPrinterEntitlements(canonicalShopId);
 
-  const client = await pool.connect();
+  let client;
+  try {
+    client = await pool.connect();
+  } catch {
+    return fallbackSync;
+  }
   try {
     await client.query('BEGIN');
 
@@ -2544,7 +2628,7 @@ export async function getShopPrintAgentPrinters(shopId: string): Promise<PrintAg
     }
     return printers;
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       console.warn('[getShopPrintAgentPrinters] error:', err);
     }
     return [];

@@ -20,10 +20,9 @@ const command = PrintSettingsAdapter.adaptSettings(
   'C:\\Program Files\\PrintFlow Agent\\SumatraPDF.exe'
 ).powershellCommand;
 
-assert.match(command, /Get-PrintJob/);
-assert.match(command, /\$printJob\.IsPrinted/);
-assert.match(command, /\$printJob\.IsCompleted/);
-assert.match(command, /\$printJob\.JobStatus -match 'Printed\|Completed'/);
+assert.match(command, /Win32_Printer/);
+assert.match(command, /Win32_PrintJob/);
+assert.match(command, /Start-Process -FilePath \$sumatra/);
 assert.match(command, /Get-Printer -Name/);
 assert.match(command, /virtual\/document printer, not a physical printer/);
 assert.match(command, /is offline or disconnected/i);

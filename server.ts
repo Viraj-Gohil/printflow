@@ -39,7 +39,8 @@ import {
   logger,
   deepRedact,
   validateSsrfUrl,
-  safeSsrfFetch
+  safeSsrfFetch,
+  isDatabaseNetworkError
 } from './src/lib/security';
 import {
   initializePaymentTables,
@@ -1204,7 +1205,7 @@ app.post('/api/auth/login', createRateLimiter(10), async (req: Request, res: Res
       }
     }
   } catch (dbErr: any) {
-    if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(dbErr)) {
       logger.warn('Failed to query user from database during login', { email: cleanEmail, error: deepRedact(dbErr) });
     }
   }
@@ -1422,7 +1423,7 @@ app.get('/api/public/plans', async (_req: Request, res: Response) => {
       }
     }
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       logger.warn('Failed to query public plans from DB, falling back to default catalog', { error: deepRedact(err) });
     }
   }
@@ -1447,7 +1448,7 @@ app.get('/api/admin/plans', requireAdminRole, async (_req: Request, res: Respons
     }
     return res.json({ success: true, plans: FALLBACK_PUBLIC_PLANS });
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       logger.warn('Failed to fetch admin plans from DB, falling back to default catalog', { error: deepRedact(err) });
     }
     return res.json({ success: true, plans: FALLBACK_PUBLIC_PLANS });
@@ -2096,7 +2097,7 @@ async function ensureMaintenanceTableExists(pool: any): Promise<void> {
       ON CONFLICT (id) DO NOTHING;
     `);
   } catch (err: any) {
-    if (!err?.message?.includes('ECONNREFUSED') && !err?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(err)) {
       logger.warn('Failed to ensure platform_maintenance_mode table exists', { error: deepRedact(err) });
     }
   }
@@ -2151,7 +2152,7 @@ app.get('/api/admin/maintenance', requireAdminRole, async (_req: Request, res: R
     const state = await getMaintenanceState();
     return res.json({ success: true, maintenance: state });
   } catch (error: any) {
-    if (!error?.message?.includes('ECONNREFUSED') && !error?.message?.includes('ENETUNREACH')) {
+    if (!isDatabaseNetworkError(error)) {
       logger.warn('Failed to fetch maintenance state from DB, falling back to default', { error: deepRedact(error) });
     }
     const fallback = cachedMaintenanceState || { enabled: false, scope: 'entire_application', message: 'System maintenance in progress.' };
@@ -2182,7 +2183,7 @@ app.post('/api/admin/maintenance', requireAdminRole, createRateLimiter(15), asyn
             updated_by = EXCLUDED.updated_by
         `, [enabled, scope, message.trim(), expectedEndAt ? new Date(expectedEndAt) : null, 'admin']);
       } catch (dbErr: any) {
-        if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
+        if (!isDatabaseNetworkError(dbErr)) {
           logger.warn('Failed to update maintenance configuration in DB, updated in-memory state', { error: deepRedact(dbErr) });
         }
       }
@@ -2680,7 +2681,7 @@ app.post(['/api/create-order', '/api/payment/create-order'], createRateLimiter(3
 
           amountInPaise = Math.round(authoritativePrice * 100);
         } catch (dbErr: any) {
-          if (!dbErr?.message?.includes('ECONNREFUSED') && !dbErr?.message?.includes('ENETUNREACH')) {
+          if (!isDatabaseNetworkError(dbErr)) {
             throw dbErr;
           }
           const fallbackPlan = FALLBACK_PUBLIC_PLANS.find(p => p.id === targetPlanId);
@@ -5132,9 +5133,8 @@ app.get('/api/shop/:shopId/live', requireShopOwnerRole, async (req: Request, res
 
     return res.json({ success: true, printers, jobs, isOnline, updatedAt: new Date().toISOString() });
   } catch (error: any) {
-    const errMessage = error?.message || String(error);
-    if (errMessage.includes('ECONNREFUSED') || errMessage.includes('ENETUNREACH') || errMessage.includes('timeout')) {
-      logger.error('Shop live data database infrastructure failure', { shopId, error: deepRedact(error) });
+    if (isDatabaseNetworkError(error)) {
+      logger.warn('Shop live data database infrastructure failure', { shopId, error: deepRedact(error) });
       return res.status(503).json({ success: false, error: 'Shop live data storage is temporarily unavailable.' });
     }
     return res.json({ success: true, printers: [], jobs: [], isOnline: false, updatedAt: new Date().toISOString() });
@@ -5620,7 +5620,7 @@ app.get('/api/shops', requireAdminRole, requireNeonPool, async (req: Request, re
     const shops = await getBusinessRepository().listAllShops(status);
     return res.json({ success: true, shops, total: shops.length });
   } catch (error: any) {
-    if (error?.message?.includes('ECONNREFUSED') || error?.message?.includes('ENETUNREACH')) {
+    if (isDatabaseNetworkError(error)) {
       return res.json({ success: true, shops: [], total: 0 });
     }
     logger.error('Failed to list shops from Neon', { error: deepRedact(error) });
@@ -5650,7 +5650,7 @@ app.get('/api/shops/:shopId', requireShopOwnerRole, requireNeonPool, async (req:
     const safeShop = { ...shop };
     return res.json({ success: true, shop: safeShop });
   } catch (error: any) {
-    if (error?.message?.includes('ECONNREFUSED') || error?.message?.includes('ENETUNREACH')) {
+    if (isDatabaseNetworkError(error)) {
       return res.status(503).json({ success: false, error: 'Database service is temporarily unreachable.' });
     }
     logger.error('Failed to get shop from Neon', { shopId: req.params.shopId, error: deepRedact(error) });
@@ -5697,7 +5697,7 @@ app.get('/api/public/shops', requireNeonPool, async (req: Request, res: Response
       total: shopsWithStatus.length
     });
   } catch (error: any) {
-    if (error?.message?.includes('ECONNREFUSED') || error?.message?.includes('ENETUNREACH')) {
+    if (isDatabaseNetworkError(error)) {
       return res.json({ success: true, shops: [], total: 0 });
     }
     logger.error('Failed to list public shops from Neon', { error: deepRedact(error) });

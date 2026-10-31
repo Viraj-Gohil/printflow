@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useApp } from '../../lib/store';
-import { authenticatedFetch } from '../../lib/apiConfig';
+import { authenticatedFetch, safeJsonFetch } from '../../lib/apiConfig';
 import {
   Printer,
   Plus,
@@ -70,28 +70,29 @@ export const ShopPrinters: React.FC = () => {
     const seq = ++printersSeqRef.current;
 
     try {
-      const response = await authenticatedFetch(`/api/shop/${encodeURIComponent(activeShop.id)}/printers`, {
+      const { ok, status, data, error } = await safeJsonFetch(`/api/shop/${encodeURIComponent(activeShop.id)}/printers`, {
         method: 'GET'
       });
-      const data = await response.json();
       if (seq !== printersSeqRef.current) return;
 
-      if (response.status === 401) {
+      if (status === 401) {
         setAuthErrorType('EXPIRED');
         setErrorMessage('Authentication required or session expired. Please sign in to your shop owner account.');
         setPrinters([]);
         return;
       }
 
-      if (response.status === 403) {
+      if (status === 403) {
         setAuthErrorType('FORBIDDEN');
-        setErrorMessage(data.error || 'Access denied. You are not authorized to view printer details for this shop.');
+        setErrorMessage(data?.error || 'Access denied. You are not authorized to view printer details for this shop.');
         setPrinters([]);
         return;
       }
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to retrieve shop printers from backend.');
+      if (!ok || !data?.success) {
+        setErrorMessage(error || data?.error || 'Failed to retrieve shop printers from backend.');
+        setPrinters([]);
+        return;
       }
 
       setAuthErrorType('NONE');
@@ -136,25 +137,24 @@ export const ShopPrinters: React.FC = () => {
     setSuccessMessage(null);
 
     try {
-      const response = await authenticatedFetch(`/api/shop/${encodeURIComponent(activeShop.id)}/printers/${encodeURIComponent(printer.id)}/register`, {
+      const { ok, status, data, error } = await safeJsonFetch(`/api/shop/${encodeURIComponent(activeShop.id)}/printers/${encodeURIComponent(printer.id)}/register`, {
         method: 'POST',
         body: JSON.stringify({ registered: nextRegistered })
       });
-      const data = await response.json();
 
-      if (response.status === 401) {
+      if (status === 401) {
         setAuthErrorType('EXPIRED');
         setErrorMessage('Session expired. Please sign in again.');
         return;
       }
 
-      if (response.status === 403) {
+      if (status === 403) {
         setErrorMessage('Unauthorized access: Tenant boundary restriction enforced.');
         return;
       }
 
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Failed to update printer registration.');
+      if (!ok || !data?.success) {
+        throw new Error(error || data?.error || 'Failed to update printer registration.');
       }
 
       setSuccessMessage(nextRegistered ? `Successfully registered "${printer.name}".` : `Unregistered "${printer.name}".`);
