@@ -8,6 +8,8 @@ import { app, BrowserWindow } from 'electron';
 import { createRequire } from 'module';
 import { DiscoveredPrinter, PrintFileItem, TestPrintResult } from '../../renderer/types/agent.js';
 import { PrintSettingsAdapter } from './PrintSettingsAdapter.js';
+import { printerCapabilityDetector } from './engine/PrinterCapabilityDetector.js';
+import { localVault } from '../storage/LocalDataVault.js';
 import { logger } from '../logger/AgentLogger.js';
 
 const execAsync = util.promisify(exec);
@@ -98,7 +100,7 @@ export class WindowsPrinterManager {
                 const isOnline = !isVirtual && !isOffline && !hasDeviceError && statusIsKnownOnline;
 
                 const existingEntry = discoveredByName.get(key) || existingCacheMap.get(key);
-                const status = isVirtual || hasDeviceError || (!isOnline && !isOffline)
+                const status: 'READY' | 'PRINTING' | 'OFFLINE' | 'BUSY' | 'ERROR' = isVirtual || hasDeviceError || (!isOnline && !isOffline)
                   ? 'ERROR'
                   : isOffline
                     ? 'OFFLINE'
@@ -106,28 +108,15 @@ export class WindowsPrinterManager {
                       ? 'PRINTING'
                       : 'READY';
 
-                // Capabilities parsing
-                const isKnownMonoModel = /(laserjet.*(p100|p110|101|102|1005|1020)|p1007|p1008|p1102|1020|1018|lbp2900|monochrome)/i.test(`${name} ${item.DriverName || ''}`);
-                const rawColor = item.Color === true || (Array.isArray(item.Capabilities) && item.Capabilities.includes(2));
-                const supportsColor = isKnownMonoModel ? false : (typeof item.Color === 'boolean' ? item.Color : (rawColor ? true : existingEntry?.capabilities?.supportsColor ?? null));
-                const rawDuplex = Array.isArray(item.Capabilities) && (item.Capabilities.includes(3) || item.Capabilities.includes(13) || item.Capabilities.includes(14));
-                const supportsDuplex = isKnownMonoModel ? false : (rawDuplex ? true : (existingEntry?.capabilities?.supportsDuplex ?? null));
+                // Detect rich driver capabilities without hardcoded model assumptions
+                const hardware = await printerCapabilityDetector.detectCapabilities(
+                  name,
+                  item.DriverName,
+                  item.PortName
+                );
 
-                // Paper sizes parsing
-                const detectedPaperSizes: Array<'A4' | 'A3' | 'A5' | 'Letter' | 'Legal' | 'Roll_80mm' | 'Roll_58mm'> = [];
-                if (Array.isArray(item.PrinterPaperNames)) {
-                  for (const pn of item.PrinterPaperNames) {
-                    const str = String(pn || '').trim().toUpperCase();
-                    if (str.includes('A4') && !detectedPaperSizes.includes('A4')) detectedPaperSizes.push('A4');
-                    else if (str.includes('A3') && !detectedPaperSizes.includes('A3')) detectedPaperSizes.push('A3');
-                    else if (str.includes('A5') && !detectedPaperSizes.includes('A5')) detectedPaperSizes.push('A5');
-                    else if (str.includes('LETTER') && !detectedPaperSizes.includes('Letter')) detectedPaperSizes.push('Letter');
-                    else if (str.includes('LEGAL') && !detectedPaperSizes.includes('Legal')) detectedPaperSizes.push('Legal');
-                  }
-                }
-                if (detectedPaperSizes.length === 0) {
-                  detectedPaperSizes.push(...(existingEntry?.capabilities?.paperSizes || ['A4']));
-                }
+                // Reconcile and compute effective capabilities with persistent local vault
+                const storedConfig = localVault.saveHardwareAndReconcile(name, hardware, status);
 
                 discoveredByName.set(key, {
                   name,
@@ -137,16 +126,37 @@ export class WindowsPrinterManager {
                   isOnline,
                   driverName: item.DriverName || existingEntry?.driverName,
                   portName: item.PortName || existingEntry?.portName,
+                  hardwareCapabilities: storedConfig.hardware,
+                  ownerConfiguration: storedConfig.owner,
+                  effectiveCapabilities: storedConfig.effective,
                   capabilities: {
-                    paperSizes: Array.from(new Set(detectedPaperSizes)),
-                    supportsColor,
-                    supportsDuplex
+                    paperSizes: storedConfig.effective.paperSizes as any,
+                    supportsColor: storedConfig.effective.supportsColor,
+                    supportsDuplex: storedConfig.effective.supportsAutomaticDuplex
                   }
                 });
               }
             }
           } catch (err: any) {
             logger.warn('SPOOLER', 'PowerShell printer query notice', { error: err.message });
+          }
+        } else {
+          // Non-Windows simulation / test environment
+          for (const [key, existingEntry] of discoveredByName.entries()) {
+            const hardware = printerCapabilityDetector.generateSimulatedCapabilities(
+              existingEntry.name,
+              existingEntry.driverName,
+              existingEntry.portName
+            );
+            const storedConfig = localVault.saveHardwareAndReconcile(existingEntry.name, hardware, existingEntry.status);
+            existingEntry.hardwareCapabilities = storedConfig.hardware;
+            existingEntry.ownerConfiguration = storedConfig.owner;
+            existingEntry.effectiveCapabilities = storedConfig.effective;
+            existingEntry.capabilities = {
+              paperSizes: storedConfig.effective.paperSizes as any,
+              supportsColor: storedConfig.effective.supportsColor,
+              supportsDuplex: storedConfig.effective.supportsAutomaticDuplex
+            };
           }
         }
 

@@ -31,6 +31,13 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
   setPrinterEnabled: (printerName: string, enabled: boolean): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('printer:set-enabled', printerName, enabled),
   testPrint: (printerName: string): Promise<TestPrintResult> => ipcRenderer.invoke('printer:test-print', printerName),
+  getPrinterConfigs: (): Promise<any[]> => ipcRenderer.invoke('printer:get-configs'),
+  savePrinterOwnerConfig: (printerName: string, config: any): Promise<{ success: boolean; config?: any; error?: string }> =>
+    ipcRenderer.invoke('printer:save-owner-config', printerName, config),
+  resetPrinterConfig: (printerName: string): Promise<{ success: boolean; config?: any; error?: string }> =>
+    ipcRenderer.invoke('printer:reset-config', printerName),
+  getPrinterDetectionDetails: (printerName: string): Promise<{ success: boolean; hardware?: any; error?: string }> =>
+    ipcRenderer.invoke('printer:get-detection-details', printerName),
 
   // Jobs Queue
   getJobs: (): Promise<PrintJobItem[]> => ipcRenderer.invoke('jobs:get-list'),

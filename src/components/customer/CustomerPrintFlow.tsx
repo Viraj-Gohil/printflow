@@ -35,6 +35,7 @@ import {
   Search
 } from 'lucide-react';
 import { validatePhone, validatePageRange } from '../../lib/validation';
+import { ContinuousPdfViewer } from './ContinuousPdfViewer';
 import {
   loadRazorpayScript,
   DEFAULT_RAZORPAY_TEST_KEY,
@@ -91,11 +92,34 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   const [isCheckingAgentStatus, setIsCheckingAgentStatus] = useState<boolean>(false);
   const [alternativeShops, setAlternativeShops] = useState<Array<{ id: string; name: string; slug: string; isAvailable?: boolean }>>([]);
 
+  const [shopCapabilities, setShopCapabilities] = useState<{
+    supportedPaperSizes: string[];
+    hasColorPrinter: boolean;
+    hasDuplexPrinter: boolean;
+    hasMonochromePrinter: boolean;
+    isReadyForPrinting: boolean;
+  } | null>(null);
+
+  const fetchCapabilities = React.useCallback(async (targetSlugOrId?: string) => {
+    const queryTarget = targetSlugOrId || shopSlug || remoteShop?.slug || activeShop?.slug || activeShop?.id;
+    if (!queryTarget) return;
+    try {
+      const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(queryTarget)}/capabilities`));
+      const data = await res.json();
+      if (data.success && data.capabilities) {
+        setShopCapabilities(data.capabilities);
+      }
+    } catch {
+      // Fail gracefully
+    }
+  }, [shopSlug, remoteShop?.slug, activeShop?.slug, activeShop?.id]);
+
   const checkAgentAvailability = React.useCallback(async (targetSlugOrId?: string) => {
     const queryTarget = targetSlugOrId || shopSlug || remoteShop?.slug || activeShop?.slug || activeShop?.id;
     if (!queryTarget) return null;
     setIsCheckingAgentStatus(true);
     try {
+      void fetchCapabilities(queryTarget);
       const res = await fetch(apiUrl(`/api/public/shops/${encodeURIComponent(queryTarget)}/agent-status`));
       const data = await res.json();
       if (data.success && data.availability) {
@@ -108,7 +132,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       setIsCheckingAgentStatus(false);
     }
     return null;
-  }, [shopSlug, remoteShop?.slug, activeShop?.slug, activeShop?.id]);
+  }, [shopSlug, remoteShop?.slug, activeShop?.slug, activeShop?.id, fetchCapabilities]);
 
   useEffect(() => {
     void checkAgentAvailability();
@@ -209,8 +233,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     shopActiveRules.forEach((r) => sizeSet.add(r.paperSize));
     // Always ensure A4 is in the list
     sizeSet.add('A4');
+
+    if (shopCapabilities && Array.isArray(shopCapabilities.supportedPaperSizes) && shopCapabilities.supportedPaperSizes.length > 0) {
+      const allowedUpper = shopCapabilities.supportedPaperSizes.map((s) => s.toUpperCase());
+      const filtered = Array.from(sizeSet).filter((s) => allowedUpper.includes(s.toUpperCase()));
+      return filtered.length > 0 ? filtered : ['A4'];
+    }
+
     return Array.from(sizeSet);
-  }, [effectivePricingRules, shop?.id, remoteShop, activeShop?.id]);
+  }, [effectivePricingRules, shop?.id, remoteShop, activeShop?.id, shopCapabilities]);
 
   // 3-step state: 1. Upload, 2. Review, 3. Pay, 4. Tracking
   const [currentStep, setCurrentStep] = useState<number>(1);
@@ -2740,12 +2771,12 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                     />
                   </div>
                 ) : previewMode === 'NATIVE' && previewFile.previewUrl ? (
-                  /* 2. Native PDF Document Viewer Embed */
-                  <div className="w-full h-80 bg-white rounded-xl overflow-hidden border border-slate-200 shadow-sm">
-                    <iframe
-                      src={`${previewFile.previewUrl}#toolbar=0&navpanes=0`}
-                      title="PDF Preview"
-                      className="w-full h-full"
+                  /* 2. Continuous Vertical Scrolling PDF Viewer */
+                  <div className="w-full h-96 bg-slate-900 rounded-2xl overflow-hidden shadow-inner">
+                    <ContinuousPdfViewer
+                      fileUrl={previewFile.previewUrl}
+                      fileName={previewFile.fileName}
+                      colorMode={previewFile.color}
                     />
                   </div>
                 ) : (

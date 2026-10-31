@@ -12,8 +12,10 @@ import {
   ShieldCheck,
   Power,
   PowerOff,
-  Sliders
+  Sliders,
+  Settings2
 } from 'lucide-react';
+import { PrinterConfigModal } from './PrinterConfigModal.js';
 
 interface PrintersViewProps {
   printers: DiscoveredPrinter[];
@@ -39,9 +41,34 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
   const [testingPrinter, setTestingPrinter] = useState<string | null>(null);
   const [registeringPrinter, setRegisteringPrinter] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<TestPrintResult | null>(null);
+  const [configModalPrinter, setConfigModalPrinter] = useState<DiscoveredPrinter | null>(null);
   const registeredNames = config.registeredPrinterNames || [];
   const printerLimit = config.printerLimit ?? 1;
   const isLimitReached = registeredNames.length >= printerLimit;
+
+  const handleSavePrinterConfig = async (printerName: string, ownerConfig: any) => {
+    if (window.electronAgentAPI?.savePrinterOwnerConfig) {
+      const res = await window.electronAgentAPI.savePrinterOwnerConfig(printerName, ownerConfig);
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to save printer configuration.');
+      }
+    }
+    onRescan();
+  };
+
+  const handleResetPrinterConfig = async (printerName: string) => {
+    if (window.electronAgentAPI?.resetPrinterConfig) {
+      const res = await window.electronAgentAPI.resetPrinterConfig(printerName);
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to reset printer configuration.');
+      }
+    }
+    onRescan();
+  };
+
+  const handleRefreshCapabilities = async (_printerName: string) => {
+    onRescan();
+  };
 
   const handleTest = async (printerName: string) => {
     setTestingPrinter(printerName);
@@ -361,7 +388,18 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between gap-2 pt-1">
+                <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
+                  {/* Configure Capabilities button */}
+                  <button
+                    type="button"
+                    onClick={() => setConfigModalPrinter(printer)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+                    title="Customize allowed paper sizes, color modes, and duplex options for this printer"
+                  >
+                    <Sliders className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                    <span>Configure Options</span>
+                  </button>
+
                   {/* Test Print button */}
                   <button
                     type="button"
@@ -396,6 +434,17 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
           );
         })}
       </div>
+
+      {configModalPrinter && (
+        <PrinterConfigModal
+          printer={configModalPrinter}
+          isOpen={Boolean(configModalPrinter)}
+          onClose={() => setConfigModalPrinter(null)}
+          onSaveConfig={handleSavePrinterConfig}
+          onResetToDefaults={handleResetPrinterConfig}
+          onRefreshCapabilities={handleRefreshCapabilities}
+        />
+      )}
     </div>
   );
 };

@@ -552,6 +552,35 @@ export class PrintAgentService {
     return { success: true };
   }
 
+  public async savePrinterOwnerConfig(
+    printerName: string,
+    ownerConfig: Partial<import('../../renderer/types/capabilities.js').OwnerPrinterConfiguration>
+  ): Promise<{ success: boolean; config?: import('../../renderer/types/capabilities.js').StoredPrinterConfig; error?: string }> {
+    try {
+      const updated = localVault.updateOwnerConfig(printerName, ownerConfig);
+      await this.apiClient.updatePrinterOwnerConfig(printerName, updated.owner, updated.effective);
+      await this.rescanPrinters(true);
+      return { success: true, config: updated };
+    } catch (err: any) {
+      logger.error('SPOOLER', `Failed saving owner config for "${printerName}": ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async resetPrinterConfig(
+    printerName: string
+  ): Promise<{ success: boolean; config?: import('../../renderer/types/capabilities.js').StoredPrinterConfig; error?: string }> {
+    try {
+      const reset = localVault.resetPrinterConfig(printerName);
+      await this.apiClient.updatePrinterOwnerConfig(printerName, reset.owner, reset.effective);
+      await this.rescanPrinters(true);
+      return { success: true, config: reset };
+    } catch (err: any) {
+      logger.error('SPOOLER', `Failed resetting config for "${printerName}": ${err.message}`);
+      return { success: false, error: err.message };
+    }
+  }
+
   public async testPrint(printerName: string) {
     const config = localVault.getConfig();
     if (

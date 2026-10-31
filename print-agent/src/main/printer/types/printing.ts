@@ -32,6 +32,8 @@ export interface UniversalPrintRequest {
   colorMode?: 'BW' | 'COLOR';
   scalingMode?: PrintScalingMode;
   pageRange?: string; // e.g. "1-3, 5"
+  printQuality?: 'DRAFT' | 'STANDARD' | 'HIGH';
+  enableCache?: boolean;
   timeoutMs?: number;
   onProgress?: (stage: 'VALIDATING' | 'RENDERING' | 'SUBMITTING' | 'SPOOLER_TRACKING', percent?: number) => void;
 }

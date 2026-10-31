@@ -6,6 +6,14 @@ import dns from 'dns';
 import { Pool } from 'pg';
 import { encryptSecret, decryptSecret, maskKeyId } from '../lib/crypto/credentialCrypto';
 import { isDatabaseNetworkError } from '../lib/security';
+import {
+  HardwareCapabilities,
+  OwnerPrinterConfiguration,
+  EffectivePrinterCapabilities,
+  createDefaultOwnerConfig,
+  validateOwnerConfigAgainstHardware,
+  computeEffectiveCapabilities
+} from '../types/printerCapabilities';
 
 dotenv.config({ override: true });
 
@@ -560,6 +568,19 @@ export async function initializePaymentTables(maxRetries = 3): Promise<void> {
           created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
+
+        -- Ensure printer capability and owner configuration columns exist on public.printers
+        DO $$
+        BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'printers') THEN
+            ALTER TABLE public.printers
+              ADD COLUMN IF NOT EXISTS hardware_capabilities JSONB NOT NULL DEFAULT '{}'::jsonb,
+              ADD COLUMN IF NOT EXISTS owner_configuration JSONB NOT NULL DEFAULT '{}'::jsonb,
+              ADD COLUMN IF NOT EXISTS effective_capabilities JSONB NOT NULL DEFAULT '{}'::jsonb,
+              ADD COLUMN IF NOT EXISTS config_version INT NOT NULL DEFAULT 1,
+              ADD COLUMN IF NOT EXISTS last_detected_at TIMESTAMPTZ;
+          END IF;
+        END $$;
 
         DO $$
         BEGIN
@@ -1955,7 +1976,8 @@ export async function getShopPrintersWithEntitlements(shopId: string): Promise<{
     const res = await pool.query(
       `SELECT id, shop_id, agent_id, name, model, status, capabilities, connection_type,
               is_default, is_registered, driver_name, port_name, resolutions,
-              is_manual_override, detection_source, last_seen, last_synced_at, created_at, updated_at
+              is_manual_override, detection_source, last_seen, last_synced_at, created_at, updated_at,
+              hardware_capabilities, owner_configuration, effective_capabilities, config_version, last_detected_at
        FROM public.printers
        WHERE (shop_id::text = ANY($1::text[])) OR shop_id::text = $2
        ORDER BY is_registered DESC, is_default DESC, name ASC`,
@@ -2001,6 +2023,11 @@ export async function getShopPrintersWithEntitlements(shopId: string): Promise<{
             colorModes: caps.colorModes || (supportsColor ? ['BW', 'COLOR'] : ['BW']),
             resolutions: row.resolutions || caps.resolutions || []
           },
+          hardwareCapabilities: row.hardware_capabilities || null,
+          ownerConfiguration: row.owner_configuration || null,
+          effectiveCapabilities: row.effective_capabilities || null,
+          configVersion: row.config_version || 1,
+          lastDetectedAt: row.last_detected_at ? new Date(row.last_detected_at).toISOString() : null,
           lastSeen: row.last_seen ? new Date(row.last_seen).toISOString() : null,
           lastSyncedAt: row.last_synced_at ? new Date(row.last_synced_at).toISOString() : null,
           createdAt: row.created_at ? new Date(row.created_at).toISOString() : null,
@@ -2064,7 +2091,8 @@ export async function syncShopAgentPrinters(params: {
 
     // 1. Lock existing printers for this shop to guarantee transactional atomicity
     const existingRes = await client.query(
-      `SELECT id, name, is_registered, is_manual_override, capabilities, is_default, connection_type
+      `SELECT id, name, is_registered, is_manual_override, capabilities, is_default, connection_type,
+              hardware_capabilities, owner_configuration, effective_capabilities, config_version
        FROM public.printers
        WHERE shop_id = $1::uuid
        FOR UPDATE`,
@@ -2093,6 +2121,22 @@ export async function syncShopAgentPrinters(params: {
         }
       }
 
+      // Hardware capabilities and owner configuration resolution
+      let hardwareCapabilities = p.hardwareCapabilities || p.hardware_capabilities || (existing ? existing.hardware_capabilities : null) || null;
+      let ownerConfig = p.ownerConfiguration || p.owner_configuration || (existing ? existing.owner_configuration : null) || null;
+      let effectiveCapabilities = p.effectiveCapabilities || p.effective_capabilities || (existing ? existing.effective_capabilities : null) || null;
+      let configVersion = Number(p.configVersion || p.config_version || (existing ? existing.config_version : 1) || 1);
+      const lastDetectedAt = p.lastDetectedAt || (hardwareCapabilities ? new Date().toISOString() : null);
+
+      if (hardwareCapabilities) {
+        if (!ownerConfig || Object.keys(ownerConfig).length === 0) {
+          ownerConfig = createDefaultOwnerConfig(hardwareCapabilities);
+        } else {
+          ownerConfig = validateOwnerConfigAgainstHardware(hardwareCapabilities, ownerConfig).sanitizedConfig;
+        }
+        effectiveCapabilities = computeEffectiveCapabilities(hardwareCapabilities, ownerConfig);
+      }
+
       // Check manual overrides: do NOT overwrite verified manual settings with missing/unknown auto-detection
       let capabilities = p.capabilities || {};
       let isManualOverride = false;
@@ -2105,6 +2149,12 @@ export async function syncShopAgentPrinters(params: {
       }
       if (capabilities.supportsDuplex === undefined || capabilities.supportsDuplex === null) {
         if (isKnownMono) capabilities.supportsDuplex = false;
+      }
+
+      if (effectiveCapabilities) {
+        capabilities.paperSizes = (effectiveCapabilities.paperSizes || []).map((ps: any) => ps.name);
+        capabilities.supportsColor = Boolean(effectiveCapabilities.color?.supportsColor);
+        capabilities.supportsDuplex = Boolean(effectiveCapabilities.sides?.supportsDuplex);
       }
 
       if (existing && existing.is_manual_override) {
@@ -2130,11 +2180,12 @@ export async function syncShopAgentPrinters(params: {
         `INSERT INTO public.printers (
            shop_id, agent_id, name, model, status, capabilities, connection_type,
            is_default, is_registered, driver_name, port_name, resolutions,
-           is_manual_override, detection_source, last_seen, last_synced_at, updated_at
+           is_manual_override, detection_source, hardware_capabilities, owner_configuration,
+           effective_capabilities, config_version, last_detected_at, last_seen, last_synced_at, updated_at
          ) VALUES (
            $1::uuid, $2, $3, $4, $5, $6::jsonb, $7,
            $8, $9, $10, $11, $12::jsonb,
-           $13, $14, NOW(), NOW(), NOW()
+           $13, $14, $15::jsonb, $16::jsonb, $17::jsonb, $18, $19, NOW(), NOW(), NOW()
          )
          ON CONFLICT (shop_id, LOWER(name)) DO UPDATE SET
            agent_id = EXCLUDED.agent_id,
@@ -2147,6 +2198,11 @@ export async function syncShopAgentPrinters(params: {
            driver_name = COALESCE(EXCLUDED.driver_name, public.printers.driver_name),
            port_name = COALESCE(EXCLUDED.port_name, public.printers.port_name),
            resolutions = EXCLUDED.resolutions,
+           hardware_capabilities = CASE WHEN EXCLUDED.hardware_capabilities != '{}'::jsonb THEN EXCLUDED.hardware_capabilities ELSE public.printers.hardware_capabilities END,
+           owner_configuration = CASE WHEN EXCLUDED.owner_configuration != '{}'::jsonb THEN EXCLUDED.owner_configuration ELSE public.printers.owner_configuration END,
+           effective_capabilities = CASE WHEN EXCLUDED.effective_capabilities != '{}'::jsonb THEN EXCLUDED.effective_capabilities ELSE public.printers.effective_capabilities END,
+           config_version = GREATEST(public.printers.config_version, EXCLUDED.config_version),
+           last_detected_at = COALESCE(EXCLUDED.last_detected_at, public.printers.last_detected_at, NOW()),
            last_seen = NOW(),
            last_synced_at = NOW(),
            updated_at = NOW()`,
@@ -2164,7 +2220,12 @@ export async function syncShopAgentPrinters(params: {
           p.portName || null,
           JSON.stringify(capabilities.resolutions || []),
           isManualOverride,
-          detectionSource
+          detectionSource,
+          JSON.stringify(hardwareCapabilities || {}),
+          JSON.stringify(ownerConfig || {}),
+          JSON.stringify(effectiveCapabilities || {}),
+          configVersion,
+          lastDetectedAt
         ]
       );
     }
@@ -2379,6 +2440,113 @@ export async function updateShopPrinterCapabilities(params: {
   return { success: true, printer: updateRes.rows[0] };
 }
 
+export async function updateShopPrinterOwnerConfiguration(params: {
+  shopId: string;
+  printerNameOrId: string;
+  ownerConfig: any;
+  effectiveCapabilities?: any;
+}): Promise<{
+  success: boolean;
+  printer?: any;
+  effectiveCapabilities?: any;
+  warnings?: string[];
+  error?: string;
+}> {
+  const pool = requirePostgresPool();
+  const canonicalShopId = await resolvePrintFlowShopId(params.shopId);
+
+  const res = await pool.query(
+    `SELECT id, name, hardware_capabilities, owner_configuration, effective_capabilities,
+            capabilities, is_default, connection_type, config_version
+     FROM public.printers
+     WHERE shop_id = $1::uuid AND (id::text = $2 OR LOWER(name) = LOWER($2))
+     LIMIT 1`,
+    [canonicalShopId, params.printerNameOrId]
+  );
+
+  if (!res.rowCount) {
+    return { success: false, error: 'Printer not found for this shop.' };
+  }
+
+  const existing = res.rows[0];
+  const hw: HardwareCapabilities = existing.hardware_capabilities && Object.keys(existing.hardware_capabilities).length > 0
+    ? existing.hardware_capabilities
+    : {
+        basicInfo: {
+          name: existing.name,
+          displayName: existing.name,
+          driverName: existing.driver_name || existing.name,
+          portName: existing.port_name || 'USB',
+          connectionType: 'USB',
+          isDefault: Boolean(existing.is_default),
+          status: 'READY'
+        },
+        color: {
+          monochrome: 'SUPPORTED',
+          color: existing.capabilities?.supportsColor ? 'SUPPORTED' : 'UNSUPPORTED',
+          detectionSource: 'FALLBACK',
+          lastDetectedAt: new Date().toISOString()
+        },
+        paperSizes: [
+          { name: 'A4', widthMm: 210, heightMm: 297, status: 'SUPPORTED' },
+          { name: 'Letter', widthMm: 215.9, heightMm: 279.4, status: 'SUPPORTED' }
+        ],
+        sides: {
+          singleSided: 'SUPPORTED',
+          automaticDuplex: existing.capabilities?.supportsDuplex ? 'SUPPORTED' : 'UNSUPPORTED',
+          manualDuplex: 'UNSUPPORTED',
+          detectionSource: 'FALLBACK',
+          lastDetectedAt: new Date().toISOString()
+        },
+        resolutions: [600],
+        copies: { maxCopies: 99, status: 'SUPPORTED' },
+        orientations: ['PORTRAIT', 'LANDSCAPE'],
+        detectionSource: 'FALLBACK',
+        lastDetectedAt: new Date().toISOString()
+      };
+
+  const validation = validateOwnerConfigAgainstHardware(hw, params.ownerConfig);
+  const validatedOwnerConfig = validation.sanitizedConfig;
+  const computedEffective = params.effectiveCapabilities || computeEffectiveCapabilities(hw, validatedOwnerConfig);
+  const nextVersion = (existing.config_version || 1) + 1;
+
+  // Also update legacy capabilities column for backward compatibility with existing systems
+  const legacyCaps = {
+    ...(existing.capabilities || {}),
+    paperSizes: (computedEffective.paperSizes || []).map((p: any) => p.name),
+    supportsColor: Boolean(computedEffective.color?.supportsColor),
+    supportsDuplex: Boolean(computedEffective.sides?.supportsDuplex),
+    colorModes: computedEffective.color?.supportsColor ? ['BW', 'COLOR'] : ['BW'],
+    resolutions: computedEffective.allowedDpis || [600],
+    detectionSource: 'OWNER_CONFIG'
+  };
+
+  const updateRes = await pool.query(
+    `UPDATE public.printers
+     SET owner_configuration = $1::jsonb,
+         effective_capabilities = $2::jsonb,
+         capabilities = $3::jsonb,
+         config_version = $4,
+         updated_at = NOW()
+     WHERE id = $5
+     RETURNING *`,
+    [
+      JSON.stringify(validatedOwnerConfig),
+      JSON.stringify(computedEffective),
+      JSON.stringify(legacyCaps),
+      nextVersion,
+      existing.id
+    ]
+  );
+
+  return {
+    success: true,
+    printer: updateRes.rows[0],
+    effectiveCapabilities: computedEffective,
+    warnings: validation.warnings
+  };
+}
+
 export async function validateJobAgainstRegisteredPrinters(
   shopId: string,
   files: Array<{
@@ -2399,7 +2567,8 @@ export async function validateJobAgainstRegisteredPrinters(
 
   // 1. Query registered printers for this shop from authoritative public.printers table
   const printerRes = await pool.query(
-    `SELECT id, name, model, status, capabilities, is_default, is_registered
+    `SELECT id, name, model, status, capabilities, is_default, is_registered,
+            effective_capabilities, hardware_capabilities
      FROM public.printers
      WHERE ((shop_id::text = ANY($1::text[])) OR shop_id::text = $2)
        AND is_registered = true
@@ -2432,22 +2601,34 @@ export async function validateJobAgainstRegisteredPrinters(
     const isDuplexRequested = Boolean(file.duplex);
 
     const capablePrinters = onlineRegisteredPrinters.filter((p) => {
+      const eff = p.effective_capabilities && Object.keys(p.effective_capabilities).length > 0 ? p.effective_capabilities : null;
       const caps = (typeof p.capabilities === 'object' && p.capabilities !== null) ? p.capabilities : {};
-      const paperSizes: string[] = (Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4']).map((s: string) => String(s).toUpperCase());
 
       // Check paper size
-      if (paperSizes.length > 0 && !paperSizes.includes(requestedSize)) {
-        return false;
+      if (eff && Array.isArray(eff.paperSizes) && eff.paperSizes.length > 0) {
+        const supported = eff.paperSizes.map((s: any) => String(s.name || s).toUpperCase());
+        if (!supported.includes(requestedSize)) return false;
+      } else {
+        const paperSizes: string[] = (Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4']).map((s: string) => String(s).toUpperCase());
+        if (paperSizes.length > 0 && !paperSizes.includes(requestedSize)) return false;
       }
 
       // Check color mode
-      if (isColorRequested && caps.supportsColor === false) {
-        return false;
+      if (isColorRequested) {
+        if (eff) {
+          if (eff.color?.supportsColor !== true) return false;
+        } else if (caps.supportsColor === false) {
+          return false;
+        }
       }
 
       // Check duplex
-      if (isDuplexRequested && caps.supportsDuplex === false) {
-        return false;
+      if (isDuplexRequested) {
+        if (eff) {
+          if (eff.sides?.supportsDuplex !== true) return false;
+        } else if (caps.supportsDuplex === false) {
+          return false;
+        }
       }
 
       return true;
@@ -2455,7 +2636,11 @@ export async function validateJobAgainstRegisteredPrinters(
 
     if (capablePrinters.length === 0) {
       if (isColorRequested) {
-        const anyColor = onlineRegisteredPrinters.some((p) => p.capabilities?.supportsColor === true);
+        const anyColor = onlineRegisteredPrinters.some((p) => {
+          const eff = p.effective_capabilities && Object.keys(p.effective_capabilities).length > 0 ? p.effective_capabilities : null;
+          if (eff) return eff.color?.supportsColor === true;
+          return p.capabilities?.supportsColor === true;
+        });
         if (!anyColor) {
           return {
             eligible: false,
@@ -2466,9 +2651,13 @@ export async function validateJobAgainstRegisteredPrinters(
       }
 
       if (requestedSize === 'A3') {
-        const anyA3 = onlineRegisteredPrinters.some((p) =>
-          (p.capabilities?.paperSizes || []).map((s: string) => String(s).toUpperCase()).includes('A3')
-        );
+        const anyA3 = onlineRegisteredPrinters.some((p) => {
+          const eff = p.effective_capabilities && Object.keys(p.effective_capabilities).length > 0 ? p.effective_capabilities : null;
+          if (eff && Array.isArray(eff.paperSizes)) {
+            return eff.paperSizes.some((s: any) => String(s.name || s).toUpperCase() === 'A3');
+          }
+          return (p.capabilities?.paperSizes || []).map((s: string) => String(s).toUpperCase()).includes('A3');
+        });
         if (!anyA3) {
           return {
             eligible: false,
@@ -2486,22 +2675,65 @@ export async function validateJobAgainstRegisteredPrinters(
     }
   }
 
-  // Pick the best default matching printer
-  const defaultPrinter = onlineRegisteredPrinters.find((p) => p.is_default) || onlineRegisteredPrinters[0];
+  // Multi-printer routing: pick the first online registered printer that meets all criteria
+  const candidate = onlineRegisteredPrinters.find((p) => {
+    return files.every((file) => {
+      const requestedSize = (file.paperSize || 'A4').toUpperCase();
+      const isColorRequested = file.colorMode === 'COLOR';
+      const isDuplexRequested = Boolean(file.duplex);
+      const eff = p.effective_capabilities && Object.keys(p.effective_capabilities).length > 0 ? p.effective_capabilities : null;
+      const caps = (typeof p.capabilities === 'object' && p.capabilities !== null) ? p.capabilities : {};
+
+      if (eff && Array.isArray(eff.paperSizes) && eff.paperSizes.length > 0) {
+        const supported = eff.paperSizes.map((s: any) => String(s.name || s).toUpperCase());
+        if (!supported.includes(requestedSize)) return false;
+      } else {
+        const paperSizes: string[] = (Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4']).map((s: string) => String(s).toUpperCase());
+        if (paperSizes.length > 0 && !paperSizes.includes(requestedSize)) return false;
+      }
+
+      if (isColorRequested) {
+        if (eff) {
+          if (eff.color?.supportsColor !== true) return false;
+        } else if (caps.supportsColor === false) {
+          return false;
+        }
+      }
+
+      if (isDuplexRequested) {
+        if (eff) {
+          if (eff.sides?.supportsDuplex !== true) return false;
+        } else if (caps.supportsDuplex === false) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }) || (onlineRegisteredPrinters.find((p) => p.is_default) || onlineRegisteredPrinters[0]);
 
   return {
     eligible: true,
-    matchedPrinterName: defaultPrinter.name
+    matchedPrinterName: candidate.name
   };
 }
 
 export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
   supportedPaperSizes: string[];
+  effectivePaperSizes: Array<{ name: string; widthMm?: number; heightMm?: number }>;
   hasColorPrinter: boolean;
   hasDuplexPrinter: boolean;
+  hasMonochromePrinter: boolean;
   registeredPrintersCount: number;
   onlineRegisteredPrintersCount: number;
   isReadyForPrinting: boolean;
+  printers: Array<{
+    name: string;
+    isDefault: boolean;
+    supportsColor: boolean;
+    supportsDuplex: boolean;
+    paperSizes: string[];
+  }>;
 }> {
   const pool = requirePostgresPool();
   const canonicalShopId = await resolvePrintFlowShopId(shopIdOrSlug);
@@ -2509,7 +2741,8 @@ export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
 
   try {
     const res = await pool.query(
-      `SELECT name, status, capabilities, is_default, is_registered
+      `SELECT id, name, status, capabilities, is_default, is_registered,
+              effective_capabilities, hardware_capabilities
        FROM public.printers
        WHERE ((shop_id::text = ANY($1::text[])) OR shop_id::text = $2)
          AND is_registered = true`,
@@ -2519,38 +2752,116 @@ export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
     const registered = res.rows;
     const online = registered.filter((p) => p.status === 'ONLINE');
 
-    const paperSizesSet = new Set<string>();
+    const paperSizesMap = new Map<string, { name: string; widthMm?: number; heightMm?: number }>();
     let hasColor = false;
     let hasDuplex = false;
+    let hasMonochrome = false;
+    const printerList: Array<{
+      name: string;
+      isDefault: boolean;
+      supportsColor: boolean;
+      supportsDuplex: boolean;
+      paperSizes: string[];
+    }> = [];
 
     for (const p of online) {
-      const caps = (typeof p.capabilities === 'object' && p.capabilities !== null) ? p.capabilities : {};
-      const sizes: string[] = Array.isArray(caps.paperSizes) ? caps.paperSizes : ['A4'];
-      sizes.forEach((s) => paperSizesSet.add(s));
-      if (caps.supportsColor === true) hasColor = true;
-      if (caps.supportsDuplex === true) hasDuplex = true;
+      const eff = p.effective_capabilities && Object.keys(p.effective_capabilities).length > 0
+        ? p.effective_capabilities
+        : null;
+      const legacyCaps = (typeof p.capabilities === 'object' && p.capabilities !== null) ? p.capabilities : {};
+
+      let printerSupportsColor = false;
+      let printerSupportsDuplex = false;
+      let printerSupportsMono = true;
+      const pSizes: string[] = [];
+
+      if (eff) {
+        if (eff.color?.supportsColor === true) {
+          hasColor = true;
+          printerSupportsColor = true;
+        }
+        if (eff.color?.supportsMonochrome === true) {
+          hasMonochrome = true;
+          printerSupportsMono = true;
+        }
+        if (eff.sides?.supportsDuplex === true) {
+          hasDuplex = true;
+          printerSupportsDuplex = true;
+        }
+        if (Array.isArray(eff.paperSizes)) {
+          for (const ps of eff.paperSizes) {
+            if (ps && ps.name) {
+              pSizes.push(ps.name);
+              if (!paperSizesMap.has(ps.name.toUpperCase())) {
+                paperSizesMap.set(ps.name.toUpperCase(), {
+                  name: ps.name,
+                  widthMm: ps.widthMm,
+                  heightMm: ps.heightMm
+                });
+              }
+            }
+          }
+        }
+      } else {
+        // Fall back to legacy capabilities
+        if (legacyCaps.supportsColor === true) {
+          hasColor = true;
+          printerSupportsColor = true;
+        }
+        if (legacyCaps.supportsDuplex === true) {
+          hasDuplex = true;
+          printerSupportsDuplex = true;
+        }
+        hasMonochrome = true;
+        const legacySizes: string[] = Array.isArray(legacyCaps.paperSizes) && legacyCaps.paperSizes.length > 0
+          ? legacyCaps.paperSizes
+          : ['A4'];
+        for (const s of legacySizes) {
+          pSizes.push(s);
+          if (!paperSizesMap.has(s.toUpperCase())) {
+            paperSizesMap.set(s.toUpperCase(), { name: s });
+          }
+        }
+      }
+
+      printerList.push({
+        name: p.name,
+        isDefault: Boolean(p.is_default),
+        supportsColor: printerSupportsColor,
+        supportsDuplex: printerSupportsDuplex,
+        paperSizes: pSizes.length > 0 ? pSizes : ['A4']
+      });
     }
 
-    if (paperSizesSet.size === 0) {
-      paperSizesSet.add('A4');
+    if (paperSizesMap.size === 0 && online.length > 0) {
+      paperSizesMap.set('A4', { name: 'A4', widthMm: 210, heightMm: 297 });
     }
+
+    const effectivePaperSizes = Array.from(paperSizesMap.values());
+    const supportedPaperSizes = effectivePaperSizes.map((p) => p.name);
 
     return {
-      supportedPaperSizes: Array.from(paperSizesSet),
+      supportedPaperSizes: supportedPaperSizes.length > 0 ? supportedPaperSizes : ['A4'],
+      effectivePaperSizes,
       hasColorPrinter: hasColor,
       hasDuplexPrinter: hasDuplex,
+      hasMonochromePrinter: hasMonochrome || online.length > 0,
       registeredPrintersCount: registered.length,
       onlineRegisteredPrintersCount: online.length,
-      isReadyForPrinting: online.length > 0
+      isReadyForPrinting: online.length > 0,
+      printers: printerList
     };
   } catch {
     return {
       supportedPaperSizes: ['A4'],
+      effectivePaperSizes: [{ name: 'A4', widthMm: 210, heightMm: 297 }],
       hasColorPrinter: true,
       hasDuplexPrinter: true,
+      hasMonochromePrinter: true,
       registeredPrintersCount: 1,
       onlineRegisteredPrintersCount: 1,
-      isReadyForPrinting: true
+      isReadyForPrinting: true,
+      printers: []
     };
   }
 }

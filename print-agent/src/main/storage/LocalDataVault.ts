@@ -1,6 +1,15 @@
 import fs from 'fs';
 import path from 'path';
 import { app } from 'electron';
+import {
+  HardwareCapabilities,
+  OwnerPrinterConfiguration,
+  EffectivePrinterCapabilities,
+  StoredPrinterConfig,
+  computeEffectiveCapabilities,
+  createDefaultOwnerConfig,
+  validateOwnerConfigAgainstHardware
+} from '../../renderer/types/capabilities.js';
 import { AgentConfig, PrintJobItem, QueueMetrics } from '../../renderer/types/agent.js';
 import { safeVault } from './SafeStorageVault.js';
 import { logger } from '../logger/AgentLogger.js';
@@ -53,10 +62,15 @@ export class LocalDataVault {
     this.configFilePath = path.join(basePath, 'config.json');
     this.jobsFilePath = path.join(basePath, 'jobs_queue.json');
     this.stateFilePath = path.join(basePath, 'agent_state.json');
+    this.printerConfigsFilePath = path.join(basePath, 'printer_configs.json');
     this.config = { ...DEFAULT_CONFIG };
     this.loadAgentState();
     this.loadJobs();
+    this.loadPrinterConfigs();
   }
+
+  private printerConfigsFilePath: string;
+  private printerConfigs: Map<string, StoredPrinterConfig> = new Map();
 
   public reloadConfig(): void {
     this.config = this.loadConfig();
@@ -346,6 +360,185 @@ export class LocalDataVault {
       uptimeSeconds: Math.floor(process.uptime()),
       lastSyncAt: this.lastSyncAt
     };
+  }
+
+  // --- Multi-Printer Capability & Configuration Storage ---
+
+  private loadPrinterConfigs(): void {
+    try {
+      if (fs.existsSync(this.printerConfigsFilePath)) {
+        const raw = fs.readFileSync(this.printerConfigsFilePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object') {
+          for (const [key, val] of Object.entries(parsed)) {
+            if (val && typeof val === 'object' && (val as any).hardware) {
+              this.printerConfigs.set(key.toLowerCase(), val as StoredPrinterConfig);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      logger.warn('STORAGE', 'Notice loading printer_configs.json', { error: err.message });
+    }
+  }
+
+  private savePrinterConfigsFile(): void {
+    try {
+      const obj: Record<string, StoredPrinterConfig> = {};
+      for (const [key, val] of this.printerConfigs.entries()) {
+        obj[key] = val;
+      }
+      fs.writeFileSync(this.printerConfigsFilePath, JSON.stringify(obj, null, 2), { encoding: 'utf8' });
+    } catch (err: any) {
+      logger.error('STORAGE', 'Failed writing printer_configs.json', { error: err.message });
+    }
+  }
+
+  public getPrinterConfig(printerName: string): StoredPrinterConfig | undefined {
+    return this.printerConfigs.get(printerName.trim().toLowerCase());
+  }
+
+  public getAllPrinterConfigs(): StoredPrinterConfig[] {
+    return Array.from(this.printerConfigs.values());
+  }
+
+  /**
+   * Saves newly detected hardware capabilities, preserving existing owner configuration,
+   * validating owner settings against the new hardware truth, and recomputing effective capabilities.
+   */
+  public saveHardwareAndReconcile(
+    printerName: string,
+    hardware: HardwareCapabilities,
+    status = 'READY'
+  ): StoredPrinterConfig {
+    const key = printerName.trim().toLowerCase();
+    const existing = this.printerConfigs.get(key);
+
+    let ownerConfig: OwnerPrinterConfiguration;
+    let invalidOwnerSettings: string[] | undefined;
+    let version = 1;
+
+    if (existing && existing.owner) {
+      // Validate existing owner settings against newly detected hardware capabilities
+      const validation = validateOwnerConfigAgainstHardware(hardware, existing.owner);
+      ownerConfig = validation.sanitizedConfig;
+      if (!validation.valid) {
+        invalidOwnerSettings = validation.warnings;
+        logger.warn('STORAGE', `Revalidated printer "${printerName}" configuration against updated driver`, {
+          warnings: validation.warnings
+        });
+      }
+      version = (existing.version || 1) + 1;
+    } else {
+      ownerConfig = createDefaultOwnerConfig(hardware);
+    }
+
+    const effective = computeEffectiveCapabilities(hardware, ownerConfig);
+
+    const stored: StoredPrinterConfig = {
+      printerName,
+      hardware,
+      owner: ownerConfig,
+      effective,
+      status: (status as any) || hardware.basicInfo?.status || 'READY',
+      version,
+      invalidOwnerSettings,
+      lastSyncedAt: existing?.lastSyncedAt
+    };
+
+    this.printerConfigs.set(key, stored);
+    this.savePrinterConfigsFile();
+    return stored;
+  }
+
+  /**
+   * Updates owner configuration for a printer, ensuring it does NOT exceed hardware capabilities.
+   */
+  public updateOwnerConfig(
+    printerName: string,
+    ownerPartial: Partial<OwnerPrinterConfiguration>
+  ): StoredPrinterConfig {
+    const key = printerName.trim().toLowerCase();
+    const existing = this.printerConfigs.get(key);
+    if (!existing) {
+      throw new Error(`Printer "${printerName}" has not been detected yet.`);
+    }
+
+    const updatedOwner: OwnerPrinterConfiguration = {
+      ...existing.owner,
+      ...ownerPartial,
+      color: {
+        ...existing.owner.color,
+        ...(ownerPartial.color || {})
+      },
+      paperSizes: {
+        ...existing.owner.paperSizes,
+        ...(ownerPartial.paperSizes || {})
+      },
+      sides: {
+        ...existing.owner.sides,
+        ...(ownerPartial.sides || {})
+      },
+      dpi: {
+        ...existing.owner.dpi,
+        ...(ownerPartial.dpi || {})
+      },
+      copies: {
+        ...existing.owner.copies,
+        ...(ownerPartial.copies || {})
+      },
+      orientation: {
+        ...existing.owner.orientation,
+        ...(ownerPartial.orientation || {})
+      },
+      version: (existing.owner.version || 1) + 1,
+      updatedAt: new Date().toISOString()
+    };
+
+    // Revalidate against hardware to guarantee owner cannot exceed physical hardware
+    const validation = validateOwnerConfigAgainstHardware(existing.hardware, updatedOwner);
+    const sanitizedOwner = validation.sanitizedConfig;
+
+    const effective = computeEffectiveCapabilities(existing.hardware, sanitizedOwner);
+
+    existing.owner = sanitizedOwner;
+    existing.effective = effective;
+    existing.version = (existing.version || 1) + 1;
+    existing.invalidOwnerSettings = validation.valid ? undefined : validation.warnings;
+
+    this.printerConfigs.set(key, existing);
+    this.savePrinterConfigsFile();
+
+    logger.info('STORAGE', `Updated and persisted owner configuration for printer "${printerName}"`, {
+      effectivePaperSizes: effective.paperSizes,
+      effectiveColor: effective.supportsColor,
+      effectiveDuplex: effective.supportsAutomaticDuplex
+    });
+
+    return existing;
+  }
+
+  /**
+   * Resets owner configuration to detected hardware defaults.
+   */
+  public resetPrinterConfig(printerName: string): StoredPrinterConfig {
+    const key = printerName.trim().toLowerCase();
+    const existing = this.printerConfigs.get(key);
+    if (!existing) {
+      throw new Error(`Printer "${printerName}" has not been detected yet.`);
+    }
+
+    const defaultOwner = createDefaultOwnerConfig(existing.hardware);
+    const effective = computeEffectiveCapabilities(existing.hardware, defaultOwner);
+
+    existing.owner = defaultOwner;
+    existing.effective = effective;
+    existing.version = (existing.version || 1) + 1;
+    existing.invalidOwnerSettings = undefined;
+
+    this.printerConfigs.set(key, existing);
+    this.savePrinterConfigsFile();
+    return existing;
   }
 }
 

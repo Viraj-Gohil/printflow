@@ -277,6 +277,25 @@ export class ApiClient {
     }
   }
 
+  public async updatePrinterOwnerConfig(
+    printerName: string,
+    ownerConfig: Record<string, any>,
+    effectiveCapabilities?: Record<string, any>
+  ): Promise<{ success: boolean; error?: string }> {
+    const url = `${this.getBaseUrl()}/api/agent/printers/${encodeURIComponent(printerName)}/owner-config`;
+    try {
+      const response = await fetch(url, {
+        method: 'PUT',
+        headers: this.getHeaders(),
+        body: JSON.stringify({ ownerConfig, effectiveCapabilities })
+      });
+      const data = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      return { success: response.ok && Boolean(data.success), error: data.error };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
   /**
    * Fetches queued print jobs authorized for this shop
    */

@@ -16,11 +16,15 @@ import { logger } from '../../logger/AgentLogger.js';
 export class PDFPrintEngine {
   private static instance: PDFPrintEngine;
 
-  // 200 DPI target resolution: 200 / 72 ≈ 2.778 scale factor
-  private readonly TARGET_DPI = 200;
-  private readonly DEFAULT_SCALE = 200 / 72;
+  private readonly DEFAULT_DPI = 200;
+  private readonly DRAFT_DPI = 150;
+  private readonly CACHE_DIR = path.join(os.tmpdir(), 'PrintFlow_Cache', 'pdf_pages');
 
-  private constructor() {}
+  private constructor() {
+    try {
+      fs.mkdirSync(this.CACHE_DIR, { recursive: true, mode: 0o700 });
+    } catch {}
+  }
 
   public static getInstance(): PDFPrintEngine {
     if (!PDFPrintEngine.instance) {
@@ -63,7 +67,7 @@ export class PDFPrintEngine {
   }
 
   /**
-   * Renders PDF pages to high-resolution PNG images and prints them through WindowsPrintEngine.
+   * Renders PDF pages to high-resolution PNG images in parallel with caching and adaptive DPI, then prints them.
    */
   public async printPdf(request: UniversalPrintRequest): Promise<UniversalPrintResult> {
     const startTime = Date.now();
@@ -96,6 +100,10 @@ export class PDFPrintEngine {
       return result;
     }
 
+    const targetDpi = request.printQuality === 'DRAFT' ? this.DRAFT_DPI : this.DEFAULT_DPI;
+    const renderScale = targetDpi / 72;
+    const enableCache = request.enableCache !== false; // enabled by default for maximum speed
+
     // Isolated temporary directory for rendered page PNGs
     const safeJobId = request.jobId.replace(/[^a-zA-Z0-9_-]/g, '_');
     const jobTempDir = path.join(
@@ -119,6 +127,10 @@ export class PDFPrintEngine {
         result.stageReached = 'FAILED';
         return result;
       }
+
+      const fileHash = enableCache
+        ? crypto.createHash('sha256').update(pdfBytes).digest('hex')
+        : '';
 
       request.onProgress?.('RENDERING', 10);
 
@@ -159,43 +171,73 @@ export class PDFPrintEngine {
       const pagesToRender = this.parsePageRange(request.pageRange, totalDocumentPages);
       result.totalPages = pagesToRender.length;
 
-      logger.info('SPOOLER', `Rendering ${pagesToRender.length} PDF page(s) at ${this.TARGET_DPI} DPI for job ${request.jobId}...`);
+      logger.info('SPOOLER', `Rendering ${pagesToRender.length} PDF page(s) at ${targetDpi} DPI (Parallelized & Cached) for job ${request.jobId}...`);
 
-      // Render each page to PNG
-      for (let i = 0; i < pagesToRender.length; i++) {
-        const pageNum = pagesToRender[i];
-        const page = await pdfDoc.getPage(pageNum);
+      // Prepare ordered array to hold image paths
+      const pagePathsMap: string[] = new Array(pagesToRender.length);
 
-        try {
-          const viewport = page.getViewport({ scale: this.DEFAULT_SCALE });
-          const width = Math.max(1, Math.round(viewport.width));
-          const height = Math.max(1, Math.round(viewport.height));
+      // Render pages in parallel chunks (concurrency limit of 4 for optimal CPU & memory utilization)
+      const CONCURRENCY_LIMIT = 4;
+      for (let batchStart = 0; batchStart < pagesToRender.length; batchStart += CONCURRENCY_LIMIT) {
+        const batchSlice = pagesToRender.slice(batchStart, batchStart + CONCURRENCY_LIMIT);
 
-          const canvas = createCanvas(width, height);
-          const ctx = canvas.getContext('2d');
+        await Promise.all(
+          batchSlice.map(async (pageNum, batchIdx) => {
+            const absoluteIdx = batchStart + batchIdx;
+            const pageImagePath = path.join(jobTempDir, `page_${String(pageNum).padStart(4, '0')}.png`);
+            const cacheKey = fileHash ? path.join(this.CACHE_DIR, `${fileHash}_p${pageNum}_${targetDpi}.png`) : '';
 
-          const renderContext = {
-            canvasContext: ctx as any,
-            viewport
-          };
-
-          await page.render(renderContext).promise;
-
-          const pngBuffer = canvas.toBuffer('image/png');
-          const pageImagePath = path.join(jobTempDir, `page_${String(pageNum).padStart(4, '0')}.png`);
-          fs.writeFileSync(pageImagePath, pngBuffer);
-
-          renderedImagePaths.push(pageImagePath);
-
-          const percent = Math.round(10 + ((i + 1) / pagesToRender.length) * 40);
-          request.onProgress?.('RENDERING', percent);
-        } finally {
-          try {
-            if (typeof (page as any).cleanup === 'function') {
-              (page as any).cleanup();
+            // 1. Check cache
+            if (enableCache && cacheKey && fs.existsSync(cacheKey)) {
+              try {
+                fs.copyFileSync(cacheKey, pageImagePath);
+                pagePathsMap[absoluteIdx] = pageImagePath;
+                return;
+              } catch {}
             }
-          } catch {}
-        }
+
+            // 2. Render via PDF.js + Canvas
+            const page = await pdfDoc.getPage(pageNum);
+            try {
+              const viewport = page.getViewport({ scale: renderScale });
+              const width = Math.max(1, Math.round(viewport.width));
+              const height = Math.max(1, Math.round(viewport.height));
+
+              const canvas = createCanvas(width, height);
+              const ctx = canvas.getContext('2d');
+
+              await page.render({
+                canvasContext: ctx as any,
+                viewport
+              }).promise;
+
+              const pngBuffer = canvas.toBuffer('image/png');
+              fs.writeFileSync(pageImagePath, pngBuffer);
+
+              // Save to cache
+              if (enableCache && cacheKey) {
+                try {
+                  fs.writeFileSync(cacheKey, pngBuffer);
+                } catch {}
+              }
+
+              pagePathsMap[absoluteIdx] = pageImagePath;
+            } finally {
+              try {
+                if (typeof (page as any).cleanup === 'function') {
+                  (page as any).cleanup();
+                }
+              } catch {}
+            }
+          })
+        );
+
+        const percent = Math.round(10 + ((batchStart + batchSlice.length) / pagesToRender.length) * 40);
+        request.onProgress?.('RENDERING', percent);
+      }
+
+      for (const pPath of pagePathsMap) {
+        if (pPath) renderedImagePaths.push(pPath);
       }
 
       result.stageReached = 'RENDERED';
@@ -210,7 +252,7 @@ export class PDFPrintEngine {
         paperSize: request.paperSize,
         orientation: request.orientation,
         colorMode: request.colorMode,
-        duplex: request.copies ? (pagesToRender.length > 1) : false, // Enable duplex if multi-page
+        duplex: request.copies ? (pagesToRender.length > 1) : false,
         scalingMode: request.scalingMode || 'FIT_TO_PAGE',
         timeoutMs: request.timeoutMs
       });
@@ -263,7 +305,6 @@ export class PDFPrintEngine {
       result.stageReached = 'FAILED';
       return result;
     } finally {
-      // 1. Destroy PDF.js loading task
       if (loadingTask) {
         try {
           if (typeof loadingTask.destroy === 'function') {
@@ -272,7 +313,6 @@ export class PDFPrintEngine {
         } catch {}
       }
 
-      // 2. Clean temporary page PNG images safely after print execution finishes
       for (const imgPath of renderedImagePaths) {
         try {
           if (fs.existsSync(imgPath)) {

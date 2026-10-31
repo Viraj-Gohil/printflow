@@ -313,6 +313,32 @@ ipcMain.handle('printer:test-print', async (_event, printerName: unknown) => {
   return agentService.testPrint(printerName);
 });
 
+ipcMain.handle('printer:get-configs', () => {
+  return localVault.getAllPrinterConfigs();
+});
+
+ipcMain.handle('printer:save-owner-config', async (_event, printerName: unknown, config: unknown) => {
+  if (typeof printerName !== 'string' || !printerName.trim() || typeof config !== 'object' || !config) {
+    return { success: false, error: 'Valid printer name and configuration object required.' };
+  }
+  return agentService.savePrinterOwnerConfig(printerName, config as any);
+});
+
+ipcMain.handle('printer:reset-config', async (_event, printerName: unknown) => {
+  if (typeof printerName !== 'string' || !printerName.trim()) {
+    return { success: false, error: 'Valid printer name required.' };
+  }
+  return agentService.resetPrinterConfig(printerName);
+});
+
+ipcMain.handle('printer:get-detection-details', (_event, printerName: unknown) => {
+  if (typeof printerName !== 'string' || !printerName.trim()) {
+    return { success: false, error: 'Valid printer name required.' };
+  }
+  const cfg = localVault.getPrinterConfig(printerName);
+  return { success: Boolean(cfg), hardware: cfg?.hardware };
+});
+
 ipcMain.handle('jobs:get-list', () => {
   return localVault.getAllJobs();
 });

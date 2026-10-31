@@ -11,7 +11,7 @@
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "types": ["node", "electron"]
+    "types": ["node"]
   },
-  "include": ["src/main"]
+  "include": ["src/main", "src/renderer/types"]
 }

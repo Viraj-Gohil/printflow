@@ -58,6 +58,7 @@ import {
   syncShopAgentPrinters,
   setShopPrinterRegistration,
   updateShopPrinterCapabilities,
+  updateShopPrinterOwnerConfiguration,
   validateJobAgainstRegisteredPrinters,
   getPublicShopCapabilities,
   getShopAgentDetails,
@@ -4913,6 +4914,45 @@ app.put('/api/agent/printers/:printerName/capabilities', async (req: Request, re
   }
 });
 
+// Agent Configure Printer Owner Configuration endpoint
+app.put('/api/agent/printers/:printerName/owner-config', async (req: Request, res: Response) => {
+  const agentToken = req.headers['x-agent-token'] as string;
+  const agentId = req.headers['x-agent-id'] as string;
+  const printerName = req.params.printerName;
+  const { ownerConfig, effectiveCapabilities } = req.body || {};
+
+  if (!ownerConfig || typeof ownerConfig !== 'object') {
+    return res.status(400).json({ success: false, error: 'ownerConfig object is required.' });
+  }
+
+  try {
+    const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken });
+    if (!agentCheck.valid || !agentCheck.shopId) {
+      return res.status(403).json({
+        success: false,
+        code: agentCheck.code || 'REVOKED',
+        error: agentCheck.error || 'Agent access unauthorized'
+      });
+    }
+
+    const result = await updateShopPrinterOwnerConfiguration({
+      shopId: agentCheck.shopId,
+      printerNameOrId: printerName,
+      ownerConfig,
+      effectiveCapabilities
+    });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    logger.error('Agent update printer owner config failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error?.message || 'Failed to update printer owner configuration.' });
+  }
+});
+
 app.get('/api/agent/printer-entitlements', async (req: Request, res: Response) => {
   const agentId = req.headers['x-agent-id'] as string;
   const agentToken = req.headers['x-agent-token'] as string;
@@ -5054,6 +5094,48 @@ app.put('/api/shop/:shopId/printers/:printerId/capabilities', requireShopOwnerRo
   } catch (error: any) {
     logger.error('Shop update printer capabilities failed', { error: deepRedact(error) });
     return res.status(500).json({ success: false, error: error?.message || 'Failed to update printer capabilities.' });
+  }
+});
+
+// SaaS Web App: PUT /api/shop/:shopId/printers/:printerId/owner-config
+app.put('/api/shop/:shopId/printers/:printerId/owner-config', requireShopOwnerRole, async (req: Request, res: Response) => {
+  const { shopId, printerId } = req.params;
+  const { ownerConfig, effectiveCapabilities } = req.body || {};
+  const user = (req as any).authenticatedUser as ServerSession | undefined;
+  const isDemoShopOwner =
+    process.env.NODE_ENV !== 'production' &&
+    req.headers['x-user-role'] === 'SHOP_OWNER' &&
+    req.headers['x-shop-id'] === shopId;
+
+  const isAuthorized =
+    user?.role === 'ADMIN' ||
+    (user?.role === 'SHOP_OWNER' && user.shopId === shopId) ||
+    isDemoShopOwner;
+
+  if (!isAuthorized) {
+    return res.status(403).json({ success: false, error: 'You cannot modify another shop’s printers.' });
+  }
+
+  if (!ownerConfig || typeof ownerConfig !== 'object') {
+    return res.status(400).json({ success: false, error: 'ownerConfig object is required.' });
+  }
+
+  try {
+    const result = await updateShopPrinterOwnerConfiguration({
+      shopId,
+      printerNameOrId: printerId,
+      ownerConfig,
+      effectiveCapabilities
+    });
+
+    if (!result.success) {
+      return res.status(400).json(result);
+    }
+
+    return res.json(result);
+  } catch (error: any) {
+    logger.error('Shop update printer owner configuration failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error?.message || 'Failed to update printer owner configuration.' });
   }
 });
 
@@ -5655,6 +5737,34 @@ app.get('/api/shops/:shopId', requireShopOwnerRole, requireNeonPool, async (req:
     }
     logger.error('Failed to get shop from Neon', { shopId: req.params.shopId, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Shop data is temporarily unavailable.' });
+  }
+});
+
+/**
+ * GET /api/public/shops/:shopIdOrSlug/capabilities
+ * Public-facing capabilities endpoint for customer print configuration portal.
+ */
+app.get('/api/public/shops/:shopIdOrSlug/capabilities', async (req: Request, res: Response) => {
+  try {
+    const { shopIdOrSlug } = req.params;
+    const caps = await getPublicShopCapabilities(shopIdOrSlug);
+    return res.json({ success: true, capabilities: caps });
+  } catch (error: any) {
+    logger.error('Failed to get public shop capabilities', { shopIdOrSlug: req.params.shopIdOrSlug, error: deepRedact(error) });
+    return res.status(500).json({
+      success: false,
+      capabilities: {
+        supportedPaperSizes: ['A4'],
+        effectivePaperSizes: [{ name: 'A4', widthMm: 210, heightMm: 297 }],
+        hasColorPrinter: true,
+        hasDuplexPrinter: true,
+        hasMonochromePrinter: true,
+        registeredPrintersCount: 1,
+        onlineRegisteredPrintersCount: 1,
+        isReadyForPrinting: true,
+        printers: []
+      }
+    });
   }
 });
 

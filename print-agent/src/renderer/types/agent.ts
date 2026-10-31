@@ -62,6 +62,17 @@ export interface AgentConfig {
   shopDetails?: ShopDetails;
 }
 
+import {
+  CapabilityStatus,
+  HardwareCapabilities,
+  HardwarePaperSize,
+  OwnerPrinterConfiguration,
+  EffectivePrinterCapabilities,
+  StoredPrinterConfig
+} from './capabilities.js';
+
+export * from './capabilities.js';
+
 export interface DiscoveredPrinter {
   name: string;
   displayName: string;
@@ -70,8 +81,11 @@ export interface DiscoveredPrinter {
   isOnline: boolean;
   driverName?: string;
   portName?: string;
+  hardwareCapabilities?: HardwareCapabilities;
+  ownerConfiguration?: OwnerPrinterConfiguration;
+  effectiveCapabilities?: EffectivePrinterCapabilities;
   capabilities: {
-    paperSizes: Array<'A4' | 'A3' | 'A5' | 'Letter' | 'Legal' | 'Roll_80mm' | 'Roll_58mm'>;
+    paperSizes: Array<'A4' | 'A3' | 'A5' | 'Letter' | 'Legal' | 'Roll_80mm' | 'Roll_58mm' | string>;
     supportsColor: boolean | null;
     supportsDuplex: boolean | null;
   };
@@ -163,6 +177,10 @@ export interface ElectronAgentAPI {
   setPrinterRegistered: (printerName: string, registered: boolean) => Promise<{ success: boolean; error?: string }>;
   setPrinterEnabled: (printerName: string, enabled: boolean) => Promise<{ success: boolean; error?: string }>;
   testPrint: (printerName: string) => Promise<TestPrintResult>;
+  getPrinterConfigs?: () => Promise<StoredPrinterConfig[]>;
+  savePrinterOwnerConfig?: (printerName: string, config: Partial<OwnerPrinterConfiguration>) => Promise<{ success: boolean; config?: StoredPrinterConfig; error?: string }>;
+  resetPrinterConfig?: (printerName: string) => Promise<{ success: boolean; config?: StoredPrinterConfig; error?: string }>;
+  getPrinterDetectionDetails?: (printerName: string) => Promise<{ success: boolean; hardware?: HardwareCapabilities; error?: string }>;
   
   // Jobs Queue
   getJobs: () => Promise<PrintJobItem[]>;
