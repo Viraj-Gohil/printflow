@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { useApp } from '../../lib/store';
 import { apiUrl } from '../../lib/apiConfig';
+import { QrScannerModal } from '../common/QrScannerModal';
 import {
   QrCode,
   SlidersHorizontal,
@@ -42,6 +43,7 @@ import {
 
 export const LandingPage: React.FC = () => {
   const { navigate, plans, currentUser, activeShop } = useApp();
+  const [isScannerOpen, setIsScannerOpen] = useState(false);
 
   // Interactive Live Product Workflow state
   const [activeWorkflowTab, setActiveWorkflowTab] = useState<'CUSTOMER' | 'PAYMENT' | 'AGENT' | 'PRINTER'>('CUSTOMER');
@@ -207,6 +209,14 @@ export const LandingPage: React.FC = () => {
 
               {/* Action Buttons */}
               <div className="flex flex-col sm:flex-row items-center justify-center lg:justify-start gap-3.5 pt-2">
+                <button
+                  onClick={() => setIsScannerOpen(true)}
+                  className="w-full sm:w-auto px-7 py-3.5 bg-linear-to-r from-emerald-600 via-emerald-600 to-teal-600 hover:from-emerald-700 hover:to-teal-700 active:scale-95 text-white font-bold text-xs tracking-wider uppercase rounded-xl shadow-md shadow-emerald-500/20 flex items-center justify-center gap-2.5 cursor-pointer block md:hidden"
+                >
+                  <QrCode className="w-4 h-4" />
+                  <span>Scan QR Code</span>
+                </button>
+
                 <button
                   onClick={() => navigate('/auth/register')}
                   className="w-full sm:w-auto px-7 py-3.5 bg-linear-to-r from-blue-600 via-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 active:scale-95 text-white font-bold text-xs tracking-wider uppercase rounded-xl shadow-md shadow-blue-500/20 hover:shadow-lg hover:shadow-blue-500/30 transition-all flex items-center justify-center gap-2.5 cursor-pointer group"
@@ -1715,6 +1725,12 @@ export const LandingPage: React.FC = () => {
           </div>
         )}
       </AnimatePresence>
+
+      <QrScannerModal
+        isOpen={isScannerOpen}
+        onClose={() => setIsScannerOpen(false)}
+        onSuccess={(slug) => navigate('/s/' + slug)}
+      />
     </div>
   );
 };

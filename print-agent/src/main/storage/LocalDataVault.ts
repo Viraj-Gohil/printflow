@@ -27,7 +27,9 @@ const DEFAULT_CONFIG: AgentConfig = {
   disabledPrinterNames: [],
   allowColorFallback: true,
   spoolerTimeoutMs: 30000,
-  themePreference: 'system'
+  themePreference: 'system',
+  loadBalancingEnabled: true,
+  loadBalancingStrategy: 'CAPABILITY_LEAST_WORKLOAD'
 };
 
 const CONFIG_VERSION = 1;

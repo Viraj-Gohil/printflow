@@ -59,6 +59,8 @@ export interface AgentConfig {
   hasStoredCredentials?: boolean;
   credentialStorageStatus?: 'SECURE' | 'LEGACY' | 'NONE';
   themePreference?: 'light' | 'dark' | 'system';
+  loadBalancingEnabled?: boolean;
+  loadBalancingStrategy?: 'CAPABILITY_LEAST_WORKLOAD' | 'LEAST_QUEUE' | 'LEAST_WORKLOAD' | 'FASTEST_AVAILABLE' | 'MANUAL_ASSIGNMENT';
   shopDetails?: ShopDetails;
 }
 
@@ -193,6 +195,8 @@ export interface ElectronAgentAPI {
   getLogs: () => Promise<AgentLogEntry[]>;
   clearLogs: () => Promise<boolean>;
   exportLogs: () => Promise<{ success: boolean; filePath?: string }>;
+  getSystemHealth: () => Promise<any>;
+  runStorageCleanup: () => Promise<{ success: boolean; freedMb: number; message: string }>;
   
   // Window & System
   minimizeToTray: () => void;

@@ -36,6 +36,11 @@ import {
 } from 'lucide-react';
 import { validatePhone, validatePageRange } from '../../lib/validation';
 import { ContinuousPdfViewer } from './ContinuousPdfViewer';
+import * as pdfjsLib from 'pdfjs-dist';
+
+if (typeof window !== 'undefined') {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
+}
 import {
   loadRazorpayScript,
   DEFAULT_RAZORPAY_TEST_KEY,
@@ -461,15 +466,28 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       );
     }, 280);
 
-    // Finalize document metadata and previews.
-    setTimeout(() => {
+    // Finalize document metadata and previews with exact PDF.js page counting.
+    (async () => {
       const newConfigs: FilePrintConfig[] = [];
       const newExpanded: Record<string, boolean> = { ...expandedFileIds };
 
       for (let i = 0; i < validFiles.length; i++) {
         const file = validFiles[i];
         const isPdf = file.type === 'application/pdf' || file.name.endsWith('.pdf');
-        const estimatedPages = isPdf ? Math.floor(Math.random() * 3) + 2 : 1;
+        let exactPages = 1;
+
+        if (isPdf) {
+          try {
+            const arrayBuffer = await file.arrayBuffer();
+            const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(arrayBuffer) });
+            const pdfDoc = await loadingTask.promise;
+            exactPages = pdfDoc.numPages || 1;
+          } catch (err) {
+            console.error('Failed to parse PDF page count:', err);
+            exactPages = 1;
+          }
+        }
+
         const fileId = `f_${Date.now()}_${i}`;
         sourceFilesRef.current.set(fileId, file);
 
@@ -479,7 +497,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
           fileSize: file.size,
           fileType: file.type || 'application/octet-stream',
           previewUrl: file.type.startsWith('image/') || isPdf ? URL.createObjectURL(file) : undefined,
-          estimatedPages,
+          estimatedPages: exactPages,
           paperSize: 'A4',
           color: 'BW',
           sides: 'SINGLE',
@@ -488,7 +506,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
           pageSelection: 'ALL',
           pagesPerSheet: 1,
           unitPrice: 2.0,
-          totalPrice: 2.0 * estimatedPages
+          totalPrice: 2.0 * exactPages
         };
 
         defaultConfig.unitPrice = calculateUnitPrice(defaultConfig.paperSize, defaultConfig.color || 'BW', defaultConfig.sides);
@@ -501,7 +519,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       setFiles((prev) => [...prev, ...newConfigs]);
       setExpandedFileIds(newExpanded);
       setUploadingQueue([]);
-    }, 600);
+    })();
 
     e.target.value = '';
   };

@@ -13,6 +13,7 @@ import { Dashboard } from './components/Dashboard';
 import { QueueView } from './components/QueueView';
 import { PrintersView } from './components/PrintersView';
 import { LogsView } from './components/LogsView';
+import { HealthView } from './components/HealthView';
 import { SettingsModal } from './components/SettingsModal';
 import { AboutView, DevicePreferencesView } from './components/DevicePages';
 import {
@@ -30,7 +31,7 @@ import {
   ShieldCheck
 } from 'lucide-react';
 
-type AgentPage = 'DASHBOARD' | 'QUEUE' | 'PRINTERS' | 'LOGS' | 'DEVICE_PREFERENCES' | 'ABOUT';
+type AgentPage = 'DASHBOARD' | 'HEALTH' | 'QUEUE' | 'PRINTERS' | 'LOGS' | 'DEVICE_PREFERENCES' | 'ABOUT';
 
 const DEFAULT_CONFIG: AgentConfig = {
   serverUrl: '',
@@ -51,6 +52,11 @@ const PAGE_DETAILS: Record<AgentPage, { title: string; description: string; icon
     title: 'Dashboard Overview',
     description: 'Real-time telemetry, queue metrics, and printer hardware status for this counter station.',
     icon: <LayoutDashboard className="w-5 h-5 text-[#2563EB]" />
+  },
+  HEALTH: {
+    title: 'System Health & Telemetry',
+    description: 'Hardware resource utilization, Windows Print Spooler status, SQLite storage, and network health.',
+    icon: <Activity className="w-5 h-5 text-[#2563EB]" />
   },
   QUEUE: {
     title: 'Print Job Queue',
@@ -81,6 +87,7 @@ const PAGE_DETAILS: Record<AgentPage, { title: string; description: string; icon
 
 const NAVIGATION: Array<{ id: AgentPage; label: string; icon: React.ReactNode }> = [
   { id: 'DASHBOARD', label: 'Dashboard', icon: <LayoutDashboard className="w-4 h-4 shrink-0" /> },
+  { id: 'HEALTH', label: 'System Health', icon: <Activity className="w-4 h-4 shrink-0" /> },
   { id: 'QUEUE', label: 'Print Queue', icon: <ListOrdered className="w-4 h-4 shrink-0" /> },
   { id: 'PRINTERS', label: 'Printers', icon: <Printer className="w-4 h-4 shrink-0" /> },
   { id: 'LOGS', label: 'Activity Logs', icon: <Terminal className="w-4 h-4 shrink-0" /> },
@@ -599,6 +606,7 @@ export const App: React.FC = () => {
                 onPollNow={handlePollNow}
               />
             )}
+            {activePage === 'HEALTH' && <HealthView />}
             {activePage === 'QUEUE' && (
               <QueueView
                 jobs={jobs}

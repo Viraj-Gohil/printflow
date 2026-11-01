@@ -79,20 +79,29 @@ export class JobQueueManager {
    * Intelligent printer routing: selects best eligible online registered printer
    * based on capabilities (color, paper size, duplex) and queue load.
    */
+  /**
+   * Smart Automatic Load Balancing routing algorithm:
+   * Selects best eligible online registered printer based on strategy,
+   * capabilities, availability, and least estimated workload.
+   */
   private selectEligiblePrinter(job: PrintJobItem): string | null {
     const config = localVault.getConfig();
     const registeredNames = config.registeredPrinterNames || [];
     const disabledNames = config.disabledPrinterNames || [];
+    const lbEnabled = config.loadBalancingEnabled !== false;
+    const strategy = config.loadBalancingStrategy || 'CAPABILITY_LEAST_WORKLOAD';
 
     const availablePrinters = this.printerManager.getCachedPrinters().filter((printer) =>
       printer.isOnline &&
       registeredNames.includes(printer.name) &&
-      !disabledNames.includes(printer.name)
+      !disabledNames.includes(printer.name) &&
+      printer.status !== 'OFFLINE' &&
+      printer.status !== 'PAUSED'
     );
 
     if (availablePrinters.length === 0) return null;
 
-    // Check capability match for all files in order
+    // 1. Comprehensive capability compatibility check
     const canPrintJob = (printer: (typeof availablePrinters)[number]) =>
       job.files.every((file) => {
         const requestedSize = (file.paperSize || 'A4').toUpperCase();
@@ -106,32 +115,73 @@ export class JobQueueManager {
     const compatiblePrinters = availablePrinters.filter(canPrintJob);
     if (compatiblePrinters.length === 0) return null;
 
-    // If configured preferred selected printer is compatible and online, prefer it
-    if (config.selectedPrinterName && compatiblePrinters.some((p) => p.name === config.selectedPrinterName)) {
-      return config.selectedPrinterName;
+    // If load balancing is disabled or strategy is MANUAL, prioritize selectedPrinterName if compatible
+    if (!lbEnabled || strategy === 'MANUAL_ASSIGNMENT') {
+      if (config.selectedPrinterName) {
+        const preferred = compatiblePrinters.find((p) => p.name === config.selectedPrinterName);
+        if (preferred) {
+          job.assignmentReason = `Assigned to preferred printer "${preferred.name}" (Manual Assignment).`;
+          return preferred.name;
+        }
+      }
     }
 
-    // Otherwise, pick the compatible printer with the fewest active jobs assigned to it
+    // Calculate active job counts and pending workload pages for each compatible printer
+    const printerWorkloadPages = new Map<string, number>();
     const printerJobCounts = new Map<string, number>();
-    for (const p of compatiblePrinters) printerJobCounts.set(p.name, 0);
+    for (const p of compatiblePrinters) {
+      printerWorkloadPages.set(p.name, 0);
+      printerJobCounts.set(p.name, 0);
+    }
 
     for (const j of this.activeJobs.values()) {
-      if (j.printerName && printerJobCounts.has(j.printerName) && ['PRINTING', 'DOWNLOADING', 'ASSIGNED'].includes(j.printStatus)) {
+      if (j.printerName && printerWorkloadPages.has(j.printerName) && ['PRINTING', 'DOWNLOADING', 'ASSIGNED', 'QUEUED'].includes(j.printStatus)) {
+        const pages = j.files.reduce((acc, f) => acc + ((f.pageCount || f.estimatedPages || 1) * (f.copies || 1)), 0);
+        printerWorkloadPages.set(j.printerName, (printerWorkloadPages.get(j.printerName) || 0) + pages);
         printerJobCounts.set(j.printerName, (printerJobCounts.get(j.printerName) || 0) + 1);
       }
     }
 
-    // Sort by lowest queue count, then default priority
+    // Sort compatible printers according to selected load balancing strategy
     compatiblePrinters.sort((a, b) => {
+      const workloadA = printerWorkloadPages.get(a.name) || 0;
+      const workloadB = printerWorkloadPages.get(b.name) || 0;
       const countA = printerJobCounts.get(a.name) || 0;
       const countB = printerJobCounts.get(b.name) || 0;
-      if (countA !== countB) return countA - countB;
+
+      if (strategy === 'LEAST_QUEUE') {
+        if (countA !== countB) return countA - countB;
+        if (workloadA !== workloadB) return workloadA - workloadB;
+      } else if (strategy === 'LEAST_WORKLOAD') {
+        if (workloadA !== workloadB) return workloadA - workloadB;
+        if (countA !== countB) return countA - countB;
+      } else if (strategy === 'FASTEST_AVAILABLE') {
+        const isReadyA = a.status === 'READY' ? 0 : 1;
+        const isReadyB = b.status === 'READY' ? 0 : 1;
+        if (isReadyA !== isReadyB) return isReadyA - isReadyB;
+        if (workloadA !== workloadB) return workloadA - workloadB;
+      } else {
+        // Default: CAPABILITY_LEAST_WORKLOAD (Capability-Based + Least Estimated Workload)
+        if (workloadA !== workloadB) return workloadA - workloadB;
+        if (countA !== countB) return countA - countB;
+      }
+
+      // Deterministic tie-breaking: default printer priority, then alphabetical name
       if (a.isDefault && !b.isDefault) return -1;
       if (!a.isDefault && b.isDefault) return 1;
-      return 0;
+      return a.name.localeCompare(b.name);
     });
 
-    return compatiblePrinters[0]?.name || null;
+    const selected = compatiblePrinters[0];
+    if (selected) {
+      const wLoad = printerWorkloadPages.get(selected.name) || 0;
+      const qCount = printerJobCounts.get(selected.name) || 0;
+      const colorDesc = selected.capabilities.supportsColor ? 'Colour' : 'B&W';
+      const paperDesc = selected.capabilities.paperSizes?.join(', ') || 'A4';
+      job.assignmentReason = `Assigned to "${selected.name}" (${colorDesc}, ${paperDesc}) using ${strategy} strategy (Active Queue: ${qCount} jobs, Workload: ${wLoad} pages).`;
+    }
+
+    return selected?.name || null;
   }
 
   /**

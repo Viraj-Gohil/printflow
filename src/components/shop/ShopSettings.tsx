@@ -38,7 +38,7 @@ import {
 import { Button } from '../ui/Button';
 import { Chip } from '../ui/Chip';
 
-type SettingsTab = 'general' | 'gateway' | 'profile';
+type SettingsTab = 'general' | 'gateway' | 'profile' | 'retention';
 
 export const ShopSettings: React.FC = () => {
   const { activeShop, updateShopRazorpay, updateShopProfile, printers, showToast, navigate } = useApp();
@@ -89,6 +89,62 @@ export const ShopSettings: React.FC = () => {
   const [isSavingProfile, setIsSavingProfile] = useState(false);
   const [profileSaved, setProfileSaved] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
+
+  // Document retention state
+  const [autoDeleteEnabled, setAutoDeleteEnabled] = useState(true);
+  const [retentionHours, setRetentionHours] = useState<number>(1);
+  const [isSavingRetention, setIsSavingRetention] = useState(false);
+  const [retentionSaved, setRetentionSaved] = useState(false);
+
+  // Load shop retention settings
+  useEffect(() => {
+    if (!activeShop?.id) return;
+    fetch(apiUrl(`/api/shop/${encodeURIComponent(activeShop.id)}/retention`), {
+      headers: {
+        'Authorization': 'Bearer admin_token_active',
+        'X-Shop-Id': activeShop.id,
+        'X-User-Role': 'SHOP_OWNER'
+      }
+    })
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.success) {
+          setAutoDeleteEnabled(data.autoDeleteEnabled);
+          setRetentionHours(data.retentionHours);
+        }
+      })
+      .catch((err) => console.warn('Could not load shop retention settings:', err));
+  }, [activeShop?.id]);
+
+  const handleSaveRetention = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingRetention(true);
+    setRetentionSaved(false);
+    try {
+      const res = await fetch(apiUrl(`/api/shop/${encodeURIComponent(activeShop.id)}/retention`), {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer admin_token_active',
+          'X-Shop-Id': activeShop.id,
+          'X-User-Role': 'SHOP_OWNER'
+        },
+        body: JSON.stringify({ autoDeleteEnabled, retentionHours })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        showToast('Error', data.error || 'Failed to update retention settings', 'error', 4000);
+        return;
+      }
+      setRetentionSaved(true);
+      showToast('Retention Saved', 'Automatic document retention policy updated successfully.', 'success', 3500);
+      setTimeout(() => setRetentionSaved(false), 3500);
+    } catch (err: any) {
+      showToast('Error', err.message || 'Failed to update retention settings', 'error', 4000);
+    } finally {
+      setIsSavingRetention(false);
+    }
+  };
 
   // Load shop payment integration from backend
   useEffect(() => {
@@ -478,6 +534,19 @@ export const ShopSettings: React.FC = () => {
         >
           <Building2 className="w-3.5 h-3.5" />
           <span>Business Profile</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveTab('retention')}
+          className={`px-4 py-2 text-xs font-semibold rounded-t-lg transition-colors flex items-center gap-2 cursor-pointer border-b-2 -mb-px ${
+            activeTab === 'retention'
+              ? 'border-blue-600 text-blue-600 bg-blue-50/40'
+              : 'border-transparent text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+          }`}
+        >
+          <Clock className="w-3.5 h-3.5" />
+          <span>Document Retention</span>
         </button>
       </div>
 
@@ -1071,6 +1140,76 @@ export const ShopSettings: React.FC = () => {
             </div>
           </form>
         </div>
+      )}
+
+      {/* TAB 4: DOCUMENT RETENTION */}
+      {activeTab === 'retention' && (
+        <form onSubmit={handleSaveRetention} className="bg-white rounded-xl border border-slate-200 p-6 shadow-2xs space-y-6">
+          <div className="flex items-center gap-3 pb-4 border-b border-slate-100">
+            <div className="w-10 h-10 rounded-xl bg-purple-50 text-purple-600 flex items-center justify-center font-bold">
+              <Clock className="w-5 h-5" />
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-slate-900 tracking-tight">Automatic Document Retention & Privacy</h2>
+              <p className="text-xs text-slate-500 mt-0.5">Configure when customer-uploaded documents are automatically purged from secure Supabase storage.</p>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div className="flex items-center justify-between p-4 rounded-xl border border-slate-200 bg-slate-50/50">
+              <div className="space-y-1">
+                <label className="text-sm font-semibold text-slate-900 block cursor-pointer" htmlFor="autoDeleteToggle">
+                  Enable Automatic Document Deletion
+                </label>
+                <p className="text-xs text-slate-500">
+                  Automatically delete customer-uploaded PDF files from cloud storage after the configured retention period.
+                </p>
+              </div>
+              <input
+                id="autoDeleteToggle"
+                type="checkbox"
+                checked={autoDeleteEnabled}
+                onChange={(e) => setAutoDeleteEnabled(e.target.checked)}
+                className="w-5 h-5 text-blue-600 rounded border-slate-300 focus:ring-blue-500 cursor-pointer"
+              />
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-700 uppercase tracking-wider block">
+                Retention Duration
+              </label>
+              <select
+                value={retentionHours}
+                onChange={(e) => setRetentionHours(Number(e.target.value))}
+                disabled={!autoDeleteEnabled}
+                className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-slate-300 bg-white text-slate-900 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 disabled:opacity-50 disabled:bg-slate-100"
+              >
+                <option value={1}>1 Hour (Default)</option>
+                <option value={2}>2 Hours</option>
+                <option value={6}>6 Hours</option>
+                <option value={12}>12 Hours</option>
+                <option value={24}>24 Hours (1 Day)</option>
+                <option value={48}>48 Hours (2 Days)</option>
+                <option value={168}>168 Hours (7 Days)</option>
+              </select>
+              <p className="text-xs text-slate-500">
+                Active print jobs (queued, downloading, or printing) are protected and will never be deleted prematurely regardless of retention expiry.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-slate-100">
+            {retentionSaved && (
+              <span className="text-xs text-emerald-600 font-semibold flex items-center gap-1.5 animate-pulse">
+                <Check className="w-4 h-4" /> Saved successfully
+              </span>
+            )}
+            <Button type="submit" variant="primary" disabled={isSavingRetention}>
+              {isSavingRetention && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
+              Save Retention Policy
+            </Button>
+          </div>
+        </form>
       )}
 
       {/* 4. MODE SWITCH CONFIRMATION MODAL */}

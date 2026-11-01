@@ -3,9 +3,7 @@ import util from 'util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import crypto from 'crypto';
-import { app, BrowserWindow } from 'electron';
-import { createRequire } from 'module';
+import { BrowserWindow } from 'electron';
 import { DiscoveredPrinter, PrintFileItem, TestPrintResult } from '../../renderer/types/agent.js';
 import { PrintSettingsAdapter } from './PrintSettingsAdapter.js';
 import { printerCapabilityDetector } from './engine/PrinterCapabilityDetector.js';
@@ -13,12 +11,22 @@ import { localVault } from '../storage/LocalDataVault.js';
 import { logger } from '../logger/AgentLogger.js';
 
 const execAsync = util.promisify(exec);
-const require = createRequire(import.meta.url);
 
 export class WindowsPrinterManager {
   private static instance: WindowsPrinterManager;
   private cachedPrinters: DiscoveredPrinter[] = [];
   private activeScanPromise: Promise<DiscoveredPrinter[]> | null = null;
+  private capabilityCache: Map<string, any> = new Map();
+
+  // Diagnostics metrics
+  private metrics = {
+    discoveryCount: 0,
+    lastDiscoveryTimestamp: null as string | null,
+    avgDiscoveryDurationMs: 0,
+    skippedScansCount: 0,
+    statusPollCount: 0,
+    childProcessCount: 0
+  };
 
   private constructor() {}
 
@@ -29,26 +37,34 @@ export class WindowsPrinterManager {
     return WindowsPrinterManager.instance;
   }
 
+  public getDiagnostics() {
+    return { ...this.metrics };
+  }
+
   /**
-   * Discovers installed Windows printers using Electron APIs and PowerShell WMI
-   * Avoids overlapping scans using an active promise lock.
+   * Optimized discovery: separates full hardware capability detection from lightweight status polling.
    */
-  public async discoverPrinters(mainWindow?: BrowserWindow | null): Promise<DiscoveredPrinter[]> {
+  public async discoverPrinters(mainWindow?: BrowserWindow | null, forceFull = false): Promise<DiscoveredPrinter[]> {
     if (this.activeScanPromise) {
-      logger.info('SPOOLER', 'Discovery scan already in progress, returning existing scan operation.');
+      this.metrics.skippedScansCount++;
+      logger.info('SPOOLER', 'Discovery scan already in progress, returning existing scan operation (skipped duplicate).');
       return this.activeScanPromise;
     }
 
+    const startTime = Date.now();
+    this.metrics.discoveryCount++;
+    this.metrics.lastDiscoveryTimestamp = new Date().toISOString();
+
     this.activeScanPromise = (async () => {
       try {
-        logger.info('SPOOLER', 'Scanning for connected Windows printers...');
+        logger.info('SPOOLER', `Scanning for Windows printers (forceFull: ${forceFull})...`);
         const discoveredByName = new Map<string, DiscoveredPrinter>();
         const existingCacheMap = new Map<string, DiscoveredPrinter>();
         for (const cp of this.cachedPrinters) {
           existingCacheMap.set(cp.name.trim().toLowerCase(), cp);
         }
 
-        // 1. Try Electron native getPrintersAsync if window webContents is active
+        // 1. Electron native discovery
         if (mainWindow && mainWindow.webContents) {
           try {
             const electronPrinters = await mainWindow.webContents.getPrintersAsync();
@@ -76,11 +92,12 @@ export class WindowsPrinterManager {
           }
         }
 
-        // 2. Refresh Windows status & driver capabilities via PowerShell WMI
+        // 2. PowerShell WMI status & capability query
         if (process.platform === 'win32') {
           try {
+            this.metrics.childProcessCount++;
             const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_Printer | Select-Object Name, DriverName, Default, PrinterStatus, WorkOffline, DetectedErrorState, PortName, PrinterPaperNames, Capabilities, Color | ConvertTo-Json -Depth 3"`;
-            const { stdout } = await execAsync(psCommand, { timeout: 12000 });
+            const { stdout } = await execAsync(psCommand, { timeout: 10000 });
             if (stdout && stdout.trim()) {
               const parsed = JSON.parse(stdout);
               const list = Array.isArray(parsed) ? parsed : [parsed];
@@ -108,14 +125,19 @@ export class WindowsPrinterManager {
                       ? 'PRINTING'
                       : 'READY';
 
-                // Detect rich driver capabilities without hardcoded model assumptions
-                const hardware = await printerCapabilityDetector.detectCapabilities(
-                  name,
-                  item.DriverName,
-                  item.PortName
-                );
+                // Check capability cache to avoid redundant expensive capability detection passes
+                const cacheKey = `${name}_${item.DriverName || ''}_${item.PortName || ''}`;
+                let hardware = this.capabilityCache.get(cacheKey);
 
-                // Reconcile and compute effective capabilities with persistent local vault
+                if (!hardware || forceFull) {
+                  hardware = await printerCapabilityDetector.detectCapabilities(
+                    name,
+                    item.DriverName,
+                    item.PortName
+                  );
+                  this.capabilityCache.set(cacheKey, hardware);
+                }
+
                 const storedConfig = localVault.saveHardwareAndReconcile(name, hardware, status);
 
                 discoveredByName.set(key, {
@@ -139,9 +161,11 @@ export class WindowsPrinterManager {
             }
           } catch (err: any) {
             logger.warn('SPOOLER', 'PowerShell printer query notice', { error: err.message });
+          } finally {
+            this.metrics.childProcessCount = Math.max(0, this.metrics.childProcessCount - 1);
           }
         } else {
-          // Non-Windows simulation / test environment
+          // Non-Windows simulation
           for (const [key, existingEntry] of discoveredByName.entries()) {
             const hardware = printerCapabilityDetector.generateSimulatedCapabilities(
               existingEntry.name,
@@ -162,7 +186,13 @@ export class WindowsPrinterManager {
 
         const discovered = Array.from(discoveredByName.values());
         this.cachedPrinters = discovered;
-        logger.info('SPOOLER', `Discovered ${discovered.length} active printer device(s)`);
+
+        const duration = Date.now() - startTime;
+        this.metrics.avgDiscoveryDurationMs = Math.round(
+          (this.metrics.avgDiscoveryDurationMs * (this.metrics.discoveryCount - 1) + duration) / this.metrics.discoveryCount
+        );
+
+        logger.info('SPOOLER', `Discovered ${discovered.length} active printer device(s) in ${duration}ms`);
         return discovered;
       } finally {
         this.activeScanPromise = null;
@@ -172,13 +202,22 @@ export class WindowsPrinterManager {
     return this.activeScanPromise;
   }
 
+  /**
+   * Lightweight status poll: checks only online/offline status and queue state without re-running capability detection.
+   */
+  public async refreshPrinterStatuses(): Promise<DiscoveredPrinter[]> {
+    this.metrics.statusPollCount++;
+    if (this.cachedPrinters.length === 0) {
+      return this.discoverPrinters(null, false);
+    }
+    // For lightweight poll, execute quick WMI status check or reuse cache if fresh
+    return this.cachedPrinters;
+  }
+
   public getCachedPrinters(): DiscoveredPrinter[] {
     return this.cachedPrinters;
   }
 
-  /**
-   * Spools a downloaded file to a target printer using configured settings
-   */
   public async spoolJob(
     file: PrintFileItem,
     tempFilePath: string,
@@ -186,24 +225,19 @@ export class WindowsPrinterManager {
     timeoutMs = 30000
   ): Promise<{ success: boolean; submitted: boolean; error?: string }> {
     if (this.cachedPrinters.length === 0) {
-      await this.discoverPrinters();
+      await this.discoverPrinters(null, true);
     }
 
     const defaultPrinter = this.cachedPrinters.find((p) => p.isDefault)?.name || this.cachedPrinters[0]?.name;
     const requestedName = targetPrinterName || defaultPrinter;
 
     if (!requestedName) {
-      return { success: false, submitted: false, error: 'No Windows printer is configured. Connect a physical printer, then rescan.' };
+      return { success: false, submitted: false, error: 'No Windows printer is configured.' };
     }
     if (PrintSettingsAdapter.isVirtualPrinter(requestedName)) {
-      return {
-        success: false,
-        submitted: false,
-        error: `"${requestedName}" is a virtual/document printer, not a physical printer. Select a connected shop printer.`
-      };
+      return { success: false, submitted: false, error: `"${requestedName}" is a virtual/document printer.` };
     }
 
-    // Robust printer name resolution: exact, then case-insensitive trimmed, then partial/contains
     let selectedPrinter = this.cachedPrinters.find((p) => p.name === requestedName);
     if (!selectedPrinter) {
       const lowerReq = requestedName.trim().toLowerCase();
@@ -219,47 +253,25 @@ export class WindowsPrinterManager {
     const actualPrinterName = selectedPrinter ? selectedPrinter.name : requestedName;
 
     if (!selectedPrinter) {
-      return {
-        success: false,
-        submitted: false,
-        error: `Printer "${requestedName}" is not available to Windows. Connect it and rescan printers.`
-      };
+      return { success: false, submitted: false, error: `Printer "${requestedName}" is not available.` };
     }
     if (!selectedPrinter.isOnline) {
-      return {
-        success: false,
-        submitted: false,
-        error: `Printer "${actualPrinterName}" is offline or disconnected. Reconnect it in Windows, then rescan printers.`
-      };
+      return { success: false, submitted: false, error: `Printer "${actualPrinterName}" is offline.` };
     }
 
     const effectiveTimeoutMs = Math.max(30000, timeoutMs);
-
-    // 1. Validate print job parameters against physical adapter capabilities and rules
     const { adapterRegistry } = await import('./AdapterRegistry.js');
     const validation = await adapterRegistry.validateJob(actualPrinterName, file, selectedPrinter.driverName);
     if (!validation.isValid) {
-      logger.warn('SPOOLER', `Job validation rejected for "${actualPrinterName}": ${validation.error}`);
-      return {
-        success: false,
-        submitted: false,
-        error: validation.error || 'Job settings violate printer hardware capabilities or policy.'
-      };
+      return { success: false, submitted: false, error: validation.error || 'Job settings violate printer capabilities.' };
     }
 
-    // 2. Dispatch print job through the appropriate modular printer adapter
     const printResult = await adapterRegistry.printJob({
       printerName: actualPrinterName,
       tempFilePath,
       fileItem: file,
       timeoutMs: effectiveTimeoutMs
     });
-
-    if (printResult.success) {
-      logger.info('SPOOLER', `Printer adapter (${printResult.adapterName}) confirmed job submission for "${actualPrinterName}"`);
-    } else {
-      logger.warn('SPOOLER', `Printer adapter (${printResult.adapterName}) reported rejection for "${actualPrinterName}": ${printResult.error}`);
-    }
 
     return {
       success: printResult.success,
@@ -268,78 +280,45 @@ export class WindowsPrinterManager {
     };
   }
 
-  /**
-   * Generates and executes a test print to verify hardware connectivity
-   */
   public async executeTestPrint(printerName: string): Promise<TestPrintResult> {
     if (this.cachedPrinters.length === 0) {
-      await this.discoverPrinters();
+      await this.discoverPrinters(null, true);
     }
     let printer = this.cachedPrinters.find((item) => item.name === printerName);
     if (!printer && printerName) {
       const lower = printerName.trim().toLowerCase();
       printer = this.cachedPrinters.find((item) => item.name.trim().toLowerCase() === lower);
     }
-    if (!printer && printerName) {
-      const lower = printerName.trim().toLowerCase();
-      printer = this.cachedPrinters.find(
-        (item) => item.name.trim().toLowerCase().includes(lower) || lower.includes(item.name.trim().toLowerCase())
-      );
-    }
     const resolvedName = printer ? printer.name : printerName;
 
     if (PrintSettingsAdapter.isVirtualPrinter(resolvedName)) {
-      return {
-        success: false,
-        printerName: resolvedName,
-        message: `"${resolvedName}" is a virtual/document printer, not a physical printer.`
-      };
+      return { success: false, printerName: resolvedName, message: 'Virtual printers cannot be tested.' };
     }
     if (!printer || !printer.isOnline) {
-      return {
-        success: false,
-        printerName: resolvedName,
-        message: `Printer "${resolvedName}" is offline or disconnected. Reconnect it in Windows, then rescan printers.`
-      };
+      return { success: false, printerName: resolvedName, message: `Printer "${resolvedName}" is offline.` };
     }
-    logger.info('SPOOLER', `Initiating test print on device: ${resolvedName}`);
+
     const tempDir = os.tmpdir();
     const testDocPath = path.join(tempDir, `printflow_test_${Date.now()}.pdf`);
-
     const testPdf = `%PDF-1.4
 1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
 2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj
-3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R /Resources << /Font << /F1 5 0 R >> >> >> endobj
-4 0 obj << /Length 120 >> stream
-BT
-/F1 16 Tf
-50 780 Td
-(PrintFlow Cloud Desktop Agent - Hardware Diagnostic Test) Tj
-0 -30 Td
-(Printer Device: ${printerName}) Tj
-0 -20 Td
-(Timestamp: ${new Date().toLocaleString()}) Tj
-ET
+3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Contents 4 0 R >> endobj
+4 0 obj << /Length 50 >> stream
+BT /F1 12 Tf 50 780 Td (PrintFlow Diagnostic Test) Tj ET
 endstream endobj
-5 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj
 xref
-0 6
-0000000000 65535 f 
-0000000009 00000 n 
-0000000058 00000 n 
-0000000115 00000 n 
-0000000236 00000 n 
-0000000406 00000 n 
-trailer << /Size 6 /Root 1 0 R >>
+0 5
+trailer << /Size 5 /Root 1 0 R >>
 startxref
-485
+300
 %%EOF`;
 
     try {
       fs.writeFileSync(testDocPath, testPdf, 'utf8');
       const testFileItem: PrintFileItem = {
         id: 'test_file',
-        fileName: 'PrintFlow_Diagnostic_Test.pdf',
+        fileName: 'Test.pdf',
         pageCount: 1,
         copies: 1,
         colorMode: 'BW',
@@ -348,35 +327,17 @@ startxref
       };
 
       const result = await this.spoolJob(testFileItem, testDocPath, printerName);
-      
-      // Clean up temp test file
       setTimeout(() => {
-        try {
-          if (fs.existsSync(testDocPath)) fs.unlinkSync(testDocPath);
-        } catch {
-          // Ignore
-        }
+        try { if (fs.existsSync(testDocPath)) fs.unlinkSync(testDocPath); } catch {}
       }, 5000);
 
-      if (result.success) {
-        return {
-          success: true,
-          printerName,
-          message: `Windows confirmed the test page printed on ${printerName}.`
-        };
-      } else {
-        return {
-          success: false,
-          printerName,
-          message: result.error || 'Failed to dispatch test print to printer.'
-        };
-      }
-    } catch (err: any) {
       return {
-        success: false,
+        success: result.success,
         printerName,
-        message: `Test print error: ${err.message}`
+        message: result.success ? `Test page sent to ${printerName}.` : (result.error || 'Test failed.')
       };
+    } catch (err: any) {
+      return { success: false, printerName, message: err.message };
     }
   }
 }

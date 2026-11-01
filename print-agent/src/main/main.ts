@@ -7,6 +7,7 @@ import { agentService } from './agent/PrintAgentService.js';
 import { localVault } from './storage/LocalDataVault.js';
 import { printerManager } from './printer/WindowsPrinterManager.js';
 import { logger } from './logger/AgentLogger.js';
+import { systemHealthManager } from './health/SystemHealthManager.js';
 import { AgentConfig } from '../renderer/types/agent.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -383,6 +384,14 @@ ipcMain.handle('logs:export', async () => {
   if (result.canceled || !result.filePath) return { success: false };
   fs.writeFileSync(result.filePath, logger.getSanitizedExport(), 'utf8');
   return { success: true, filePath: result.filePath };
+});
+
+ipcMain.handle('health:get-system-health', async () => {
+  return systemHealthManager.getSystemHealth();
+});
+
+ipcMain.handle('health:run-cleanup', async () => {
+  return systemHealthManager.runStorageCleanup();
 });
 
 ipcMain.handle('window:copy-text', (_event, value: unknown) => {

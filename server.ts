@@ -83,7 +83,9 @@ import {
   generateUniqueShopSlug,
   requirePostgresPool,
   getShopAgentAvailability,
-  getCandidateShopIds
+  getCandidateShopIds,
+  getShopRetentionSettings,
+  updateShopRetentionSettings
 } from './src/db/paymentStorage';
 import {
   maskKeyId,
@@ -2554,6 +2556,134 @@ app.delete('/api/shop/:shopId/payment-settings', async (req: Request, res: Respo
     return res.status(500).json({ success: false, error: 'Failed to delete shop payment integration' });
   }
 });
+
+// ============================================================================
+// SHOP DOCUMENT RETENTION & AUTOMATIC CLEANUP APIS & WORKER
+// ============================================================================
+
+/**
+ * GET /api/shop/:shopId/retention
+ * Retrieves retention settings for a shop.
+ */
+app.get('/api/shop/:shopId/retention', async (req: Request, res: Response) => {
+  try {
+    const rawShopId = req.params.shopId;
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const userCanonicalShopId = user?.shopId ? await resolvePrintFlowShopId(user.shopId).catch(() => user.shopId) : undefined;
+    const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && userCanonicalShopId) ? userCanonicalShopId : rawShopId;
+    const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
+
+    const authorizedUserCtx = user ? { ...user, shopId: userCanonicalShopId || user.shopId } : user;
+    const authz = enforceServerAuthorization(authorizedUserCtx, { resourceType: 'SHOP', shopId });
+    if (!authz.authorized) {
+      return res.status(403).json({ success: false, error: authz.reason || 'Access denied' });
+    }
+
+    const settings = await getShopRetentionSettings(shopId);
+    return res.json({
+      success: true,
+      shopId,
+      autoDeleteEnabled: settings.autoDeleteEnabled,
+      retentionHours: settings.retentionHours
+    });
+  } catch (error: any) {
+    logger.error('Failed to get shop retention settings', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve shop retention settings' });
+  }
+});
+
+/**
+ * PUT /api/shop/:shopId/retention
+ * Updates retention settings for a shop.
+ */
+app.put('/api/shop/:shopId/retention', createRateLimiter(20), async (req: Request, res: Response) => {
+  try {
+    const rawShopId = req.params.shopId;
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const userCanonicalShopId = user?.shopId ? await resolvePrintFlowShopId(user.shopId).catch(() => user.shopId) : undefined;
+    const defaultPlaceholderIds = new Set(['a001a111-0000-0000-0000-000000000001', 'shop_default', 'default', '']);
+    const effectiveParamShopId = (defaultPlaceholderIds.has(rawShopId) && userCanonicalShopId) ? userCanonicalShopId : rawShopId;
+    const shopId = await resolvePrintFlowShopId(effectiveParamShopId).catch(() => effectiveParamShopId);
+
+    const authorizedUserCtx = user ? { ...user, shopId: userCanonicalShopId || user.shopId } : user;
+    const authz = enforceServerAuthorization(authorizedUserCtx, { resourceType: 'SHOP', shopId });
+    if (!authz.authorized) {
+      return res.status(403).json({ success: false, error: authz.reason || 'Access denied' });
+    }
+
+    const { autoDeleteEnabled, retentionHours } = req.body;
+    if (typeof autoDeleteEnabled !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'autoDeleteEnabled boolean is required.' });
+    }
+    const hours = Number(retentionHours);
+    const ALLOWED_RETENTION_HOURS = new Set([1, 2, 6, 12, 24, 48, 168]);
+    if (!ALLOWED_RETENTION_HOURS.has(hours)) {
+      return res.status(400).json({ success: false, error: 'Invalid retention hours selected.' });
+    }
+
+    await updateShopRetentionSettings(shopId, autoDeleteEnabled, hours);
+    return res.json({ success: true, shopId, autoDeleteEnabled, retentionHours: hours });
+  } catch (error: any) {
+    logger.error('Failed to update shop retention settings', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to update shop retention settings' });
+  }
+});
+
+async function runAutomaticDocumentRetentionCleanup() {
+  try {
+    const storageProvider = getStorageProvider();
+    if (!storageProvider.isConfigured() || !isNeonDatabaseConfigured()) {
+      return;
+    }
+    const pool = requirePostgresPool();
+    const shopsRes = await pool.query(
+      `SELECT id::text, retention_hours FROM public.shops WHERE auto_delete_enabled = true`
+    );
+    const shops = shopsRes.rows;
+    for (const shop of shops) {
+      const shopId = shop.id;
+      const retentionHours = Number(shop.retention_hours || 1);
+
+      const filesRes = await pool.query(
+        `SELECT f.id, f.object_path, f.job_id
+         FROM public.uploaded_files f
+         WHERE f.shop_id = $1
+           AND f.upload_state != 'DELETED'
+           AND f.created_at + ($2::text || ' hours')::interval <= NOW()
+           AND NOT EXISTS (
+             SELECT 1 FROM public.print_agent_jobs j
+             WHERE j.job_id = f.job_id
+               AND j.print_status IN ('QUEUED', 'ASSIGNED', 'DOWNLOADING', 'PRINTING')
+           )
+         LIMIT 100`,
+        [shopId, retentionHours]
+      );
+      const expiredFiles = filesRes.rows;
+      if (expiredFiles.length > 0) {
+        const objectPaths = expiredFiles.map((f: any) => f.object_path).filter(Boolean);
+        if (objectPaths.length > 0) {
+          try {
+            await storageProvider.delete(objectPaths);
+          } catch (delErr) {
+            logger.warn('Failed to delete storage objects during retention cleanup:', { error: deepRedact(delErr) });
+          }
+        }
+        const fileIds = expiredFiles.map((f: any) => f.id);
+        await pool.query(
+          `UPDATE public.uploaded_files SET upload_state = 'DELETED' WHERE id = ANY($1::uuid[])`,
+          [fileIds]
+        );
+        logger.info(`Retention worker deleted ${expiredFiles.length} expired documents for shop ${shopId}`);
+      }
+    }
+  } catch (err) {
+    logger.error('Error during automatic document retention cleanup worker:', { error: deepRedact(err) });
+  }
+}
+
+// Run automatic document retention cleanup worker every 5 minutes
+setInterval(runAutomaticDocumentRetentionCleanup, 5 * 60 * 1000);
 
 // ============================================================================
 // STEP 1: BACKEND - CREATE RAZORPAY ORDER API
@@ -5898,6 +6028,77 @@ app.get('/api/public/shops/:slug', requireNeonPool, async (req: Request, res: Re
     return res.status(503).json({ success: false, error: 'Shop data is temporarily unavailable.' });
   }
 });
+
+/**
+ * POST /api/public/verify-qr
+ * Verifies scanned shop QR code payload server-side.
+ * Extracts shop slug/identifier, validates against database, ensures shop is active and open,
+ * and rejects invalid, expired, or tampered QR codes.
+ */
+app.post('/api/public/verify-qr', createRateLimiter(30), async (req: Request, res: Response) => {
+  try {
+    const { qrPayload } = req.body || {};
+    if (!qrPayload || typeof qrPayload !== 'string') {
+      return res.status(400).json({ success: false, error: 'QR payload is required.' });
+    }
+
+    const cleanPayload = qrPayload.trim();
+    let slug = cleanPayload;
+
+    // If payload is a full URL, extract slug after /s/
+    if (cleanPayload.includes('/s/')) {
+      const parts = cleanPayload.split('/s/');
+      if (parts.length > 1) {
+        slug = parts[1].split('/')[0].split('?')[0].trim();
+      }
+    } else if (cleanPayload.startsWith('http://') || cleanPayload.startsWith('https://')) {
+      try {
+        const urlObj = new URL(cleanPayload);
+        const pathSegments = urlObj.pathname.split('/').filter(Boolean);
+        const sIdx = pathSegments.indexOf('s');
+        if (sIdx !== -1 && pathSegments[sIdx + 1]) {
+          slug = pathSegments[sIdx + 1];
+        } else if (pathSegments.length > 0) {
+          slug = pathSegments[pathSegments.length - 1];
+        }
+      } catch {}
+    }
+
+    slug = slug.replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!slug || slug.length < 2) {
+      return res.status(400).json({ success: false, error: 'Invalid QR code format. Could not extract shop identifier.' });
+    }
+
+    const shop = await getBusinessRepository().findActiveShopBySlug(slug);
+    if (!shop) {
+      return res.status(404).json({
+        success: false,
+        error: 'Shop QR code not recognized or shop does not exist.'
+      });
+    }
+
+    if (shop.isOpen === false) {
+      return res.status(400).json({
+        success: false,
+        error: `Shop "${shop.name}" is currently closed or inactive.`
+      });
+    }
+
+    return res.json({
+      success: true,
+      shop: {
+        id: shop.id,
+        slug: shop.slug,
+        name: shop.name,
+        isOpen: shop.isOpen
+      }
+    });
+  } catch (error) {
+    logger.error('Failed to verify shop QR payload', { error: deepRedact(error) });
+    return res.status(503).json({ success: false, error: 'Shop verification service is temporarily unavailable.' });
+  }
+});
+
 /**
  * GET /api/public/print-tracking/:token
  * Public customer print job tracking endpoint.

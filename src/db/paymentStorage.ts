@@ -311,6 +311,9 @@ export async function initializePaymentTables(maxRetries = 3): Promise<void> {
           updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
 
+        ALTER TABLE public.shops ADD COLUMN IF NOT EXISTS auto_delete_enabled BOOLEAN NOT NULL DEFAULT true;
+        ALTER TABLE public.shops ADD COLUMN IF NOT EXISTS retention_hours INTEGER NOT NULL DEFAULT 1;
+
         DO $$
         BEGIN
           IF EXISTS (
@@ -3544,6 +3547,41 @@ export async function persistNewShopAndUser(input: PersistShopUserInput): Promis
     await client.query('ROLLBACK');
     console.error('[PaymentStorage] Failed to persist new shop in Neon:', err);
     throw err;
+  } finally {
+    client.release();
+  }
+}
+
+export async function getShopRetentionSettings(shopId: string): Promise<{ autoDeleteEnabled: boolean; retentionHours: number }> {
+  if (!isNeonDatabaseConfigured() || !pgPool) {
+    return { autoDeleteEnabled: true, retentionHours: 1 };
+  }
+  const client = await pgPool.connect();
+  try {
+    const res = await client.query(
+      `SELECT auto_delete_enabled, retention_hours FROM public.shops WHERE id::text = $1 OR slug = $1 LIMIT 1`,
+      [shopId]
+    );
+    if (res.rowCount && res.rows[0]) {
+      return {
+        autoDeleteEnabled: res.rows[0].auto_delete_enabled ?? true,
+        retentionHours: res.rows[0].retention_hours ?? 1
+      };
+    }
+    return { autoDeleteEnabled: true, retentionHours: 1 };
+  } finally {
+    client.release();
+  }
+}
+
+export async function updateShopRetentionSettings(shopId: string, autoDeleteEnabled: boolean, retentionHours: number): Promise<void> {
+  if (!isNeonDatabaseConfigured() || !pgPool) return;
+  const client = await pgPool.connect();
+  try {
+    await client.query(
+      `UPDATE public.shops SET auto_delete_enabled = $1, retention_hours = $2, updated_at = NOW() WHERE id::text = $3 OR slug = $3`,
+      [autoDeleteEnabled, retentionHours, shopId]
+    );
   } finally {
     client.release();
   }

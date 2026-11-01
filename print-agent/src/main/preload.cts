@@ -51,6 +51,10 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
   clearLogs: (): Promise<boolean> => ipcRenderer.invoke('logs:clear'),
   exportLogs: (): Promise<{ success: boolean; filePath?: string }> => ipcRenderer.invoke('logs:export'),
 
+  // System Health
+  getSystemHealth: (): Promise<any> => ipcRenderer.invoke('health:get-system-health'),
+  runStorageCleanup: (): Promise<{ success: boolean; freedMb: number; message: string }> => ipcRenderer.invoke('health:run-cleanup'),
+
   // Window Controls
   minimizeToTray: (): void => ipcRenderer.send('window:minimize-to-tray'),
   quitApp: (): void => ipcRenderer.send('window:quit-app'),
