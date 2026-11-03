@@ -21,6 +21,7 @@ import {
   XCircle
 } from 'lucide-react';
 import packageMetadata from '../../../package.json';
+import { PrinterLoadD3Chart } from './PrinterLoadD3Chart';
 
 interface DashboardProps {
   status: AgentConnectionStatus;
@@ -247,6 +248,9 @@ export const Dashboard: React.FC<DashboardProps> = ({
           </p>
         </div>
       </div>
+
+      {/* D3.JS LIVE QUEUE DEPTH & THROUGHPUT VISUALIZATION */}
+      <PrinterLoadD3Chart printers={printers} jobs={jobs} />
 
       {/* 3. ACTIVE SPOOLING SPOTLIGHT (IF IN PROGRESS) */}
       {activeJob && (

@@ -18,10 +18,12 @@ export type PrintStatus =
   | 'ASSIGNED' 
   | 'DOWNLOADING' 
   | 'PRINTING' 
+  | 'SUBMITTED_TO_SPOOLER'
   | 'COMPLETED' 
   | 'FAILED' 
   | 'PRINT_INTERRUPTED' 
   | 'REQUIRES_ATTENTION' 
+  | 'AWAITING_RECONCILIATION'
   | 'CANCELLED';
 
 export type PaperSize =
@@ -191,6 +193,11 @@ export interface PrintJob {
   pagesPrinted?: number;
   assignedPrinterId?: string;
   assignedPrinterName?: string;
+  spoolerJobId?: string | number;
+  spoolSubmittedAt?: string;
+  reconciledAt?: string;
+  reconciliationAction?: 'CONFIRM_PRINTED' | 'CONFIRM_NOT_PRINTED' | 'INVESTIGATE';
+  reconciliationNotes?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;

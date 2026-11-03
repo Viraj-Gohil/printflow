@@ -19,11 +19,12 @@ import {
 import { PrintJob, PrintStatus } from '../../types';
 
 export const ShopPrintJobs: React.FC = () => {
-  const { activeShop, printJobs, updateJobStatus, simulateCustomerPrintJob } = useApp();
+  const { activeShop, printJobs, updateJobStatus, reconcileJob, simulateCustomerPrintJob } = useApp();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('ALL');
   const [activeJobModal, setActiveJobModal] = useState<PrintJob | null>(null);
+  const [reconcilingJobId, setReconcilingJobId] = useState<string | null>(null);
 
   const getPaymentStatusBadge = (paymentStatus?: string) => {
     const status = (paymentStatus || 'PENDING').toUpperCase();
@@ -93,6 +94,13 @@ export const ShopPrintJobs: React.FC = () => {
             <span>Printing...</span>
           </span>
         );
+      case 'SUBMITTED_TO_SPOOLER':
+        return (
+          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-cyan-50 text-cyan-800 border border-cyan-300 rounded-full text-[10px] font-bold shadow-2xs">
+            <Printer className="w-3 h-3 text-cyan-600 shrink-0" />
+            <span>Spooler Accepted</span>
+          </span>
+        );
       case 'COMPLETED':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-full text-[10px] font-bold shadow-2xs">
@@ -107,12 +115,13 @@ export const ShopPrintJobs: React.FC = () => {
             <span>Print Failed</span>
           </span>
         );
+      case 'AWAITING_RECONCILIATION':
       case 'REQUIRES_ATTENTION':
       case 'PRINT_INTERRUPTED':
         return (
           <span className="inline-flex items-center gap-1 px-2.5 py-0.5 bg-amber-50 text-amber-800 border border-amber-300 rounded-full text-[10px] font-bold shadow-2xs">
             <AlertCircle className="w-3 h-3 text-amber-600 shrink-0" />
-            <span>Waiting for Shop</span>
+            <span>Needs Verification</span>
           </span>
         );
       default:
@@ -279,6 +288,24 @@ export const ShopPrintJobs: React.FC = () => {
                     </td>
                     <td className="py-3.5 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {(job.printStatus === 'AWAITING_RECONCILIATION' || job.printStatus === 'REQUIRES_ATTENTION' || job.printStatus === 'SUBMITTED_TO_SPOOLER') && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => reconcileJob(job.id, 'CONFIRM_PRINTED', 'Quick confirmed printed from queue')}
+                              title="Confirm physical printer finished output"
+                              className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 rounded-lg text-[11px] font-bold cursor-pointer"
+                            >
+                              Confirm Printed
+                            </button>
+                            <button
+                              onClick={() => reconcileJob(job.id, 'CONFIRM_NOT_PRINTED', 'Quick confirmed not printed from queue')}
+                              title="Confirm printer did not produce document"
+                              className="px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-lg text-[11px] font-bold cursor-pointer"
+                            >
+                              Not Printed
+                            </button>
+                          </div>
+                        )}
                         {job.printStatus === 'QUEUED' && (
                           <button
                             onClick={() => updateJobStatus(job.id, 'PRINTING')}
@@ -352,6 +379,67 @@ export const ShopPrintJobs: React.FC = () => {
                 <div>
                   <span className="text-slate-400 block text-[11px]">Total Paid</span>
                   <span className="font-mono font-bold text-blue-700">₹{activeJobModal.totalAmount.toFixed(2)}</span>
+                </div>
+                {activeJobModal.spoolerJobId && (
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Spooler Job ID</span>
+                    <span className="font-mono font-bold text-indigo-700">#{activeJobModal.spoolerJobId}</span>
+                  </div>
+                )}
+                {activeJobModal.spoolSubmittedAt && (
+                  <div>
+                    <span className="text-slate-400 block text-[11px]">Spooler Submitted</span>
+                    <span className="font-mono text-slate-700">{new Date(activeJobModal.spoolSubmittedAt).toLocaleTimeString()}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Spooler & Reconciliation Control */}
+              <div className="p-3.5 bg-amber-50/70 border border-amber-200/90 rounded-xl space-y-2.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
+                    <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                    Print Outcome Reconciliation
+                  </span>
+                  {activeJobModal.reconciledAt && (
+                    <span className="text-[10px] font-mono text-amber-800 bg-amber-100/80 px-2 py-0.5 rounded">
+                      Reconciled ({activeJobModal.reconciliationAction})
+                    </span>
+                  )}
+                </div>
+                <p className="text-[11px] text-amber-800 leading-relaxed">
+                  Verify whether the physical printer produced pages before updating status. This reconciles any discrepancies between backend sync and physical paper output.
+                </p>
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button
+                    onClick={async () => {
+                      await reconcileJob(activeJobModal.id, 'CONFIRM_PRINTED', 'Verified document physically came out of printer');
+                      setActiveJobModal(null);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-bold shadow-2xs cursor-pointer flex items-center gap-1"
+                  >
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    Confirm Printed
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await reconcileJob(activeJobModal.id, 'CONFIRM_NOT_PRINTED', 'Physical printer did not output paper');
+                      setActiveJobModal(null);
+                    }}
+                    className="px-3 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg text-xs font-bold shadow-2xs cursor-pointer flex items-center gap-1"
+                  >
+                    <AlertCircle className="w-3.5 h-3.5" />
+                    Confirm Not Printed
+                  </button>
+                  <button
+                    onClick={async () => {
+                      await reconcileJob(activeJobModal.id, 'INVESTIGATE', 'Manual operator inspection needed');
+                      setActiveJobModal(null);
+                    }}
+                    className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold shadow-2xs cursor-pointer"
+                  >
+                    Investigate
+                  </button>
                 </div>
               </div>
 

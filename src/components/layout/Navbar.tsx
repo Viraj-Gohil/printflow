@@ -52,34 +52,34 @@ export const Navbar: React.FC = () => {
             className="flex items-center gap-2 text-left group focus:outline-none cursor-pointer shrink-0"
           >
             <div className="relative shrink-0">
-              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-linear-to-br from-blue-600 via-blue-600 to-indigo-700 flex items-center justify-center text-white shadow-xs group-hover:scale-105 group-hover:shadow-blue-500/25 transition-all">
+              <div className="w-8 h-8 sm:w-10 sm:h-10 rounded-xl bg-[#00B52D] flex items-center justify-center text-white shadow-xs group-hover:scale-105 group-hover:shadow-emerald-500/25 transition-all">
                 <Printer className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
               </div>
-              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 sm:w-2.5 sm:h-2.5 bg-emerald-500 border-2 border-white rounded-full" />
+              <span className="absolute -bottom-0.5 -right-0.5 w-2 h-2 sm:w-2.5 sm:h-2.5 bg-emerald-400 border-2 border-white rounded-full" />
             </div>
             <div className="flex flex-col min-w-0">
-              <span className="font-heading font-semibold text-base sm:text-2xl tracking-tight text-slate-900 group-hover:text-blue-600 transition-colors leading-tight flex items-center gap-1.5 brand-text">
+              <span className="font-heading font-extrabold text-base sm:text-2xl tracking-tight text-[#080808] group-hover:text-[#00B52D] transition-colors leading-tight flex items-center gap-1.5 brand-text">
                 PrintFlow
-                <span className="hidden sm:inline-flex text-[10px] sm:text-[11px] font-medium text-blue-600 bg-blue-50/90 px-1.5 sm:px-2.5 py-0.5 rounded-md border border-blue-200 uppercase tracking-wider shrink-0">
+                <span className="hidden sm:inline-flex text-[10px] sm:text-[11px] font-bold text-[#00B52D] bg-[#EAF8ED] px-1.5 sm:px-2.5 py-0.5 rounded-md border border-emerald-200 uppercase tracking-wider shrink-0">
                   Cloud
                 </span>
               </span>
-              <span className="text-xs font-normal text-slate-500 hidden sm:inline tracking-tight">
-                Instant Counter Xerox Platform
+              <span className="text-xs font-normal text-[#777777] hidden sm:inline tracking-tight">
+                Smart Counter Xerox Platform
               </span>
             </div>
           </button>
 
           {/* Context indicators */}
           {isCustomerFlow && (
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-blue-700 bg-blue-50/90 rounded-xl border border-blue-200/80 max-w-[140px] sm:max-w-[220px] truncate shadow-2xs">
-              <Store className="w-3.5 h-3.5 text-blue-600 shrink-0" />
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-bold text-emerald-800 bg-[#EAF8ED] rounded-xl border border-emerald-200/80 max-w-[140px] sm:max-w-[220px] truncate shadow-2xs">
+              <Store className="w-3.5 h-3.5 text-[#00B52D] shrink-0" />
               <span className="truncate">{activeShop.name}</span>
             </span>
           )}
           {currentPath.startsWith('/shop') && (
-            <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold text-blue-700 bg-blue-50/90 rounded-xl border border-blue-200/80 shadow-2xs">
-              <Store className="w-3.5 h-3.5 text-blue-600" />
+            <span className="hidden md:inline-flex items-center gap-1.5 px-3 py-1 text-xs font-bold text-emerald-800 bg-[#EAF8ED] rounded-xl border border-emerald-200/80 shadow-2xs">
+              <Store className="w-3.5 h-3.5 text-[#00B52D]" />
               <span>Shop Console</span>
             </span>
           )}
@@ -93,39 +93,39 @@ export const Navbar: React.FC = () => {
 
         {/* Marketing Navigation Links */}
         {isCustomerFlow ? (
-          <div className="hidden md:flex items-center gap-2 text-xs font-bold text-emerald-700 bg-emerald-50/90 px-3.5 py-1.5 rounded-full border border-emerald-200 shadow-2xs">
-            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+          <div className="hidden md:flex items-center gap-2 text-xs font-bold text-emerald-800 bg-[#EAF8ED] px-3.5 py-1.5 rounded-full border border-emerald-200 shadow-2xs">
+            <ShieldCheck className="w-4 h-4 text-[#00B52D] shrink-0" />
             <span>Files are encrypted & auto-deleted after printing</span>
           </div>
         ) : isMarketing ? (
-          <nav className="hidden md:flex items-center gap-1.5 text-sm font-medium text-slate-600">
+          <nav className="hidden md:flex items-center gap-1.5 text-sm font-semibold text-[#080808]">
             <button
               onClick={() => scrollToSection('how-it-works')}
-              className="px-3.5 py-2 rounded-xl hover:text-blue-600 hover:bg-blue-50/80 transition-all cursor-pointer font-heading font-medium text-slate-600"
+              className="px-3.5 py-2 rounded-xl hover:text-[#00B52D] hover:bg-[#EAF8ED] transition-all cursor-pointer font-heading text-slate-700 font-semibold"
             >
               How It Works
             </button>
             <button
               onClick={() => scrollToSection('features')}
-              className="px-3.5 py-2 rounded-xl hover:text-blue-600 hover:bg-blue-50/80 transition-all cursor-pointer font-heading font-medium text-slate-600"
+              className="px-3.5 py-2 rounded-xl hover:text-[#00B52D] hover:bg-[#EAF8ED] transition-all cursor-pointer font-heading text-slate-700 font-semibold"
             >
               Features
             </button>
             <button
               onClick={() => scrollToSection('print-agent')}
-              className="px-3.5 py-2 rounded-xl hover:text-blue-600 hover:bg-blue-50/80 transition-all cursor-pointer font-heading font-medium text-slate-600"
+              className="px-3.5 py-2 rounded-xl hover:text-[#00B52D] hover:bg-[#EAF8ED] transition-all cursor-pointer font-heading text-slate-700 font-semibold"
             >
               Print Agent
             </button>
             <button
               onClick={() => scrollToSection('pricing')}
-              className="px-3.5 py-2 rounded-xl hover:text-blue-600 hover:bg-blue-50/80 transition-all cursor-pointer font-heading font-medium text-slate-600"
+              className="px-3.5 py-2 rounded-xl hover:text-[#00B52D] hover:bg-[#EAF8ED] transition-all cursor-pointer font-heading text-slate-700 font-semibold"
             >
               Pricing
             </button>
             <button
               onClick={() => scrollToSection('faq')}
-              className="px-3.5 py-2 rounded-xl hover:text-blue-600 hover:bg-blue-50/80 transition-all cursor-pointer font-heading font-medium text-slate-600"
+              className="px-3.5 py-2 rounded-xl hover:text-[#00B52D] hover:bg-[#EAF8ED] transition-all cursor-pointer font-heading text-slate-700 font-semibold"
             >
               FAQ
             </button>
@@ -135,36 +135,36 @@ export const Navbar: React.FC = () => {
         {/* Action Buttons */}
         <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
           {!currentUser ? (
-            <div className="flex items-center gap-1 sm:gap-2">
+            <div className="flex items-center gap-1.5 sm:gap-2.5">
               <button
-    onClick={() => navigate('/auth/login')}
-    className="inline-flex items-center justify-center gap-1.5
-      rounded-xl border border-slate-200 bg-white
-      px-3 py-2 sm:px-4 sm:py-2.5
-      text-xs sm:text-sm font-semibold text-slate-700
-      hover:border-blue-200 hover:bg-blue-50 hover:text-blue-600
-      active:scale-95 transition-all duration-200
-      cursor-pointer whitespace-nowrap"
-  >
-    <LogIn className="hidden sm:block h-4 w-4" />
-    <span>Login</span>
-  </button>
+                onClick={() => navigate('/auth/login')}
+                className="inline-flex items-center justify-center gap-1.5
+                  rounded-xl border border-slate-200 bg-white
+                  px-3.5 py-2 sm:px-4 sm:py-2.5
+                  text-xs sm:text-sm font-bold text-slate-800
+                  hover:border-emerald-300 hover:bg-[#EAF8ED] hover:text-[#00B52D]
+                  active:scale-95 transition-all duration-200
+                  cursor-pointer whitespace-nowrap"
+              >
+                <LogIn className="hidden sm:block h-4 w-4" />
+                <span>Login</span>
+              </button>
 
-  {/* Register Button */}
-  <button
-    onClick={() => navigate('/auth/register')}
-    className="inline-flex items-center justify-center gap-1.5
-      rounded-xl bg-blue-600
-      px-3 py-2 sm:px-4 sm:py-2.5
-      text-xs sm:text-sm font-bold text-white
-      shadow-sm shadow-blue-500/25
-      hover:bg-blue-700 hover:shadow-md
-      active:scale-95 transition-all duration-200
-      cursor-pointer whitespace-nowrap"
-  >
-    <UserPlus className="hidden sm:block h-4 w-4" />
-    <span>Register</span>
-  </button>
+              {/* Register / Get Started Button */}
+              <button
+                onClick={() => navigate('/auth/register')}
+                className="inline-flex items-center justify-center gap-1.5
+                  rounded-xl bg-[#00B52D] hover:bg-[#009424]
+                  px-4 py-2 sm:px-5 sm:py-2.5
+                  text-xs sm:text-sm font-extrabold text-white
+                  shadow-sm shadow-emerald-500/25
+                  hover:shadow-md hover:shadow-emerald-500/30
+                  active:scale-95 transition-all duration-200
+                  cursor-pointer whitespace-nowrap"
+              >
+                <UserPlus className="hidden sm:block h-4 w-4" />
+                <span>Get Started Free</span>
+              </button>
             </div>
           ) : currentUser.role === 'ADMIN' ? (
             <div className="flex items-center gap-2">
@@ -277,10 +277,10 @@ export const Navbar: React.FC = () => {
                     setMobileMenuOpen(false);
                     navigate('/auth/register');
                   }}
-                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all text-center shadow-xs cursor-pointer flex items-center justify-center gap-2"
+                  className="w-full py-2.5 px-4 bg-[#00B52D] hover:bg-[#009424] text-white rounded-xl text-xs font-bold transition-all text-center shadow-xs cursor-pointer flex items-center justify-center gap-2"
                 >
                   <UserPlus className="w-4 h-4" />
-                  <span>Register Free</span>
+                  <span>Get Started Free</span>
                 </button>
               </div>
             ) : (
@@ -290,7 +290,7 @@ export const Navbar: React.FC = () => {
                     setMobileMenuOpen(false);
                     navigate(currentUser.role === 'ADMIN' ? '/admin/dashboard' : '/shop/dashboard');
                   }}
-                  className="w-full py-2.5 px-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition-all text-center shadow-xs cursor-pointer"
+                  className="w-full py-2.5 px-4 bg-[#00B52D] hover:bg-[#009424] text-white rounded-xl text-xs font-bold transition-all text-center shadow-xs cursor-pointer"
                 >
                   {currentUser.role === 'ADMIN' ? 'Admin Console' : 'Shop Console'}
                 </button>

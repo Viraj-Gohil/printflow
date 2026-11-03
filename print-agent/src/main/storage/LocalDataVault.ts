@@ -1,6 +1,12 @@
 import fs from 'fs';
 import path from 'path';
-import { app } from 'electron';
+let app: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  app = require('electron').app;
+} catch {
+  app = undefined;
+}
 import {
   HardwareCapabilities,
   OwnerPrinterConfiguration,
@@ -303,24 +309,34 @@ export class LocalDataVault {
   }
 
   private loadJobs(): void {
-    // Local database authority removed: Purge legacy jobs_queue.json if present on disk
     try {
       if (this.jobsFilePath && fs.existsSync(this.jobsFilePath)) {
-        fs.unlinkSync(this.jobsFilePath);
-        logger.info('STORAGE', 'Legacy local jobs_queue.json removed; Neon PostgreSQL is the authoritative queue.');
-      }
-      const tmpPath = `${this.jobsFilePath}.tmp`;
-      if (fs.existsSync(tmpPath)) {
-        fs.unlinkSync(tmpPath);
+        const raw = fs.readFileSync(this.jobsFilePath, 'utf8');
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item && item.id) {
+              this.jobs.set(item.id, item as PrintJobItem);
+            }
+          }
+          logger.info('STORAGE', `Loaded ${this.jobs.size} persisted job items from local queue vault.`);
+        }
       }
     } catch (err: any) {
-      logger.warn('STORAGE', 'Could not purge legacy jobs_queue.json', { error: err.message });
+      logger.warn('STORAGE', 'Could not load local jobs from queue vault', { error: err.message });
     }
   }
 
   public persistJobs(): void {
-    // No-op: Print queue is an ephemeral runtime execution buffer.
-    // Neon PostgreSQL is the sole authoritative database for all jobs.
+    try {
+      if (!this.jobsFilePath) return;
+      const list = Array.from(this.jobs.values());
+      const tmpPath = `${this.jobsFilePath}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(list, null, 2), 'utf8');
+      fs.renameSync(tmpPath, this.jobsFilePath);
+    } catch (err: any) {
+      logger.error('STORAGE', 'Failed persisting jobs to local queue vault', { error: err.message });
+    }
   }
 
   public saveJob(job: PrintJobItem): void {

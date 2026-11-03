@@ -6,6 +6,7 @@ import { WindowsPrinterManager } from '../printer/WindowsPrinterManager.js';
 import { JobQueueManager } from '../queue/JobQueueManager.js';
 import { CrashRecoveryManager } from '../recovery/CrashRecoveryManager.js';
 import { logger } from '../logger/AgentLogger.js';
+import { systemHealthManager } from '../health/SystemHealthManager.js';
 
 export class PrintAgentService {
   private static instance: PrintAgentService;
@@ -49,6 +50,30 @@ export class PrintAgentService {
 
   public setOnJobUpdateListener(listener: (job: PrintJobItem) => void): void {
     this.queueManager.setOnJobUpdateListener(listener);
+  }
+
+  public setOnQueueStateChangeListener(listener: (queues: import('../../renderer/types/agent.js').PrinterQueueState[]) => void): void {
+    this.queueManager.setOnQueueStateChangeListener(listener);
+  }
+
+  public getPrinterQueues(): import('../../renderer/types/agent.js').PrinterQueueState[] {
+    return this.queueManager.getPrinterQueues();
+  }
+
+  public pausePrinterQueue(printerName: string): boolean {
+    return this.queueManager.pausePrinterQueue(printerName);
+  }
+
+  public resumePrinterQueue(printerName: string): boolean {
+    return this.queueManager.resumePrinterQueue(printerName);
+  }
+
+  public cancelJob(jobId: string): boolean {
+    return this.queueManager.cancelJob(jobId);
+  }
+
+  public async retryJob(jobId: string): Promise<{ success: boolean; error?: string }> {
+    return this.queueManager.retryJob(jobId);
   }
 
   private setStatus(status: AgentConnectionStatus): void {
@@ -282,7 +307,14 @@ export class PrintAgentService {
     const requestRevision = this.configRevision;
     const shouldResumeQueue = this.currentStatus !== 'ONLINE';
     try {
-      const res = await this.apiClient.sendHeartbeat();
+      const config = localVault.getConfig();
+      let metricsPayload: any;
+      if (config.agentId && config.shopId) {
+        try {
+          metricsPayload = await systemHealthManager.getMetricsPayload(config.agentId, config.shopId);
+        } catch {}
+      }
+      const res = await this.apiClient.sendHeartbeat(metricsPayload);
       if (requestRevision !== this.configRevision) return { success: false };
       if (res.success) {
         localVault.recordSuccessfulHeartbeat();

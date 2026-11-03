@@ -85,7 +85,18 @@ import {
   getShopAgentAvailability,
   getCandidateShopIds,
   getShopRetentionSettings,
-  updateShopRetentionSettings
+  updateShopRetentionSettings,
+  reconcilePrintAgentJobByShop,
+  saveAgentHealthAndSnapshot,
+  getAgentHealthStatus,
+  getAgentResourceHistory,
+  getAgentAlerts,
+  resolveAgentAlert,
+  getShopStorageUsage,
+  reserveStorageQuota,
+  commitStorageUpload,
+  releaseStorageReservation,
+  releaseStorageUsage
 } from './src/db/paymentStorage';
 import {
   maskKeyId,
@@ -3481,7 +3492,12 @@ app.post('/api/upload', createRateLimiter(30), async (req: Request, res: Respons
     if (!validation.isValid) {
       return res.status(400).json({
         success: false,
-        error: validation.error || 'File validation failed'
+        code: validation.code || 'INVALID_FILE',
+        title: validation.userFacingTitle || 'Invalid Document',
+        message: validation.userFacingMessage || validation.error || 'File validation failed',
+        error: validation.error || 'File validation failed',
+        detectedType: validation.detectedType,
+        supportedFormats: validation.supportedFormats
       });
     }
 
@@ -3494,29 +3510,50 @@ app.post('/api/upload', createRateLimiter(30), async (req: Request, res: Respons
       return res.status(503).json({ success: false, error: 'Durable document storage is required.' });
     }
 
+    // 1. Authoritative subscription storage quota check & atomic reservation
+    const quotaCheck = await reserveStorageQuota(shopId, buffer.length);
+    if (!quotaCheck.success) {
+      return res.status(403).json({
+        success: false,
+        code: quotaCheck.code || 'STORAGE_QUOTA_EXCEEDED',
+        title: 'Storage Quota Limit Reached',
+        message: quotaCheck.error || 'Shop storage quota limit reached.',
+        error: quotaCheck.error
+      });
+    }
+
     const ext = path.extname(validation.sanitizedFilename!) || '.pdf';
     const objectPath = buildObjectPath(shopId, cleanJobId, fileId, ext);
 
-    await storageProvider.upload({
-      shopId,
-      jobId: cleanJobId,
-      fileId,
-      extension: ext,
-      buffer,
-      contentType: validation.detectedMime!
-    });
+    try {
+      await storageProvider.upload({
+        shopId,
+        jobId: cleanJobId,
+        fileId,
+        extension: ext,
+        buffer,
+        contentType: validation.detectedMime!
+      });
 
-    await getGuestCheckoutRepository().persistUploadedFileMetadata({
-      jobId: cleanJobId,
-      shopId,
-      fileId,
-      objectPath,
-      originalFilename: validation.sanitizedFilename!,
-      mimeType: validation.detectedMime!,
-      sizeBytes: buffer.length,
-      sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
-      verifiedPageCount: 1
-    });
+      await getGuestCheckoutRepository().persistUploadedFileMetadata({
+        jobId: cleanJobId,
+        shopId,
+        fileId,
+        objectPath,
+        originalFilename: validation.sanitizedFilename!,
+        mimeType: validation.detectedMime!,
+        sizeBytes: buffer.length,
+        sha256: crypto.createHash('sha256').update(buffer).digest('hex'),
+        verifiedPageCount: 1
+      });
+
+      // Commit reservation to used storage
+      await commitStorageUpload(shopId, buffer.length);
+    } catch (uploadErr) {
+      // Compensate and release reservation on failure
+      await releaseStorageReservation(shopId, buffer.length).catch(() => {});
+      throw uploadErr;
+    }
 
     // Generate signed download token (valid 1 hour)
     const expiresAt = Date.now() + 3600000;
@@ -4583,7 +4620,16 @@ app.post('/api/customer/print-jobs', createRateLimiter(30), async (req: Request,
       jobId: id
     });
     if (!validation.isValid || !validation.storageKey || !validation.detectedMime || !validation.sanitizedFilename) {
-      return res.status(400).json({ success: false, error: validation.error || 'A print file failed validation.' });
+      return res.status(400).json({
+        success: false,
+        code: validation.code || 'INVALID_FILE',
+        title: validation.userFacingTitle || 'Invalid Document',
+        message: validation.userFacingMessage || validation.error || 'A print file failed validation.',
+        error: validation.error || 'A print file failed validation.',
+        filename: input.fileName,
+        detectedType: validation.detectedType,
+        supportedFormats: validation.supportedFormats
+      });
     }
 
     const fileId = `file_${crypto.randomBytes(8).toString('hex')}`;
@@ -4744,14 +4790,46 @@ app.get('/api/customer/print-jobs/:id/status', createRateLimiter(60), async (req
       return res.status(404).json({ success: false, error: 'Print order not found.' });
     }
 
+    const getCustomerStatusMessage = (st: string): string => {
+      switch (st) {
+        case 'SUBMITTED_TO_SPOOLER':
+          return 'Print job submitted to printer.';
+        case 'COMPLETED':
+          return 'Print completed.';
+        case 'AWAITING_RECONCILIATION':
+        case 'REQUIRES_ATTENTION':
+          return 'Print submission received. We are verifying the print outcome. Please check with the shop before requesting a reprint.';
+        case 'PRINTING':
+          return 'Your document is being printed.';
+        case 'DOWNLOADING':
+          return 'Your document is being prepared for printing.';
+        case 'ASSIGNED':
+          return 'Printer assigned. Starting shortly.';
+        case 'QUEUED':
+          return 'Your document is waiting in the printer queue.';
+        case 'FAILED':
+          return 'Printing failed. Please contact the shop or retry if the job is confirmed not to have printed.';
+        default:
+          return 'Your order is being processed.';
+      }
+    };
+
+    const statusMessage = getCustomerStatusMessage(job.printStatus);
+    const sanitizedError = job.printStatus === 'FAILED'
+      ? (job.errorMessage && !job.errorMessage.includes('fetch failed') && !job.errorMessage.includes('TypeError')
+          ? job.errorMessage
+          : statusMessage)
+      : undefined;
+
     return res.json({
       success: true,
       job: {
         id: job.id,
         printStatus: job.printStatus,
+        statusMessage,
         updatedAt: job.updatedAt,
         printerName: job.printerName,
-        errorMessage: job.errorMessage,
+        errorMessage: sanitizedError,
         retrySafe: job.retrySafe,
         pagesPrinted: job.pagesPrinted
       }
@@ -4871,7 +4949,7 @@ app.get('/api/agent/active-status', async (req: Request, res: Response) => {
   }
 });
 
-// Agent Heartbeat with M2M Token Validation & Revocation Check
+// Agent Heartbeat with M2M Token Validation & Resource Metrics Ingestion
 app.post('/api/agent/heartbeat', createRateLimiter(60), async (req: Request, res: Response) => {
   const agentToken = req.headers['x-agent-token'] as string;
   const agentId = req.headers['x-agent-id'] as string;
@@ -4888,6 +4966,18 @@ app.post('/api/agent/heartbeat', createRateLimiter(60), async (req: Request, res
         error: agentCheck.error || 'Invalid or revoked agent token'
       });
     }
+
+    // Ingest metrics if payload included in heartbeat body
+    if (req.body && (req.body.cpu || req.body.ram || req.body.disk || req.body.spooler)) {
+      await saveAgentHealthAndSnapshot({
+        ...req.body,
+        agentId,
+        shopId: agentCheck.shopId
+      }).catch((err) => {
+        logger.warn('Failed to save agent metrics during heartbeat:', { error: deepRedact(err) });
+      });
+    }
+
     return res.json({
       success: true,
       status: 'ONLINE',
@@ -4897,6 +4987,218 @@ app.post('/api/agent/heartbeat', createRateLimiter(60), async (req: Request, res
   } catch (error) {
     logger.error('Print agent heartbeat persistence failed', { error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Agent credential storage is unavailable.' });
+  }
+});
+
+// Dedicated Agent Resource & Health Metrics Telemetry Ingestion
+app.post('/api/agent/health-report', createRateLimiter(60), async (req: Request, res: Response) => {
+  const agentToken = req.headers['x-agent-token'] as string;
+  const agentId = req.headers['x-agent-id'] as string;
+  if (!agentToken || !agentId) {
+    return res.status(401).json({ success: false, error: 'Missing agent device credentials' });
+  }
+
+  try {
+    const agentCheck = await authenticatePrintAgent({ agentId, token: agentToken });
+    if (!agentCheck.valid || !agentCheck.shopId) {
+      return res.status(403).json({
+        success: false,
+        code: agentCheck.code || 'REVOKED',
+        error: agentCheck.error || 'Invalid or revoked agent token'
+      });
+    }
+
+    const result = await saveAgentHealthAndSnapshot({
+      ...req.body,
+      agentId,
+      shopId: agentCheck.shopId
+    });
+
+    return res.json({
+      success: true,
+      acknowledgedAt: new Date().toISOString(),
+      alertsGenerated: result.alerts.length
+    });
+  } catch (error: any) {
+    logger.error('Agent health report processing failed', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to process agent health report' });
+  }
+});
+
+// GET /api/agent/monitoring/status - Get Agent Current Health & Status
+app.get('/api/agent/monitoring/status', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const requestedShopId = req.query.shopId as string | undefined;
+
+    let targetShopId = requestedShopId;
+    if (user && user.role === 'SHOP_OWNER') {
+      targetShopId = user.shopId || requestedShopId;
+    }
+
+    const healthList = await getAgentHealthStatus(targetShopId);
+    return res.json({
+      success: true,
+      agents: healthList,
+      totalCount: healthList.length,
+      onlineCount: healthList.filter((a) => a.status === 'ONLINE').length,
+      offlineCount: healthList.filter((a) => a.status === 'OFFLINE').length,
+      criticalCount: healthList.filter((a) => a.status === 'CRITICAL').length
+    });
+  } catch (error: any) {
+    logger.error('Failed to query agent health status', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve agent health status' });
+  }
+});
+
+// GET /api/agent/monitoring/history - Get Agent Resource History Snapshots
+app.get('/api/agent/monitoring/history', async (req: Request, res: Response) => {
+  try {
+    const agentId = req.query.agentId as string;
+    const requestedShopId = req.query.shopId as string | undefined;
+    const limit = Math.min(100, Math.max(1, parseInt(req.query.limit as string || '30', 10)));
+
+    if (!agentId) {
+      return res.status(400).json({ success: false, error: 'agentId query parameter is required.' });
+    }
+
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    let targetShopId = requestedShopId;
+    if (user && user.role === 'SHOP_OWNER') {
+      targetShopId = user.shopId || requestedShopId;
+    }
+
+    const history = await getAgentResourceHistory(agentId, targetShopId, limit);
+    return res.json({
+      success: true,
+      agentId,
+      snapshots: history,
+      count: history.length
+    });
+  } catch (error: any) {
+    logger.error('Failed to query agent resource history', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve resource history' });
+  }
+});
+
+// GET /api/agent/monitoring/alerts - Get Active or Historical Alerts
+app.get('/api/agent/monitoring/alerts', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const requestedShopId = req.query.shopId as string | undefined;
+    const statusFilter = (req.query.status as any) || 'ACTIVE';
+
+    let targetShopId = requestedShopId;
+    if (user && user.role === 'SHOP_OWNER') {
+      targetShopId = user.shopId || requestedShopId;
+    }
+
+    const alerts = await getAgentAlerts(targetShopId, statusFilter);
+    return res.json({
+      success: true,
+      alerts,
+      count: alerts.length
+    });
+  } catch (error: any) {
+    logger.error('Failed to query agent alerts', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve alerts' });
+  }
+});
+
+// PATCH /api/agent/monitoring/alerts/:id/resolve - Resolve Alert
+app.patch('/api/agent/monitoring/alerts/:id/resolve', async (req: Request, res: Response) => {
+  try {
+    const alertId = req.params.id;
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const shopId = user?.role === 'SHOP_OWNER' ? user.shopId : undefined;
+
+    const resolved = await resolveAgentAlert(alertId, shopId);
+    if (!resolved) {
+      return res.status(404).json({ success: false, error: 'Alert not found or access denied.' });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Alert resolved successfully.',
+      alertId
+    });
+  } catch (error: any) {
+    logger.error('Failed to resolve alert', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to resolve alert' });
+  }
+});
+
+// GET /api/shop/storage-usage - Get Shop Subscription Cloud Storage Usage & Quota
+app.get('/api/shop/storage-usage', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    const rawShopId = (req.query.shopId as string) || (req.headers['x-shop-id'] as string) || user?.shopId;
+
+    if (!rawShopId) {
+      return res.status(400).json({ success: false, error: 'Shop ID is required' });
+    }
+
+    const shopId = await resolvePrintFlowShopId(rawShopId).catch(() => rawShopId);
+
+    if (user && user.role === 'SHOP_OWNER' && user.shopId !== shopId) {
+      const canonical = await resolvePrintFlowShopId(user.shopId || '').catch(() => user.shopId);
+      if (canonical !== shopId) {
+        return res.status(403).json({ success: false, error: 'You cannot view another shop’s storage usage.' });
+      }
+    }
+
+    const storageUsage = await getShopStorageUsage(shopId);
+    return res.json({
+      success: true,
+      storage: storageUsage
+    });
+  } catch (error: any) {
+    logger.error('Failed to query shop storage usage', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to retrieve shop storage usage' });
+  }
+});
+
+// GET /api/admin/resource-overview - Platform Fleet & Storage Overview
+app.get('/api/admin/resource-overview', requireAdminRole, async (_req: Request, res: Response) => {
+  try {
+    const agents = await getAgentHealthStatus();
+    const alerts = await getAgentAlerts(undefined, 'ACTIVE');
+
+    let totalSystemCpu = 0;
+    let totalSystemRam = 0;
+    let totalFreeRam = 0;
+    let totalAgentStorageBytes = 0;
+
+    for (const a of agents) {
+      totalSystemCpu += a.system_cpu_percent || 0;
+      totalSystemRam += a.total_ram_bytes || 0;
+      totalFreeRam += a.available_ram_bytes || 0;
+      totalAgentStorageBytes += a.agent_storage_bytes || 0;
+    }
+
+    const count = Math.max(1, agents.length);
+    const avgCpuPercent = parseFloat((totalSystemCpu / count).toFixed(1));
+
+    return res.json({
+      success: true,
+      fleetSummary: {
+        totalAgents: agents.length,
+        onlineAgents: agents.filter((a) => a.status === 'ONLINE').length,
+        offlineAgents: agents.filter((a) => a.status === 'OFFLINE').length,
+        warningAgents: agents.filter((a) => a.status === 'WARNING').length,
+        criticalAgents: agents.filter((a) => a.status === 'CRITICAL').length,
+        avgSystemCpuPercent: avgCpuPercent,
+        totalFleetRamBytes: totalSystemRam,
+        freeFleetRamBytes: totalFreeRam,
+        totalAgentOwnedStorageBytes: totalAgentStorageBytes,
+        activeAlertsCount: alerts.length
+      },
+      activeAlerts: alerts.slice(0, 10),
+      agents
+    });
+  } catch (error: any) {
+    logger.error('Failed to generate admin resource overview', { error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: 'Failed to generate admin resource overview' });
   }
 });
 
@@ -5484,7 +5786,16 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
     return res.status(403).json({ success: false, error: agentCheck.error || 'Agent access unauthorized' });
   }
 
-  const validStatuses = ['QUEUED', 'DOWNLOADING', 'PRINTING', 'COMPLETED', 'FAILED', 'REQUIRES_ATTENTION'];
+  const validStatuses = [
+    'QUEUED',
+    'DOWNLOADING',
+    'PRINTING',
+    'SUBMITTED_TO_SPOOLER',
+    'COMPLETED',
+    'FAILED',
+    'REQUIRES_ATTENTION',
+    'AWAITING_RECONCILIATION'
+  ];
   if (!status || !validStatuses.includes(status)) {
     return res.status(400).json({ success: false, error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
   }
@@ -5492,6 +5803,8 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
     (body.retrySafe !== undefined && typeof body.retrySafe !== 'boolean') ||
     (body.pagesPrinted !== undefined &&
       (!Number.isSafeInteger(body.pagesPrinted) || body.pagesPrinted < 0 || body.pagesPrinted > 200_000_000)) ||
+    (body.spoolerJobId !== undefined &&
+      (!Number.isSafeInteger(body.spoolerJobId) || body.spoolerJobId < 0)) ||
     (errorMessage !== undefined && (typeof errorMessage !== 'string' || errorMessage.length > 1000)) ||
     (printerName !== undefined && (typeof printerName !== 'string' || printerName.length > 200))
   ) {
@@ -5522,10 +5835,14 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
     return res.json({ success: true, jobId: req.params.id, newStatus: status, updatedAt: job.updatedAt });
   }
   const allowedTransitions: Record<string, string[]> = {
-    ASSIGNED: ['DOWNLOADING', 'FAILED', 'QUEUED'],
-    DOWNLOADING: ['PRINTING', 'FAILED', 'QUEUED'],
-    PRINTING: ['COMPLETED', 'FAILED', 'REQUIRES_ATTENTION'],
-    FAILED: ['QUEUED']
+    QUEUED: ['ASSIGNED', 'DOWNLOADING', 'PRINTING', 'FAILED', 'CANCELLED'],
+    ASSIGNED: ['DOWNLOADING', 'PRINTING', 'FAILED', 'QUEUED', 'CANCELLED'],
+    DOWNLOADING: ['PRINTING', 'SUBMITTED_TO_SPOOLER', 'FAILED', 'QUEUED', 'CANCELLED'],
+    PRINTING: ['SUBMITTED_TO_SPOOLER', 'COMPLETED', 'FAILED', 'REQUIRES_ATTENTION', 'AWAITING_RECONCILIATION'],
+    SUBMITTED_TO_SPOOLER: ['COMPLETED', 'AWAITING_RECONCILIATION', 'FAILED'],
+    AWAITING_RECONCILIATION: ['COMPLETED', 'FAILED', 'QUEUED'],
+    REQUIRES_ATTENTION: ['COMPLETED', 'FAILED', 'QUEUED'],
+    FAILED: ['QUEUED', 'COMPLETED']
   };
   const retrySafe = body.retrySafe === true;
   if (
@@ -5542,6 +5859,10 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
     const pagesPrinted = Number.isSafeInteger(body.pagesPrinted) && body.pagesPrinted >= 0
       ? body.pagesPrinted
       : undefined;
+    const spoolerJobId = Number.isSafeInteger(body.spoolerJobId) && body.spoolerJobId >= 0
+      ? body.spoolerJobId
+      : undefined;
+
     const updated = await updatePrintAgentJobStatus({
       jobId: job.id,
       shopId: agentCheck.shopId,
@@ -5552,7 +5873,9 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
       errorMessage: typeof errorMessage === 'string' ? errorMessage.slice(0, 1000) : undefined,
       printerName: typeof printerName === 'string' ? printerName.trim().slice(0, 200) : undefined,
       retrySafe,
-      pagesPrinted
+      pagesPrinted,
+      spoolerJobId,
+      spoolSubmittedAt: status === 'SUBMITTED_TO_SPOOLER' ? updatedAt : undefined
     });
     if (!updated) return res.status(409).json({ success: false, error: 'Print job status could not be updated.' });
     if (isSharedPoolConfigured()) {
@@ -5560,9 +5883,12 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
         const pool = requireSharedPool();
         await pool.query(
           `UPDATE public.print_jobs
-           SET print_status = $2, updated_at = NOW()
+           SET print_status = $2,
+               spooler_job_id = COALESCE($4, spooler_job_id),
+               spool_submitted_at = CASE WHEN $2 = 'SUBMITTED_TO_SPOOLER' THEN NOW() ELSE spool_submitted_at END,
+               updated_at = NOW()
            WHERE id::text = $1 AND shop_id::text = $3`,
-          [job.id, status, agentCheck.shopId]
+          [job.id, status, agentCheck.shopId, spoolerJobId ?? null]
         );
         await pool.query(
           `INSERT INTO public.print_job_events
@@ -5578,7 +5904,8 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
               printerName,
               errorMessage,
               retrySafe,
-              pagesPrinted
+              pagesPrinted,
+              spoolerJobId
             })
           ]
         ).catch(() => {});
@@ -5590,6 +5917,80 @@ app.post('/api/agent/jobs/:id/status', async (req: Request, res: Response) => {
   } catch (error) {
     logger.error('Neon print job status update failed', { jobId: req.params.id, error: deepRedact(error) });
     return res.status(503).json({ success: false, error: 'Print queue storage is temporarily unavailable.' });
+  }
+});
+
+/**
+ * POST /api/shops/:shopId/print-jobs/:jobId/reconcile
+ * Allows a shop owner to reconcile an uncertain print job.
+ * Actions:
+ * - CONFIRM_PRINTED: marks COMPLETED
+ * - CONFIRM_NOT_PRINTED: marks FAILED with retrySafe: true
+ * - INVESTIGATE: keeps AWAITING_RECONCILIATION and logs audit note
+ */
+app.post('/api/shops/:shopId/print-jobs/:jobId/reconcile', requireShopOwnerRole, async (req: Request, res: Response) => {
+  try {
+    const { shopId, jobId } = req.params;
+    const { action, notes } = req.body;
+    const validActions = ['CONFIRM_PRINTED', 'CONFIRM_NOT_PRINTED', 'INVESTIGATE'];
+    if (!action || !validActions.includes(action)) {
+      return res.status(400).json({ success: false, error: `Invalid action. Must be one of: ${validActions.join(', ')}` });
+    }
+
+    const effectiveShopId = await resolvePrintFlowShopId(shopId);
+    const user = (req as any).authenticatedUser as ServerSession | undefined;
+    if (user?.role === 'SHOP_OWNER' && user.shopId && user.shopId !== shopId && user.shopId !== effectiveShopId) {
+      return res.status(403).json({ success: false, error: 'You cannot reconcile print jobs of another shop.' });
+    }
+
+    const updatedJob = await reconcilePrintAgentJobByShop({
+      jobId,
+      shopId: effectiveShopId,
+      action: action as any,
+      notes: typeof notes === 'string' ? notes.slice(0, 500) : undefined
+    });
+
+    if (!updatedJob) {
+      return res.status(404).json({ success: false, error: 'Print job not found.' });
+    }
+
+    const targetStatus = updatedJob.printStatus;
+
+    if (isSharedPoolConfigured()) {
+      try {
+        const pool = requireSharedPool();
+        await pool.query(
+          `UPDATE public.print_jobs
+           SET print_status = $2,
+               reconciled_at = NOW(),
+               reconciliation_action = $3,
+               reconciliation_notes = $4,
+               updated_at = NOW()
+           WHERE id::text = $1`,
+          [jobId, targetStatus, action, notes || null]
+        );
+        await pool.query(
+          `INSERT INTO public.print_job_events
+             (job_id, actor_type, actor_id, from_status, to_status, event_code, metadata)
+           VALUES ($1::uuid, 'SHOP_OWNER', $2, 'AWAITING_RECONCILIATION', $3, $4, $5::jsonb)`,
+          [
+            jobId,
+            user?.userId || 'shop_owner',
+            targetStatus,
+            `RECONCILIATION_${action}`,
+            JSON.stringify({ action, notes, reconciledAt: new Date().toISOString() })
+          ]
+        ).catch(() => {});
+      } catch (poolErr) {
+        logger.warn('Failed to update public.print_jobs during reconciliation:', { error: deepRedact(poolErr) });
+      }
+    }
+
+    logger.info(`Shop owner reconciled job ${jobId} with action ${action}`);
+    return res.json({ success: true, jobId, printStatus: targetStatus, action });
+  } catch (error: any) {
+    logger.error('Manual reconciliation failed:', { jobId: req.params.jobId, error: deepRedact(error) });
+    return res.status(500).json({ success: false, error: error.message || 'Failed to reconcile print job.' });
   }
 });
 

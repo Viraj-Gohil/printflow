@@ -194,10 +194,15 @@ export function validateUrlScheme(url: string, allowedSchemes = ['http:', 'https
 
 export interface FileValidationResult {
   isValid: boolean;
+  code?: 'UNSUPPORTED_FORMAT' | 'CORRUPT_DOCUMENT' | 'INVALID_CONTENT' | 'FILE_TOO_LARGE' | 'EMPTY_FILE' | 'MIME_MISMATCH';
   error?: string;
+  userFacingTitle?: string;
+  userFacingMessage?: string;
+  detectedType?: string;
   detectedMime?: string;
   sanitizedFilename?: string;
   storageKey?: string;
+  supportedFormats?: string[];
 }
 
 export const ALLOWED_MIME_TYPES = new Set([
@@ -244,17 +249,54 @@ export function sanitizeFilename(filename: string): string {
 /**
  * Inspects binary magic numbers (file signature) to detect actual file type.
  */
-export function verifyFileSignature(buffer: Buffer | Uint8Array): { isValid: boolean; mimeType?: string } {
+export const SUPPORTED_FILE_FORMATS = ['PDF', 'JPG', 'JPEG', 'PNG', 'WEBP'];
+
+export function verifyFileSignature(buffer: Buffer | Uint8Array): {
+  isValid: boolean;
+  mimeType?: string;
+  detectedType?: string;
+  isUnsupported?: boolean;
+} {
   if (!buffer || buffer.length < 4) {
-    return { isValid: false };
+    return { isValid: false, detectedType: 'Corrupt or Empty' };
   }
 
-  // 1. PDF Magic Bytes: %PDF- (0x25 0x50 0x44 0x46)
+  // 1. Executable file signature: MZ (0x4D 0x5A) -> Windows EXE / DLL
+  if (buffer[0] === 0x4D && buffer[1] === 0x5A) {
+    return { isValid: false, isUnsupported: true, detectedType: 'Executable File (EXE)' };
+  }
+
+  // 2. ZIP Archive signature: PK\x03\x04 (0x50 0x4B 0x03 0x04) -> ZIP / DOCX / XLSX / JAR
+  if (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4B && (buffer[2] === 0x03 || buffer[2] === 0x05 || buffer[2] === 0x07)) {
+    return { isValid: false, isUnsupported: true, detectedType: 'ZIP Archive / Office Document' };
+  }
+
+  // 3. Legacy Microsoft Compound File Binary (DOC, XLS, PPT): 0xD0 0xCF 0x11 0xE0
+  if (buffer.length >= 4 && buffer[0] === 0xD0 && buffer[1] === 0xCF && buffer[2] === 0x11 && buffer[3] === 0xE0) {
+    return { isValid: false, isUnsupported: true, detectedType: 'Legacy Office Document (DOC)' };
+  }
+
+  // 4. ELF Linux Executable: \x7F ELF (0x7F 0x45 0x4C 0x46)
+  if (buffer.length >= 4 && buffer[0] === 0x7F && buffer[1] === 0x45 && buffer[2] === 0x4C && buffer[3] === 0x46) {
+    return { isValid: false, isUnsupported: true, detectedType: 'Linux Binary (ELF)' };
+  }
+
+  // 5. RAR Archive: Rar!\x1A\x07 (0x52 0x61 0x72 0x21)
+  if (buffer.length >= 4 && buffer[0] === 0x52 && buffer[1] === 0x61 && buffer[2] === 0x72 && buffer[3] === 0x21) {
+    return { isValid: false, isUnsupported: true, detectedType: 'RAR Archive' };
+  }
+
+  // 6. 7-Zip Archive: 7z\xBC\xAF\x27\x1C (0x37 0x7A 0xBC 0xAF)
+  if (buffer.length >= 4 && buffer[0] === 0x37 && buffer[1] === 0x7A && buffer[2] === 0xBC && buffer[3] === 0xAF) {
+    return { isValid: false, isUnsupported: true, detectedType: '7-Zip Archive' };
+  }
+
+  // 7. PDF Magic Bytes: %PDF- (0x25 0x50 0x44 0x46)
   if (buffer[0] === 0x25 && buffer[1] === 0x50 && buffer[2] === 0x44 && buffer[3] === 0x46) {
-    return { isValid: true, mimeType: 'application/pdf' };
+    return { isValid: true, mimeType: 'application/pdf', detectedType: 'PDF Document' };
   }
 
-  // 2. PNG Magic Bytes: \x89PNG\r\n\x1a\n (0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A)
+  // 8. PNG Magic Bytes: \x89PNG\r\n\x1a\n (0x89 0x50 0x4E 0x47 0x0D 0x0A 0x1A 0x0A)
   if (
     buffer.length >= 8 &&
     buffer[0] === 0x89 &&
@@ -266,24 +308,24 @@ export function verifyFileSignature(buffer: Buffer | Uint8Array): { isValid: boo
     buffer[6] === 0x1A &&
     buffer[7] === 0x0A
   ) {
-    return { isValid: true, mimeType: 'image/png' };
+    return { isValid: true, mimeType: 'image/png', detectedType: 'PNG Image' };
   }
 
-  // 3. JPEG Magic Bytes: \xFF\xD8\xFF
+  // 9. JPEG Magic Bytes: \xFF\xD8\xFF
   if (buffer[0] === 0xFF && buffer[1] === 0xD8 && buffer[2] === 0xFF) {
-    return { isValid: true, mimeType: 'image/jpeg' };
+    return { isValid: true, mimeType: 'image/jpeg', detectedType: 'JPEG Image' };
   }
 
-  // 4. WEBP Magic Bytes: RIFF....WEBP (0x52 0x49 0x46 0x46 ... 0x57 0x45 0x42 0x50)
+  // 10. WEBP Magic Bytes: RIFF....WEBP (0x52 0x49 0x46 0x46 ... 0x57 0x45 0x42 0x50)
   if (
     buffer.length >= 12 &&
     buffer[0] === 0x52 && buffer[1] === 0x49 && buffer[2] === 0x46 && buffer[3] === 0x46 &&
     buffer[8] === 0x57 && buffer[9] === 0x45 && buffer[10] === 0x42 && buffer[11] === 0x50
   ) {
-    return { isValid: true, mimeType: 'image/webp' };
+    return { isValid: true, mimeType: 'image/webp', detectedType: 'WEBP Image' };
   }
 
-  return { isValid: false };
+  return { isValid: false, detectedType: 'Unknown Binary' };
 }
 
 /**
@@ -300,37 +342,117 @@ export function validateUploadFile(params: {
   const { buffer, filename, shopId, jobId, maxSizeBytes = MAX_UPLOAD_SIZE_BYTES } = params;
 
   if (!buffer || buffer.length === 0) {
-    return { isValid: false, error: 'File is empty (0 bytes).' };
+    return {
+      isValid: false,
+      code: 'EMPTY_FILE',
+      userFacingTitle: 'Invalid Document',
+      userFacingMessage: 'The selected file is empty (0 bytes).',
+      error: 'File is empty (0 bytes).'
+    };
   }
 
   if (buffer.length > maxSizeBytes) {
-    return { isValid: false, error: `File exceeds maximum allowed limit of ${(maxSizeBytes / (1024 * 1024)).toFixed(0)}MB.` };
+    return {
+      isValid: false,
+      code: 'FILE_TOO_LARGE',
+      userFacingTitle: 'File Size Limit Exceeded',
+      userFacingMessage: `The selected file exceeds the ${(maxSizeBytes / (1024 * 1024)).toFixed(0)} MB limit.`,
+      error: `File exceeds maximum allowed limit of ${(maxSizeBytes / (1024 * 1024)).toFixed(0)}MB.`
+    };
   }
 
   const sanitizedFilename = sanitizeFilename(filename);
   const ext = (sanitizedFilename.substring(sanitizedFilename.lastIndexOf('.')) || '').toLowerCase();
 
   if (!ALLOWED_EXTENSIONS.has(ext)) {
-    return { isValid: false, error: `File extension '${ext}' is not permitted. Only PDF, JPEG, PNG, and WEBP are accepted.` };
+    return {
+      isValid: false,
+      code: 'UNSUPPORTED_FORMAT',
+      userFacingTitle: 'Unsupported File Format',
+      userFacingMessage: 'This file format is not supported by PrintFlow.',
+      detectedType: ext.replace('.', '').toUpperCase() || 'Unknown',
+      supportedFormats: SUPPORTED_FILE_FORMATS,
+      error: `File extension '${ext}' is not permitted. Only PDF, JPEG, PNG, and WEBP are accepted.`
+    };
   }
 
   const sigResult = verifyFileSignature(buffer);
-  if (!sigResult.isValid || !sigResult.mimeType) {
-    return { isValid: false, error: 'File contents do not match genuine document/image binary signatures. Upload rejected.' };
+
+  if (sigResult.isUnsupported) {
+    return {
+      isValid: false,
+      code: 'UNSUPPORTED_FORMAT',
+      userFacingTitle: 'Unsupported File Format',
+      userFacingMessage: 'This file format is not supported by PrintFlow.',
+      detectedType: sigResult.detectedType || ext.replace('.', '').toUpperCase(),
+      supportedFormats: SUPPORTED_FILE_FORMATS,
+      error: `This file format (${sigResult.detectedType || ext}) is not supported by PrintFlow.`
+    };
   }
 
-  // Prevent extension/mime spoofing (e.g. an image named .pdf or vice versa)
+  if (!sigResult.isValid || !sigResult.mimeType) {
+    return {
+      isValid: false,
+      code: 'INVALID_CONTENT',
+      userFacingTitle: 'Invalid Document',
+      userFacingMessage: 'File contents do not match genuine document/image binary signatures.',
+      error: 'File contents do not match genuine document/image binary signatures. Upload rejected.'
+    };
+  }
+
+  // Prevent extension/mime spoofing (e.g. an image or EXE named .pdf or vice versa)
   if (ext === '.pdf' && sigResult.mimeType !== 'application/pdf') {
-    return { isValid: false, error: 'Mismatched file format: Extension claims PDF but content signature is not PDF.' };
+    return {
+      isValid: false,
+      code: 'MIME_MISMATCH',
+      userFacingTitle: 'Invalid Document',
+      userFacingMessage: 'The file contents do not match its file extension.',
+      detectedType: sigResult.detectedType,
+      error: 'Mismatched file format: Extension claims PDF but content signature is not PDF.'
+    };
   }
   if ((ext === '.jpg' || ext === '.jpeg') && sigResult.mimeType !== 'image/jpeg') {
-    return { isValid: false, error: 'Mismatched file format: Extension claims JPEG but content signature is not JPEG.' };
+    return {
+      isValid: false,
+      code: 'MIME_MISMATCH',
+      userFacingTitle: 'Invalid Document',
+      userFacingMessage: 'The file contents do not match its file extension.',
+      detectedType: sigResult.detectedType,
+      error: 'Mismatched file format: Extension claims JPEG but content signature is not JPEG.'
+    };
   }
   if (ext === '.png' && sigResult.mimeType !== 'image/png') {
-    return { isValid: false, error: 'Mismatched file format: Extension claims PNG but content signature is not PNG.' };
+    return {
+      isValid: false,
+      code: 'MIME_MISMATCH',
+      userFacingTitle: 'Invalid Document',
+      userFacingMessage: 'The file contents do not match its file extension.',
+      detectedType: sigResult.detectedType,
+      error: 'Mismatched file format: Extension claims PNG but content signature is not PNG.'
+    };
   }
   if (ext === '.webp' && sigResult.mimeType !== 'image/webp') {
-    return { isValid: false, error: 'Mismatched file format: Extension claims WEBP but content signature is not WEBP.' };
+    return {
+      isValid: false,
+      code: 'MIME_MISMATCH',
+      userFacingTitle: 'Invalid Document',
+      userFacingMessage: 'The file contents do not match its file extension.',
+      detectedType: sigResult.detectedType,
+      error: 'Mismatched file format: Extension claims WEBP but content signature is not WEBP.'
+    };
+  }
+
+  // Specific check for corrupt or truncated PDF
+  if (ext === '.pdf') {
+    if (buffer.length < 32) {
+      return {
+        isValid: false,
+        code: 'CORRUPT_DOCUMENT',
+        userFacingTitle: 'Unable to Read File',
+        userFacingMessage: 'The selected file appears to be damaged or corrupted and cannot be read.',
+        error: 'PDF file is truncated or corrupted (insufficient byte length).'
+      };
+    }
   }
 
   // Generate private, tenant-isolated storage key
@@ -341,7 +463,9 @@ export function validateUploadFile(params: {
 
   return {
     isValid: true,
+    code: undefined,
     detectedMime: sigResult.mimeType,
+    detectedType: sigResult.detectedType,
     sanitizedFilename,
     storageKey
   };

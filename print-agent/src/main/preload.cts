@@ -39,8 +39,13 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
   getPrinterDetectionDetails: (printerName: string): Promise<{ success: boolean; hardware?: any; error?: string }> =>
     ipcRenderer.invoke('printer:get-detection-details', printerName),
 
-  // Jobs Queue
+  // Jobs Queue & Multi-Printer Management
   getJobs: (): Promise<PrintJobItem[]> => ipcRenderer.invoke('jobs:get-list'),
+  getPrinterQueues: (): Promise<any[]> => ipcRenderer.invoke('queue:get-printer-queues'),
+  pausePrinterQueue: (printerName: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('queue:pause-printer', printerName),
+  resumePrinterQueue: (printerName: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('queue:resume-printer', printerName),
   pollNow: (): Promise<{ success: boolean; newJobsCount: number; error?: string }> => ipcRenderer.invoke('jobs:poll-now'),
   reprintJob: (jobId: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('jobs:reprint', jobId),
   cancelJob: (jobId: string): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke('jobs:cancel', jobId),
@@ -90,5 +95,11 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
     const handler = (_event: Electron.IpcRendererEvent, isScanning: boolean) => callback(isScanning);
     ipcRenderer.on('event:printer-scanning', handler);
     return () => ipcRenderer.removeListener('event:printer-scanning', handler);
+  },
+
+  onQueueStateChanged: (callback: (queues: any[]) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, queues: any[]) => callback(queues);
+    ipcRenderer.on('event:queue-state-changed', handler);
+    return () => ipcRenderer.removeListener('event:queue-state-changed', handler);
   }
 });

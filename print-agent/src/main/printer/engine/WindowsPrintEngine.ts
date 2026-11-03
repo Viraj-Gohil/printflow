@@ -42,6 +42,7 @@ export class WindowsPrintEngine {
    */
   public generatePowerShellScript(options: NativePrintOptions): string {
     const safePrinterName = options.printerName.replace(/'/g, "''");
+    const safeJobId = (options.jobId || 'job').replace(/[^a-zA-Z0-9_-]/g, '_');
     const copies = Math.max(1, Math.min(options.copies || 1, 999));
     const isColor = options.colorMode === 'COLOR';
     const isDuplex = Boolean(options.duplex);
@@ -58,11 +59,13 @@ export class WindowsPrintEngine {
 $ErrorActionPreference = 'Stop'
 $submitted = $false
 $totalPages = 0
+$spoolerJobId = $null
 
 try {
     Add-Type -AssemblyName System.Drawing
 
     $printerName = '${safePrinterName}'
+    $docName = 'PrintFlow_${safeJobId}'
     $imagePaths = @(${pathsArrayString})
     $copies = ${copies}
     $isColor = ${isColor ? '$true' : '$false'}
@@ -94,6 +97,7 @@ try {
     # 2. Initialize PrintDocument
     $doc = New-Object System.Drawing.Printing.PrintDocument
     $doc.PrinterSettings.PrinterName = $printerName
+    $doc.DocumentName = $docName
 
     if (-not $doc.PrinterSettings.IsValid) {
         throw "PRINTER_NOT_FOUND: Printer settings for '$printerName' are invalid in Windows Spooler."
@@ -204,6 +208,18 @@ try {
     $submitted = $true
     $totalPages = $imagePaths.Count
 
+    # Capture Spooler Job ID
+    try {
+        Start-Sleep -Milliseconds 150
+        $spoolJob = Get-CimInstance Win32_PrintJob -ErrorAction SilentlyContinue |
+            Where-Object { $_.Document -like "*$docName*" -or $_.Name -like "*$printerName*" } |
+            Sort-Object TimeSubmitted -Descending |
+            Select-Object -First 1
+        if ($spoolJob) {
+            $spoolerJobId = [string]$spoolJob.JobId
+        }
+    } catch {}
+
     # Dispose resources
     foreach ($img in $script:loadedImages) {
         if ($img) { $img.Dispose() }
@@ -213,6 +229,7 @@ try {
     [PSCustomObject]@{
         success = $true
         submitted = $true
+        spoolerJobId = $spoolerJobId
         totalPages = $totalPages
         error = $null
     } | ConvertTo-Json -Compress
@@ -232,6 +249,7 @@ catch {
     [PSCustomObject]@{
         success = $false
         submitted = $submitted
+        spoolerJobId = $spoolerJobId
         totalPages = $totalPages
         error = $_.Exception.Message
     } | ConvertTo-Json -Compress
@@ -291,7 +309,7 @@ catch {
       );
 
       const trimmed = (stdout || '').trim();
-      let parsedOutput: { success?: boolean; submitted?: boolean; totalPages?: number; error?: string } | null = null;
+      let parsedOutput: { success?: boolean; submitted?: boolean; totalPages?: number; error?: string; spoolerJobId?: number } | null = null;
 
       const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
       for (let i = lines.length - 1; i >= 0; i--) {
@@ -329,9 +347,10 @@ catch {
         return result;
       }
 
-      logger.info('SPOOLER', `WindowsPrintEngine successfully submitted ${parsedOutput.totalPages || options.imagePaths.length} page(s) to Windows Spooler for "${options.printerName}".`);
+      logger.info('SPOOLER', `WindowsPrintEngine successfully submitted ${parsedOutput.totalPages || options.imagePaths.length} page(s) to Windows Spooler for "${options.printerName}" (Spooler Job ID: ${parsedOutput.spoolerJobId || 'assigned'}).`);
       result.success = true;
       result.submitted = true;
+      result.spoolerJobId = parsedOutput.spoolerJobId;
       result.totalPages = parsedOutput.totalPages || options.imagePaths.length;
       result.executionDurationMs = Date.now() - startTime;
       result.stageReached = 'SUBMITTED';

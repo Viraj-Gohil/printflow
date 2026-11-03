@@ -101,7 +101,23 @@ export interface StoredPrintAgentJob {
   }>;
   totalAmount: number;
   paymentStatus: 'SUCCESS';
-  printStatus: 'QUEUED' | 'ASSIGNED' | 'DOWNLOADING' | 'PRINTING' | 'COMPLETED' | 'FAILED' | 'REQUIRES_ATTENTION';
+  printStatus:
+    | 'CREATED'
+    | 'RECEIVED'
+    | 'VALIDATING'
+    | 'DOWNLOADING'
+    | 'READY'
+    | 'QUEUED'
+    | 'ASSIGNED'
+    | 'PRINTING'
+    | 'SUBMITTED_TO_SPOOLER'
+    | 'COMPLETED'
+    | 'FAILED'
+    | 'PAUSED'
+    | 'PRINT_INTERRUPTED'
+    | 'REQUIRES_ATTENTION'
+    | 'CANCELLED'
+    | 'AWAITING_RECONCILIATION';
   printerName?: string;
   claimedBy?: string;
   claimedAt?: string;
@@ -110,6 +126,11 @@ export interface StoredPrintAgentJob {
   errorMessage?: string;
   retrySafe?: boolean;
   pagesPrinted?: number;
+  spoolerJobId?: number;
+  spoolSubmittedAt?: string;
+  reconciledAt?: string;
+  reconciliationAction?: string;
+  reconciliationNotes?: string;
 }
 
 export interface PrintAgentJobFile {
@@ -313,6 +334,105 @@ export async function initializePaymentTables(maxRetries = 3): Promise<void> {
 
         ALTER TABLE public.shops ADD COLUMN IF NOT EXISTS auto_delete_enabled BOOLEAN NOT NULL DEFAULT true;
         ALTER TABLE public.shops ADD COLUMN IF NOT EXISTS retention_hours INTEGER NOT NULL DEFAULT 1;
+
+        CREATE TABLE IF NOT EXISTS public.agent_resource_snapshots (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          agent_id TEXT NOT NULL,
+          shop_id TEXT NOT NULL,
+          system_cpu_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+          agent_cpu_percent NUMERIC(5,2) NOT NULL DEFAULT 0,
+          total_ram_bytes BIGINT NOT NULL DEFAULT 0,
+          available_ram_bytes BIGINT NOT NULL DEFAULT 0,
+          agent_ram_bytes BIGINT NOT NULL DEFAULT 0,
+          total_disk_bytes BIGINT NOT NULL DEFAULT 0,
+          free_disk_bytes BIGINT NOT NULL DEFAULT 0,
+          agent_storage_bytes BIGINT NOT NULL DEFAULT 0,
+          temp_storage_bytes BIGINT NOT NULL DEFAULT 0,
+          cache_storage_bytes BIGINT NOT NULL DEFAULT 0,
+          local_database_bytes BIGINT NOT NULL DEFAULT 0,
+          logs_storage_bytes BIGINT NOT NULL DEFAULT 0,
+          spool_storage_bytes BIGINT NOT NULL DEFAULT 0,
+          collected_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS public.agent_health (
+          agent_id TEXT PRIMARY KEY,
+          shop_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'ONLINE',
+          last_heartbeat_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          agent_version TEXT,
+          os_version TEXT,
+          cpu_model TEXT,
+          cpu_cores INT DEFAULT 1,
+          system_cpu_percent NUMERIC(5,2) DEFAULT 0,
+          agent_cpu_percent NUMERIC(5,2) DEFAULT 0,
+          total_ram_bytes BIGINT DEFAULT 0,
+          available_ram_bytes BIGINT DEFAULT 0,
+          agent_ram_bytes BIGINT DEFAULT 0,
+          total_disk_bytes BIGINT DEFAULT 0,
+          free_disk_bytes BIGINT DEFAULT 0,
+          agent_storage_bytes BIGINT DEFAULT 0,
+          spooler_status TEXT NOT NULL DEFAULT 'RUNNING',
+          pending_jobs INT DEFAULT 0,
+          active_jobs INT DEFAULT 0,
+          failed_jobs INT DEFAULT 0,
+          stuck_jobs INT DEFAULT 0,
+          online_printers INT DEFAULT 0,
+          offline_printers INT DEFAULT 0,
+          network_latency_ms INT DEFAULT 0,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS public.shop_storage_usage (
+          shop_id TEXT PRIMARY KEY,
+          quota_bytes BIGINT NOT NULL DEFAULT 1048576000,
+          used_bytes BIGINT NOT NULL DEFAULT 0,
+          reserved_bytes BIGINT NOT NULL DEFAULT 0,
+          available_bytes BIGINT NOT NULL DEFAULT 1048576000,
+          active_document_count INT NOT NULL DEFAULT 0,
+          pending_deletion_count INT NOT NULL DEFAULT 0,
+          last_reconciled_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+
+        CREATE TABLE IF NOT EXISTS public.agent_alerts (
+          id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+          agent_id TEXT NOT NULL,
+          shop_id TEXT NOT NULL,
+          alert_type TEXT NOT NULL,
+          severity TEXT NOT NULL DEFAULT 'WARNING',
+          message TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'ACTIVE',
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          resolved_at TIMESTAMPTZ
+        );
+
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'print_jobs'
+          ) THEN
+            ALTER TABLE public.print_jobs DROP CONSTRAINT IF EXISTS print_jobs_print_status_check;
+            ALTER TABLE public.print_jobs ADD CONSTRAINT print_jobs_print_status_check CHECK (print_status IN (
+              'CREATED', 'RECEIVED', 'VALIDATING', 'DOWNLOADING', 'READY', 'QUEUED', 'ASSIGNED', 'PRINTING',
+              'SUBMITTED_TO_SPOOLER', 'COMPLETED', 'FAILED', 'PAUSED', 'PRINT_INTERRUPTED', 'REQUIRES_ATTENTION',
+              'CANCELLED', 'AWAITING_RECONCILIATION'
+            ));
+
+            ALTER TABLE public.print_jobs ADD COLUMN IF NOT EXISTS spooler_job_id INT;
+            ALTER TABLE public.print_jobs ADD COLUMN IF NOT EXISTS spool_submitted_at TIMESTAMPTZ;
+            ALTER TABLE public.print_jobs ADD COLUMN IF NOT EXISTS reconciled_at TIMESTAMPTZ;
+            ALTER TABLE public.print_jobs ADD COLUMN IF NOT EXISTS reconciliation_action VARCHAR(32);
+            ALTER TABLE public.print_jobs ADD COLUMN IF NOT EXISTS reconciliation_notes TEXT;
+          END IF;
+
+          IF EXISTS (
+            SELECT 1 FROM information_schema.tables WHERE table_name = 'print_agent_jobs'
+          ) THEN
+            ALTER TABLE public.print_agent_jobs ALTER COLUMN print_status TYPE VARCHAR(40);
+          END IF;
+        END $$;
 
         DO $$
         BEGIN
@@ -1208,6 +1328,11 @@ export async function updatePrintAgentJobStatus(input: {
   printerName?: string;
   retrySafe?: boolean;
   pagesPrinted?: number;
+  spoolerJobId?: number;
+  spoolSubmittedAt?: string;
+  reconciledAt?: string;
+  reconciliationAction?: string;
+  reconciliationNotes?: string;
 }): Promise<StoredPrintAgentJob | null> {
   const candidateShopIds = await getCandidateShopIds(input.shopId);
   const result = await requirePostgresPool().query(
@@ -1215,7 +1340,8 @@ export async function updatePrintAgentJobStatus(input: {
      SET print_status = $4, updated_at = $5,
          job_data = job_data || $6::jsonb || jsonb_build_object('claimedBy', claimed_by)
      WHERE job_id = $1 AND (shop_id = ANY($2::text[])) AND claimed_by = $3
-       AND print_status = $7 AND job_data->>'paymentStatus' = 'SUCCESS'
+       AND (print_status = $7 OR ($4 = 'COMPLETED' AND print_status IN ('PRINTING', 'SUBMITTED_TO_SPOOLER', 'AWAITING_RECONCILIATION')) OR ($4 = 'SUBMITTED_TO_SPOOLER' AND print_status IN ('PRINTING', 'DOWNLOADING')))
+       AND job_data->>'paymentStatus' = 'SUCCESS'
      RETURNING job_data, print_status, claimed_by, claimed_at, updated_at`,
     [
       input.jobId,
@@ -1227,12 +1353,58 @@ export async function updatePrintAgentJobStatus(input: {
         printStatus: input.status,
         updatedAt: input.updatedAt,
         ...(input.status === 'QUEUED' ? { errorMessage: null, retrySafe: false } : {}),
-        ...(input.errorMessage ? { errorMessage: input.errorMessage } : {}),
+        ...(input.errorMessage !== undefined ? { errorMessage: input.errorMessage } : {}),
         ...(input.printerName ? { printerName: input.printerName } : {}),
         ...(input.retrySafe !== undefined ? { retrySafe: input.retrySafe } : {}),
-        ...(input.pagesPrinted !== undefined ? { pagesPrinted: input.pagesPrinted } : {})
+        ...(input.pagesPrinted !== undefined ? { pagesPrinted: input.pagesPrinted } : {}),
+        ...(input.spoolerJobId !== undefined ? { spoolerJobId: input.spoolerJobId } : {}),
+        ...(input.spoolSubmittedAt ? { spoolSubmittedAt: input.spoolSubmittedAt } : {}),
+        ...(input.reconciledAt ? { reconciledAt: input.reconciledAt } : {}),
+        ...(input.reconciliationAction ? { reconciliationAction: input.reconciliationAction } : {}),
+        ...(input.reconciliationNotes ? { reconciliationNotes: input.reconciliationNotes } : {})
       }),
       input.expectedStatus
+    ]
+  );
+  return result.rowCount ? decodeStoredJob(result.rows[0]) : null;
+}
+
+export async function reconcilePrintAgentJobByShop(input: {
+  jobId: string;
+  shopId: string;
+  action: 'CONFIRM_PRINTED' | 'CONFIRM_NOT_PRINTED' | 'INVESTIGATE';
+  notes?: string;
+}): Promise<StoredPrintAgentJob | null> {
+  const candidateShopIds = await getCandidateShopIds(input.shopId);
+  const targetStatus = input.action === 'CONFIRM_PRINTED'
+    ? 'COMPLETED'
+    : input.action === 'CONFIRM_NOT_PRINTED'
+      ? 'FAILED'
+      : 'AWAITING_RECONCILIATION';
+  const retrySafe = input.action === 'CONFIRM_NOT_PRINTED';
+  const updatedAt = new Date().toISOString();
+
+  const result = await requirePostgresPool().query(
+    `UPDATE print_agent_jobs
+     SET print_status = $3, updated_at = $4,
+         job_data = job_data || $5::jsonb
+     WHERE job_id = $1 AND (shop_id = ANY($2::text[]))
+     RETURNING job_data, print_status, claimed_by, claimed_at, updated_at`,
+    [
+      input.jobId,
+      candidateShopIds,
+      targetStatus,
+      updatedAt,
+      JSON.stringify({
+        printStatus: targetStatus,
+        updatedAt,
+        reconciledAt: updatedAt,
+        reconciliationAction: input.action,
+        reconciliationNotes: input.notes || null,
+        retrySafe,
+        ...(input.action === 'CONFIRM_PRINTED' ? { errorMessage: null } : {}),
+        ...(input.action === 'CONFIRM_NOT_PRINTED' ? { errorMessage: input.notes || 'Marked as not printed by shop operator.' } : {})
+      })
     ]
   );
   return result.rowCount ? decodeStoredJob(result.rows[0]) : null;
@@ -2561,6 +2733,7 @@ export async function validateJobAgainstRegisteredPrinters(
 ): Promise<{
   eligible: boolean;
   matchedPrinterName?: string;
+  matchedPrinterId?: string;
   error?: string;
   code?: string;
 }> {
@@ -2713,10 +2886,19 @@ export async function validateJobAgainstRegisteredPrinters(
 
       return true;
     });
-  }) || (onlineRegisteredPrinters.find((p) => p.is_default) || onlineRegisteredPrinters[0]);
+  }) || null;
+
+  if (!candidate) {
+    return {
+      eligible: false,
+      code: 'NO_COMPATIBLE_PRINTER',
+      error: 'Selected print settings are currently unavailable at this shop. No registered online printer supports the combined configuration.'
+    };
+  }
 
   return {
     eligible: true,
+    matchedPrinterId: candidate.id,
     matchedPrinterName: candidate.name
   };
 }
@@ -2737,6 +2919,16 @@ export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
     supportsDuplex: boolean;
     paperSizes: string[];
   }>;
+  validCombinations: Array<{
+    paperSize: string;
+    colorMode: 'BW' | 'COLOR';
+    duplex: boolean;
+  }>;
+  options: {
+    color: { supported: boolean; reason?: string };
+    duplex: { supported: boolean; reason?: string };
+    paperSizes: Array<{ name: string; supported: boolean; reason?: string }>;
+  };
 }> {
   const pool = requirePostgresPool();
   const canonicalShopId = await resolvePrintFlowShopId(shopIdOrSlug);
@@ -2766,6 +2958,9 @@ export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
       supportsDuplex: boolean;
       paperSizes: string[];
     }> = [];
+
+    const combinationSet = new Set<string>();
+    const validCombinations: Array<{ paperSize: string; colorMode: 'BW' | 'COLOR'; duplex: boolean }> = [];
 
     for (const p of online) {
       const eff = p.effective_capabilities && Object.keys(p.effective_capabilities).length > 0
@@ -2827,17 +3022,54 @@ export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
         }
       }
 
+      const activeSizes = pSizes.length > 0 ? pSizes : ['A4'];
       printerList.push({
         name: p.name,
         isDefault: Boolean(p.is_default),
         supportsColor: printerSupportsColor,
         supportsDuplex: printerSupportsDuplex,
-        paperSizes: pSizes.length > 0 ? pSizes : ['A4']
+        paperSizes: activeSizes
       });
+
+      // Calculate valid printer-supported combinations for this printer
+      for (const sz of activeSizes) {
+        const normalizedSize = sz.toUpperCase();
+        // Monochrome combinations
+        if (printerSupportsMono) {
+          const keyBwSingle = `${normalizedSize}:BW:false`;
+          if (!combinationSet.has(keyBwSingle)) {
+            combinationSet.add(keyBwSingle);
+            validCombinations.push({ paperSize: sz, colorMode: 'BW', duplex: false });
+          }
+          if (printerSupportsDuplex) {
+            const keyBwDouble = `${normalizedSize}:BW:true`;
+            if (!combinationSet.has(keyBwDouble)) {
+              combinationSet.add(keyBwDouble);
+              validCombinations.push({ paperSize: sz, colorMode: 'BW', duplex: true });
+            }
+          }
+        }
+        // Color combinations
+        if (printerSupportsColor) {
+          const keyColorSingle = `${normalizedSize}:COLOR:false`;
+          if (!combinationSet.has(keyColorSingle)) {
+            combinationSet.add(keyColorSingle);
+            validCombinations.push({ paperSize: sz, colorMode: 'COLOR', duplex: false });
+          }
+          if (printerSupportsDuplex) {
+            const keyColorDouble = `${normalizedSize}:COLOR:true`;
+            if (!combinationSet.has(keyColorDouble)) {
+              combinationSet.add(keyColorDouble);
+              validCombinations.push({ paperSize: sz, colorMode: 'COLOR', duplex: true });
+            }
+          }
+        }
+      }
     }
 
     if (paperSizesMap.size === 0 && online.length > 0) {
       paperSizesMap.set('A4', { name: 'A4', widthMm: 210, heightMm: 297 });
+      validCombinations.push({ paperSize: 'A4', colorMode: 'BW', duplex: false });
     }
 
     const effectivePaperSizes = Array.from(paperSizesMap.values());
@@ -2852,19 +3084,40 @@ export async function getPublicShopCapabilities(shopIdOrSlug: string): Promise<{
       registeredPrintersCount: registered.length,
       onlineRegisteredPrintersCount: online.length,
       isReadyForPrinting: online.length > 0,
-      printers: printerList
+      printers: printerList,
+      validCombinations,
+      options: {
+        color: {
+          supported: hasColor,
+          reason: hasColor ? undefined : 'Colour printing is currently unavailable at this shop.'
+        },
+        duplex: {
+          supported: hasDuplex,
+          reason: hasDuplex ? undefined : 'Double-sided printing is currently unavailable at this shop.'
+        },
+        paperSizes: effectivePaperSizes.map((ps) => ({
+          name: ps.name,
+          supported: true
+        }))
+      }
     };
   } catch {
     return {
       supportedPaperSizes: ['A4'],
       effectivePaperSizes: [{ name: 'A4', widthMm: 210, heightMm: 297 }],
-      hasColorPrinter: true,
-      hasDuplexPrinter: true,
+      hasColorPrinter: false,
+      hasDuplexPrinter: false,
       hasMonochromePrinter: true,
       registeredPrintersCount: 1,
       onlineRegisteredPrintersCount: 1,
       isReadyForPrinting: true,
-      printers: []
+      printers: [],
+      validCombinations: [{ paperSize: 'A4', colorMode: 'BW', duplex: false }],
+      options: {
+        color: { supported: false, reason: 'Colour printing is currently unavailable at this shop.' },
+        duplex: { supported: false, reason: 'Double-sided printing is currently unavailable at this shop.' },
+        paperSizes: [{ name: 'A4', supported: true }]
+      }
     };
   }
 }
@@ -3586,4 +3839,848 @@ export async function updateShopRetentionSettings(shopId: string, autoDeleteEnab
     client.release();
   }
 }
+
+// ============================================================================
+// AGENT RESOURCE MONITORING & SUBSCRIPTION STORAGE TRACKING REPOSITORY
+// ============================================================================
+
+export interface AgentResourceMetricsPayload {
+  agentId: string;
+  shopId: string;
+  timestamp?: string;
+  agentVersion?: string;
+  osVersion?: string;
+  cpu?: {
+    model?: string;
+    cores?: number;
+    systemCpuPercent?: number;
+    agentCpuPercent?: number;
+  };
+  ram?: {
+    totalBytes?: number;
+    availableBytes?: number;
+    agentRamBytes?: number;
+  };
+  disk?: {
+    totalBytes?: number;
+    freeBytes?: number;
+    agentStorageBytes?: number;
+    tempStorageBytes?: number;
+    cacheStorageBytes?: number;
+    localDatabaseBytes?: number;
+    logsStorageBytes?: number;
+    spoolStorageBytes?: number;
+  };
+  spooler?: {
+    status?: string;
+    running?: boolean;
+  };
+  queue?: {
+    pendingJobs?: number;
+    activeJobs?: number;
+    failedJobs?: number;
+    stuckJobs?: number;
+  };
+  printers?: {
+    onlineCount?: number;
+    offlineCount?: number;
+  };
+  network?: {
+    latencyMs?: number;
+  };
+}
+
+export interface AgentHealthRecord {
+  agent_id: string;
+  shop_id: string;
+  status: 'ONLINE' | 'OFFLINE' | 'WARNING' | 'CRITICAL';
+  last_heartbeat_at: string;
+  agent_version?: string;
+  os_version?: string;
+  cpu_model?: string;
+  cpu_cores?: number;
+  system_cpu_percent?: number;
+  agent_cpu_percent?: number;
+  total_ram_bytes?: number;
+  available_ram_bytes?: number;
+  agent_ram_bytes?: number;
+  total_disk_bytes?: number;
+  free_disk_bytes?: number;
+  agent_storage_bytes?: number;
+  spooler_status?: string;
+  pending_jobs?: number;
+  active_jobs?: number;
+  failed_jobs?: number;
+  stuck_jobs?: number;
+  online_printers?: number;
+  offline_printers?: number;
+  network_latency_ms?: number;
+  updated_at?: string;
+}
+
+export interface AgentResourceSnapshotRecord {
+  id: string;
+  agent_id: string;
+  shop_id: string;
+  system_cpu_percent: number;
+  agent_cpu_percent: number;
+  total_ram_bytes: number;
+  available_ram_bytes: number;
+  agent_ram_bytes: number;
+  total_disk_bytes: number;
+  free_disk_bytes: number;
+  agent_storage_bytes: number;
+  temp_storage_bytes: number;
+  cache_storage_bytes: number;
+  local_database_bytes: number;
+  logs_storage_bytes: number;
+  spool_storage_bytes: number;
+  collected_at: string;
+  created_at?: string;
+}
+
+export interface AgentAlertRecord {
+  id: string;
+  agent_id: string;
+  shop_id: string;
+  alert_type: string;
+  severity: 'WARNING' | 'CRITICAL';
+  message: string;
+  status: 'ACTIVE' | 'RESOLVED';
+  created_at: string;
+  resolved_at?: string;
+}
+
+export interface ShopStorageUsageRecord {
+  shop_id: string;
+  quota_bytes: number;
+  used_bytes: number;
+  reserved_bytes: number;
+  available_bytes: number;
+  active_document_count: number;
+  pending_deletion_count: number;
+  usage_percent: number;
+  storage_status: 'NORMAL' | 'WARNING' | 'CRITICAL' | 'BLOCKED';
+  plan_name: string;
+  last_reconciled_at?: string;
+  updated_at?: string;
+}
+
+// In-Memory Fallback State for offline testing
+const inMemoryAgentHealth = new Map<string, AgentHealthRecord>();
+const inMemoryResourceSnapshots: AgentResourceSnapshotRecord[] = [];
+const inMemoryAgentAlerts: AgentAlertRecord[] = [];
+const inMemoryStorageUsage = new Map<string, ShopStorageUsageRecord>();
+
+export async function saveAgentHealthAndSnapshot(payload: AgentResourceMetricsPayload): Promise<{ success: boolean; alerts: AgentAlertRecord[] }> {
+  const { agentId, shopId } = payload;
+  if (!agentId || !shopId) return { success: false, alerts: [] };
+
+  const timestamp = payload.timestamp || new Date().toISOString();
+  const sysCpu = Number(payload.cpu?.systemCpuPercent || 0);
+  const agentCpu = Number(payload.cpu?.agentCpuPercent || 0);
+  const totalRam = Number(payload.ram?.totalBytes || 0);
+  const availRam = Number(payload.ram?.availableBytes || 0);
+  const agentRam = Number(payload.ram?.agentRamBytes || 0);
+  const totalDisk = Number(payload.disk?.totalBytes || 0);
+  const freeDisk = Number(payload.disk?.freeBytes || 0);
+  const agentStorage = Number(payload.disk?.agentStorageBytes || 0);
+  const tempStorage = Number(payload.disk?.tempStorageBytes || 0);
+  const cacheStorage = Number(payload.disk?.cacheStorageBytes || 0);
+  const localDb = Number(payload.disk?.localDatabaseBytes || 0);
+  const logsStorage = Number(payload.disk?.logsStorageBytes || 0);
+  const spoolStorage = Number(payload.disk?.spoolStorageBytes || 0);
+
+  const spoolerStatus = payload.spooler?.status || (payload.spooler?.running === false ? 'STOPPED' : 'RUNNING');
+  const pendingJobs = Number(payload.queue?.pendingJobs || 0);
+  const activeJobs = Number(payload.queue?.activeJobs || 0);
+  const failedJobs = Number(payload.queue?.failedJobs || 0);
+  const stuckJobs = Number(payload.queue?.stuckJobs || 0);
+  const onlinePrinters = Number(payload.printers?.onlineCount || 0);
+  const offlinePrinters = Number(payload.printers?.offlineCount || 0);
+  const latencyMs = Number(payload.network?.latencyMs || 0);
+
+  // Evaluate alerts
+  const generatedAlerts: Array<{ type: string; severity: 'WARNING' | 'CRITICAL'; message: string }> = [];
+
+  if (sysCpu > 85) {
+    generatedAlerts.push({
+      type: 'CPU_HIGH',
+      severity: 'WARNING',
+      message: `System CPU usage sustained high at ${sysCpu.toFixed(1)}%.`
+    });
+  }
+
+  const ramUsedPercent = totalRam > 0 ? ((totalRam - availRam) / totalRam) * 100 : 0;
+  if (ramUsedPercent > 85 || (availRam > 0 && availRam < 512 * 1024 * 1024)) {
+    generatedAlerts.push({
+      type: 'RAM_CRITICAL',
+      severity: 'CRITICAL',
+      message: `System RAM critically low (${ramUsedPercent.toFixed(1)}% utilized).`
+    });
+  }
+
+  const freeDiskPercent = totalDisk > 0 ? (freeDisk / totalDisk) * 100 : 100;
+  if (totalDisk > 0 && freeDiskPercent < 10) {
+    generatedAlerts.push({
+      type: 'DISK_LOW',
+      severity: 'CRITICAL',
+      message: `Local disk space free is below 10% (${freeDiskPercent.toFixed(1)}% free).`
+    });
+  }
+
+  if (spoolerStatus === 'STOPPED') {
+    generatedAlerts.push({
+      type: 'SPOOLER_STOPPED',
+      severity: 'CRITICAL',
+      message: 'Windows Print Spooler service is stopped.'
+    });
+  }
+
+  if (offlinePrinters > 0) {
+    generatedAlerts.push({
+      type: 'PRINTER_OFFLINE',
+      severity: 'WARNING',
+      message: `${offlinePrinters} registered printer(s) are offline.`
+    });
+  }
+
+  if (stuckJobs > 0) {
+    generatedAlerts.push({
+      type: 'QUEUE_STUCK',
+      severity: 'WARNING',
+      message: `${stuckJobs} print job(s) are stuck in queue for over 15 minutes.`
+    });
+  }
+
+  const status: AgentHealthRecord['status'] = generatedAlerts.some((a) => a.severity === 'CRITICAL')
+    ? 'CRITICAL'
+    : generatedAlerts.length > 0
+    ? 'WARNING'
+    : 'ONLINE';
+
+  const newAlerts: AgentAlertRecord[] = [];
+
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Update agent_health
+      await client.query(
+        `INSERT INTO public.agent_health (
+          agent_id, shop_id, status, last_heartbeat_at, agent_version, os_version,
+          cpu_model, cpu_cores, system_cpu_percent, agent_cpu_percent,
+          total_ram_bytes, available_ram_bytes, agent_ram_bytes,
+          total_disk_bytes, free_disk_bytes, agent_storage_bytes,
+          spooler_status, pending_jobs, active_jobs, failed_jobs, stuck_jobs,
+          online_printers, offline_printers, network_latency_ms, updated_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW()
+        ) ON CONFLICT (agent_id) DO UPDATE SET
+          shop_id = EXCLUDED.shop_id,
+          status = EXCLUDED.status,
+          last_heartbeat_at = EXCLUDED.last_heartbeat_at,
+          agent_version = COALESCE(EXCLUDED.agent_version, public.agent_health.agent_version),
+          os_version = COALESCE(EXCLUDED.os_version, public.agent_health.os_version),
+          cpu_model = COALESCE(EXCLUDED.cpu_model, public.agent_health.cpu_model),
+          cpu_cores = EXCLUDED.cpu_cores,
+          system_cpu_percent = EXCLUDED.system_cpu_percent,
+          agent_cpu_percent = EXCLUDED.agent_cpu_percent,
+          total_ram_bytes = EXCLUDED.total_ram_bytes,
+          available_ram_bytes = EXCLUDED.available_ram_bytes,
+          agent_ram_bytes = EXCLUDED.agent_ram_bytes,
+          total_disk_bytes = EXCLUDED.total_disk_bytes,
+          free_disk_bytes = EXCLUDED.free_disk_bytes,
+          agent_storage_bytes = EXCLUDED.agent_storage_bytes,
+          spooler_status = EXCLUDED.spooler_status,
+          pending_jobs = EXCLUDED.pending_jobs,
+          active_jobs = EXCLUDED.active_jobs,
+          failed_jobs = EXCLUDED.failed_jobs,
+          stuck_jobs = EXCLUDED.stuck_jobs,
+          online_printers = EXCLUDED.online_printers,
+          offline_printers = EXCLUDED.offline_printers,
+          network_latency_ms = EXCLUDED.network_latency_ms,
+          updated_at = NOW()`,
+        [
+          agentId, shopId, status, timestamp, payload.agentVersion || null, payload.osVersion || null,
+          payload.cpu?.model || null, payload.cpu?.cores || 1, sysCpu, agentCpu,
+          totalRam, availRam, agentRam,
+          totalDisk, freeDisk, agentStorage,
+          spoolerStatus, pendingJobs, activeJobs, failedJobs, stuckJobs,
+          onlinePrinters, offlinePrinters, latencyMs
+        ]
+      );
+
+      // Insert snapshot
+      const snapshotId = crypto.randomUUID();
+      await client.query(
+        `INSERT INTO public.agent_resource_snapshots (
+          id, agent_id, shop_id, system_cpu_percent, agent_cpu_percent,
+          total_ram_bytes, available_ram_bytes, agent_ram_bytes,
+          total_disk_bytes, free_disk_bytes, agent_storage_bytes,
+          temp_storage_bytes, cache_storage_bytes, local_database_bytes,
+          logs_storage_bytes, spool_storage_bytes, collected_at, created_at
+        ) VALUES (
+          $1::uuid, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, NOW()
+        )`,
+        [
+          snapshotId, agentId, shopId, sysCpu, agentCpu,
+          totalRam, availRam, agentRam,
+          totalDisk, freeDisk, agentStorage,
+          tempStorage, cacheStorage, localDb,
+          logsStorage, spoolStorage, timestamp
+        ]
+      );
+
+      // Manage alerts: resolve cleared, insert new
+      const activeAlertsRes = await client.query(
+        `SELECT id, alert_type FROM public.agent_alerts WHERE agent_id = $1 AND status = 'ACTIVE'`,
+        [agentId]
+      );
+
+      const activeTypes = new Set(activeAlertsRes.rows.map((r) => r.alert_type));
+      const currentGenTypes = new Set(generatedAlerts.map((a) => a.type));
+
+      // Resolve inactive
+      for (const row of activeAlertsRes.rows) {
+        if (!currentGenTypes.has(row.alert_type)) {
+          await client.query(
+            `UPDATE public.agent_alerts SET status = 'RESOLVED', resolved_at = NOW() WHERE id = $1`,
+            [row.id]
+          );
+        }
+      }
+
+      // Insert new
+      for (const alert of generatedAlerts) {
+        const alertId = crypto.randomUUID();
+        if (!activeTypes.has(alert.type)) {
+          await client.query(
+            `INSERT INTO public.agent_alerts (id, agent_id, shop_id, alert_type, severity, message, status, created_at)
+             VALUES ($1::uuid, $2, $3, $4, $5, $6, 'ACTIVE', NOW())`,
+            [alertId, agentId, shopId, alert.type, alert.severity, alert.message]
+          );
+        }
+        newAlerts.push({
+          id: alertId,
+          agent_id: agentId,
+          shop_id: shopId,
+          alert_type: alert.type,
+          severity: alert.severity,
+          message: alert.message,
+          status: 'ACTIVE',
+          created_at: timestamp
+        });
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.error('[PaymentStorage] Failed to save agent health/snapshot:', err);
+    } finally {
+      client.release();
+    }
+  } else {
+    // In-memory fallback
+    const healthRec: AgentHealthRecord = {
+      agent_id: agentId,
+      shop_id: shopId,
+      status,
+      last_heartbeat_at: timestamp,
+      agent_version: payload.agentVersion,
+      os_version: payload.osVersion,
+      cpu_model: payload.cpu?.model,
+      cpu_cores: payload.cpu?.cores,
+      system_cpu_percent: sysCpu,
+      agent_cpu_percent: agentCpu,
+      total_ram_bytes: totalRam,
+      available_ram_bytes: availRam,
+      agent_ram_bytes: agentRam,
+      total_disk_bytes: totalDisk,
+      free_disk_bytes: freeDisk,
+      agent_storage_bytes: agentStorage,
+      spooler_status: spoolerStatus,
+      pending_jobs: pendingJobs,
+      active_jobs: activeJobs,
+      failed_jobs: failedJobs,
+      stuck_jobs: stuckJobs,
+      online_printers: onlinePrinters,
+      offline_printers: offlinePrinters,
+      network_latency_ms: latencyMs,
+      updated_at: timestamp
+    };
+    inMemoryAgentHealth.set(agentId, healthRec);
+
+    const snapshotRec: AgentResourceSnapshotRecord = {
+      id: crypto.randomUUID(),
+      agent_id: agentId,
+      shop_id: shopId,
+      system_cpu_percent: sysCpu,
+      agent_cpu_percent: agentCpu,
+      total_ram_bytes: totalRam,
+      available_ram_bytes: availRam,
+      agent_ram_bytes: agentRam,
+      total_disk_bytes: totalDisk,
+      free_disk_bytes: freeDisk,
+      agent_storage_bytes: agentStorage,
+      temp_storage_bytes: tempStorage,
+      cache_storage_bytes: cacheStorage,
+      local_database_bytes: localDb,
+      logs_storage_bytes: logsStorage,
+      spool_storage_bytes: spoolStorage,
+      collected_at: timestamp,
+      created_at: timestamp
+    };
+    inMemoryResourceSnapshots.unshift(snapshotRec);
+    if (inMemoryResourceSnapshots.length > 500) inMemoryResourceSnapshots.pop();
+
+    for (const alert of generatedAlerts) {
+      const existing = inMemoryAgentAlerts.find((a) => a.agent_id === agentId && a.alert_type === alert.type && a.status === 'ACTIVE');
+      if (!existing) {
+        const al: AgentAlertRecord = {
+          id: crypto.randomUUID(),
+          agent_id: agentId,
+          shop_id: shopId,
+          alert_type: alert.type,
+          severity: alert.severity,
+          message: alert.message,
+          status: 'ACTIVE',
+          created_at: timestamp
+        };
+        inMemoryAgentAlerts.unshift(al);
+        newAlerts.push(al);
+      }
+    }
+  }
+
+  return { success: true, alerts: newAlerts };
+}
+
+export async function getAgentHealthStatus(shopId?: string): Promise<AgentHealthRecord[]> {
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      let query = `SELECT * FROM public.agent_health`;
+      const params: any[] = [];
+      if (shopId) {
+        query += ` WHERE shop_id = $1`;
+        params.push(shopId);
+      }
+      query += ` ORDER BY updated_at DESC`;
+      const res = await client.query(query, params);
+      
+      const rows: AgentHealthRecord[] = res.rows.map((r) => {
+        const lastHeartbeat = new Date(r.last_heartbeat_at).getTime();
+        const now = Date.now();
+        const isOffline = (now - lastHeartbeat) > 2 * 60 * 1000; // > 2 min missed heartbeat
+        return {
+          agent_id: r.agent_id,
+          shop_id: r.shop_id,
+          status: isOffline ? 'OFFLINE' : (r.status || 'ONLINE'),
+          last_heartbeat_at: r.last_heartbeat_at,
+          agent_version: r.agent_version,
+          os_version: r.os_version,
+          cpu_model: r.cpu_model,
+          cpu_cores: Number(r.cpu_cores || 1),
+          system_cpu_percent: Number(r.system_cpu_percent || 0),
+          agent_cpu_percent: Number(r.agent_cpu_percent || 0),
+          total_ram_bytes: Number(r.total_ram_bytes || 0),
+          available_ram_bytes: Number(r.available_ram_bytes || 0),
+          agent_ram_bytes: Number(r.agent_ram_bytes || 0),
+          total_disk_bytes: Number(r.total_disk_bytes || 0),
+          free_disk_bytes: Number(r.free_disk_bytes || 0),
+          agent_storage_bytes: Number(r.agent_storage_bytes || 0),
+          spooler_status: r.spooler_status,
+          pending_jobs: Number(r.pending_jobs || 0),
+          active_jobs: Number(r.active_jobs || 0),
+          failed_jobs: Number(r.failed_jobs || 0),
+          stuck_jobs: Number(r.stuck_jobs || 0),
+          online_printers: Number(r.online_printers || 0),
+          offline_printers: Number(r.offline_printers || 0),
+          network_latency_ms: Number(r.network_latency_ms || 0),
+          updated_at: r.updated_at
+        };
+      });
+      return rows;
+    } finally {
+      client.release();
+    }
+  }
+
+  // In-memory fallback
+  let list = Array.from(inMemoryAgentHealth.values());
+  if (shopId) list = list.filter((a) => a.shop_id === shopId);
+  return list.map((a) => {
+    const isOffline = (Date.now() - new Date(a.last_heartbeat_at).getTime()) > 2 * 60 * 1000;
+    return { ...a, status: isOffline ? 'OFFLINE' : a.status };
+  });
+}
+
+export async function getAgentResourceHistory(agentId: string, shopId?: string, limit = 50): Promise<AgentResourceSnapshotRecord[]> {
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      let query = `SELECT * FROM public.agent_resource_snapshots WHERE agent_id = $1`;
+      const params: any[] = [agentId];
+      if (shopId) {
+        query += ` AND shop_id = $2`;
+        params.push(shopId);
+      }
+      query += ` ORDER BY collected_at DESC LIMIT $${params.length + 1}`;
+      params.push(limit);
+
+      const res = await client.query(query, params);
+      return res.rows.map((r) => ({
+        id: r.id,
+        agent_id: r.agent_id,
+        shop_id: r.shop_id,
+        system_cpu_percent: Number(r.system_cpu_percent || 0),
+        agent_cpu_percent: Number(r.agent_cpu_percent || 0),
+        total_ram_bytes: Number(r.total_ram_bytes || 0),
+        available_ram_bytes: Number(r.available_ram_bytes || 0),
+        agent_ram_bytes: Number(r.agent_ram_bytes || 0),
+        total_disk_bytes: Number(r.total_disk_bytes || 0),
+        free_disk_bytes: Number(r.free_disk_bytes || 0),
+        agent_storage_bytes: Number(r.agent_storage_bytes || 0),
+        temp_storage_bytes: Number(r.temp_storage_bytes || 0),
+        cache_storage_bytes: Number(r.cache_storage_bytes || 0),
+        local_database_bytes: Number(r.local_database_bytes || 0),
+        logs_storage_bytes: Number(r.logs_storage_bytes || 0),
+        spool_storage_bytes: Number(r.spool_storage_bytes || 0),
+        collected_at: r.collected_at,
+        created_at: r.created_at
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  let list = inMemoryResourceSnapshots.filter((s) => s.agent_id === agentId);
+  if (shopId) list = list.filter((s) => s.shop_id === shopId);
+  return list.slice(0, limit);
+}
+
+export async function getAgentAlerts(shopId?: string, status: 'ACTIVE' | 'RESOLVED' | 'ALL' = 'ACTIVE'): Promise<AgentAlertRecord[]> {
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      let query = `SELECT * FROM public.agent_alerts`;
+      const where: string[] = [];
+      const params: any[] = [];
+      if (shopId) {
+        params.push(shopId);
+        where.push(`shop_id = $${params.length}`);
+      }
+      if (status !== 'ALL') {
+        params.push(status);
+        where.push(`status = $${params.length}`);
+      }
+      if (where.length > 0) {
+        query += ` WHERE ` + where.join(' AND ');
+      }
+      query += ` ORDER BY created_at DESC LIMIT 100`;
+      const res = await client.query(query, params);
+      return res.rows.map((r) => ({
+        id: r.id,
+        agent_id: r.agent_id,
+        shop_id: r.shop_id,
+        alert_type: r.alert_type,
+        severity: r.severity,
+        message: r.message,
+        status: r.status,
+        created_at: r.created_at,
+        resolved_at: r.resolved_at
+      }));
+    } finally {
+      client.release();
+    }
+  }
+
+  let list = [...inMemoryAgentAlerts];
+  if (shopId) list = list.filter((a) => a.shop_id === shopId);
+  if (status !== 'ALL') list = list.filter((a) => a.status === status);
+  return list;
+}
+
+export async function resolveAgentAlert(alertId: string, shopId?: string): Promise<boolean> {
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      let query = `UPDATE public.agent_alerts SET status = 'RESOLVED', resolved_at = NOW() WHERE id = $1`;
+      const params: any[] = [alertId];
+      if (shopId) {
+        query += ` AND shop_id = $2`;
+        params.push(shopId);
+      }
+      const res = await client.query(query, params);
+      return Boolean(res.rowCount && res.rowCount > 0);
+    } finally {
+      client.release();
+    }
+  }
+
+  const alert = inMemoryAgentAlerts.find((a) => a.id === alertId && (!shopId || a.shop_id === shopId));
+  if (alert) {
+    alert.status = 'RESOLVED';
+    alert.resolved_at = new Date().toISOString();
+    return true;
+  }
+  return false;
+}
+
+// ----------------------------------------------------------------------------
+// SUBSCRIPTION STORAGE TRACKING & ATOMIC QUOTA RESERVATION
+// ----------------------------------------------------------------------------
+
+export async function getShopStorageUsage(shopId: string): Promise<ShopStorageUsageRecord> {
+  let quotaBytes = 1000 * 1024 * 1024; // 1000 MB default
+  let planName = 'Starter';
+
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      // 1. Resolve shop plan quota from DB
+      const planRes = await client.query(
+        `SELECT p.name, p.limits
+         FROM public.shops s
+         LEFT JOIN public.subscriptions sub ON sub.shop_id = s.id AND sub.status = 'ACTIVE'
+         LEFT JOIN public.plans p ON p.id = sub.plan_id
+         WHERE s.id::text = $1 OR s.slug = $1
+         LIMIT 1`,
+        [shopId]
+      );
+      if (planRes.rowCount && planRes.rows[0]) {
+        if (planRes.rows[0].name) planName = planRes.rows[0].name;
+        const limits = planRes.rows[0].limits || {};
+        const storageLimitMb = Number(limits.storageLimitMb || 1000);
+        quotaBytes = storageLimitMb * 1024 * 1024;
+      }
+
+      // 2. Fetch or initialize public.shop_storage_usage row
+      let usageRes = await client.query(
+        `SELECT * FROM public.shop_storage_usage WHERE shop_id = $1`,
+        [shopId]
+      );
+
+      if (!usageRes.rowCount || !usageRes.rows[0]) {
+        let used = 0;
+        let count = 0;
+        try {
+          const activeDocsRes = await client.query(
+            `SELECT COUNT(*) as doc_count, COALESCE(SUM(size_bytes), 0) as total_used
+             FROM public.uploaded_files
+             WHERE shop_id = $1 AND upload_state != 'DELETED'`,
+            [shopId]
+          );
+          used = Number(activeDocsRes.rows[0]?.total_used || 0);
+          count = Number(activeDocsRes.rows[0]?.doc_count || 0);
+        } catch {}
+
+        await client.query(
+          `INSERT INTO public.shop_storage_usage (
+            shop_id, quota_bytes, used_bytes, reserved_bytes, available_bytes,
+            active_document_count, pending_deletion_count, last_reconciled_at, updated_at
+          ) VALUES (
+            $1, $2::bigint, $3::bigint, 0, GREATEST(0::bigint, $2::bigint - $3::bigint), $4, 0, NOW(), NOW()
+          ) ON CONFLICT (shop_id) DO UPDATE SET
+            quota_bytes = EXCLUDED.quota_bytes,
+            updated_at = NOW()`,
+          [shopId, quotaBytes, used, count]
+        );
+
+        usageRes = await client.query(`SELECT * FROM public.shop_storage_usage WHERE shop_id = $1`, [shopId]);
+      }
+
+      const row = usageRes.rows[0];
+      const usedBytes = Number(row.used_bytes || 0);
+      const reservedBytes = Number(row.reserved_bytes || 0);
+      const availableBytes = Math.max(0, quotaBytes - usedBytes - reservedBytes);
+      const usagePercent = quotaBytes > 0 ? parseFloat((((usedBytes + reservedBytes) / quotaBytes) * 100).toFixed(1)) : 0;
+
+      let storageStatus: ShopStorageUsageRecord['storage_status'] = 'NORMAL';
+      if (usagePercent >= 100) storageStatus = 'BLOCKED';
+      else if (usagePercent >= 90) storageStatus = 'CRITICAL';
+      else if (usagePercent >= 80) storageStatus = 'WARNING';
+
+      return {
+        shop_id: shopId,
+        quota_bytes: quotaBytes,
+        used_bytes: usedBytes,
+        reserved_bytes: reservedBytes,
+        available_bytes: availableBytes,
+        active_document_count: Number(row.active_document_count || 0),
+        pending_deletion_count: Number(row.pending_deletion_count || 0),
+        usage_percent: usagePercent,
+        storage_status: storageStatus,
+        plan_name: planName,
+        last_reconciled_at: row.last_reconciled_at,
+        updated_at: row.updated_at
+      };
+    } finally {
+      client.release();
+    }
+  }
+
+  // In-memory fallback
+  let usage = inMemoryStorageUsage.get(shopId);
+  if (!usage) {
+    usage = {
+      shop_id: shopId,
+      quota_bytes: quotaBytes,
+      used_bytes: 0,
+      reserved_bytes: 0,
+      available_bytes: quotaBytes,
+      active_document_count: 0,
+      pending_deletion_count: 0,
+      usage_percent: 0,
+      storage_status: 'NORMAL',
+      plan_name: planName,
+      last_reconciled_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    inMemoryStorageUsage.set(shopId, usage);
+  } else {
+    usage.quota_bytes = quotaBytes;
+    usage.available_bytes = Math.max(0, quotaBytes - usage.used_bytes - usage.reserved_bytes);
+    usage.usage_percent = quotaBytes > 0 ? parseFloat((((usage.used_bytes + usage.reserved_bytes) / quotaBytes) * 100).toFixed(1)) : 0;
+    if (usage.usage_percent >= 100) usage.storage_status = 'BLOCKED';
+    else if (usage.usage_percent >= 90) usage.storage_status = 'CRITICAL';
+    else if (usage.usage_percent >= 80) usage.storage_status = 'WARNING';
+    else usage.storage_status = 'NORMAL';
+  }
+  return usage;
+}
+
+export async function reserveStorageQuota(
+  shopId: string,
+  fileSizeBytes: number
+): Promise<{ success: boolean; error?: string; code?: string; availableBytes?: number; usagePercent?: number }> {
+  if (fileSizeBytes <= 0) return { success: true };
+  const currentUsage = await getShopStorageUsage(shopId);
+
+  if (currentUsage.available_bytes < fileSizeBytes || currentUsage.usage_percent >= 100) {
+    return {
+      success: false,
+      code: 'STORAGE_QUOTA_EXCEEDED',
+      error: `Upload blocked: Shop storage quota limit of ${(currentUsage.quota_bytes / (1024 * 1024)).toFixed(0)} MB exceeded. Please upgrade your subscription plan.`,
+      availableBytes: currentUsage.available_bytes,
+      usagePercent: currentUsage.usage_percent
+    };
+  }
+
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query(
+        `UPDATE public.shop_storage_usage
+         SET reserved_bytes = reserved_bytes + $1::bigint,
+             available_bytes = GREATEST(0::bigint, quota_bytes - used_bytes - (reserved_bytes + $1::bigint)),
+             updated_at = NOW()
+         WHERE shop_id = $2`,
+        [fileSizeBytes, shopId]
+      );
+    } finally {
+      client.release();
+    }
+  } else {
+    const mem = inMemoryStorageUsage.get(shopId);
+    if (mem) {
+      mem.reserved_bytes += fileSizeBytes;
+      mem.available_bytes = Math.max(0, mem.quota_bytes - mem.used_bytes - mem.reserved_bytes);
+    }
+  }
+
+  const updatedUsage = await getShopStorageUsage(shopId);
+  return {
+    success: true,
+    availableBytes: updatedUsage.available_bytes,
+    usagePercent: updatedUsage.usage_percent
+  };
+}
+
+export async function commitStorageUpload(shopId: string, fileSizeBytes: number): Promise<void> {
+  if (fileSizeBytes <= 0) return;
+
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query(
+        `UPDATE public.shop_storage_usage
+         SET reserved_bytes = GREATEST(0::bigint, reserved_bytes - $1::bigint),
+             used_bytes = used_bytes + $1::bigint,
+             active_document_count = active_document_count + 1,
+             available_bytes = GREATEST(0::bigint, quota_bytes - (used_bytes + $1::bigint) - GREATEST(0::bigint, reserved_bytes - $1::bigint)),
+             updated_at = NOW()
+         WHERE shop_id = $2`,
+        [fileSizeBytes, shopId]
+      );
+    } finally {
+      client.release();
+    }
+  } else {
+    const mem = inMemoryStorageUsage.get(shopId);
+    if (mem) {
+      mem.reserved_bytes = Math.max(0, mem.reserved_bytes - fileSizeBytes);
+      mem.used_bytes += fileSizeBytes;
+      mem.active_document_count += 1;
+      mem.available_bytes = Math.max(0, mem.quota_bytes - mem.used_bytes - mem.reserved_bytes);
+    }
+  }
+}
+
+export async function releaseStorageReservation(shopId: string, fileSizeBytes: number): Promise<void> {
+  if (fileSizeBytes <= 0) return;
+
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query(
+        `UPDATE public.shop_storage_usage
+         SET reserved_bytes = GREATEST(0::bigint, reserved_bytes - $1::bigint),
+             available_bytes = GREATEST(0::bigint, quota_bytes - used_bytes - GREATEST(0::bigint, reserved_bytes - $1::bigint)),
+             updated_at = NOW()
+         WHERE shop_id = $2`,
+        [fileSizeBytes, shopId]
+      );
+    } finally {
+      client.release();
+    }
+  } else {
+    const mem = inMemoryStorageUsage.get(shopId);
+    if (mem) {
+      mem.reserved_bytes = Math.max(0, mem.reserved_bytes - fileSizeBytes);
+      mem.available_bytes = Math.max(0, mem.quota_bytes - mem.used_bytes - mem.reserved_bytes);
+    }
+  }
+}
+
+export async function releaseStorageUsage(shopId: string, fileSizeBytes: number): Promise<void> {
+  if (fileSizeBytes <= 0) return;
+
+  if (isNeonDatabaseConfigured() && pgPool) {
+    const client = await pgPool.connect();
+    try {
+      await client.query(
+        `UPDATE public.shop_storage_usage
+         SET used_bytes = GREATEST(0::bigint, used_bytes - $1::bigint),
+             active_document_count = GREATEST(0, active_document_count - 1),
+             available_bytes = GREATEST(0::bigint, quota_bytes - GREATEST(0::bigint, used_bytes - $1::bigint) - reserved_bytes),
+             updated_at = NOW()
+         WHERE shop_id = $2`,
+        [fileSizeBytes, shopId]
+      );
+    } finally {
+      client.release();
+    }
+  } else {
+    const mem = inMemoryStorageUsage.get(shopId);
+    if (mem) {
+      mem.used_bytes = Math.max(0, mem.used_bytes - fileSizeBytes);
+      mem.active_document_count = Math.max(0, mem.active_document_count - 1);
+      mem.available_bytes = Math.max(0, mem.quota_bytes - mem.used_bytes - mem.reserved_bytes);
+    }
+  }
+}
+
 

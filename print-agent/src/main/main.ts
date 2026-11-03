@@ -58,6 +58,12 @@ if (!gotTheLock) {
       }
     });
 
+    agentService.setOnQueueStateChangeListener((queues) => {
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send('event:queue-state-changed', queues);
+      }
+    });
+
     // Start background agent service
     await agentService.start();
   });
@@ -342,6 +348,26 @@ ipcMain.handle('printer:get-detection-details', (_event, printerName: unknown) =
 
 ipcMain.handle('jobs:get-list', () => {
   return localVault.getAllJobs();
+});
+
+ipcMain.handle('queue:get-printer-queues', () => {
+  return agentService.getPrinterQueues();
+});
+
+ipcMain.handle('queue:pause-printer', (_event, printerName: unknown) => {
+  if (typeof printerName !== 'string' || !printerName.trim()) {
+    return { success: false, error: 'Valid printer name required.' };
+  }
+  const result = agentService.pausePrinterQueue(printerName);
+  return { success: result };
+});
+
+ipcMain.handle('queue:resume-printer', (_event, printerName: unknown) => {
+  if (typeof printerName !== 'string' || !printerName.trim()) {
+    return { success: false, error: 'Valid printer name required.' };
+  }
+  const result = agentService.resumePrinterQueue(printerName);
+  return { success: result };
 });
 
 ipcMain.handle('jobs:poll-now', async () => {

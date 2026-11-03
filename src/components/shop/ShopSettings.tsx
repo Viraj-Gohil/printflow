@@ -1204,7 +1204,7 @@ export const ShopSettings: React.FC = () => {
                 <Check className="w-4 h-4" /> Saved successfully
               </span>
             )}
-            <Button type="submit" variant="primary" disabled={isSavingRetention}>
+            <Button type="submit" variant="solid" disabled={isSavingRetention}>
               {isSavingRetention && <Loader2 className="w-4 h-4 animate-spin mr-2" />}
               Save Retention Policy
             </Button>

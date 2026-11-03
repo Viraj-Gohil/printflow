@@ -53,6 +53,8 @@ import {
   reconcileRazorpayPayment
 } from '../../lib/razorpay';
 import { apiUrl } from '../../lib/apiConfig';
+import { CustomerErrorModal } from './CustomerErrorModal';
+import { validateClientDocument, DocumentValidationError } from '../../lib/validation/documentValidation';
 
 interface CustomerPrintFlowProps {
   shopSlug: string;
@@ -97,13 +99,74 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   const [isCheckingAgentStatus, setIsCheckingAgentStatus] = useState<boolean>(false);
   const [alternativeShops, setAlternativeShops] = useState<Array<{ id: string; name: string; slug: string; isAvailable?: boolean }>>([]);
 
+  const [customerErrorModal, setCustomerErrorModal] = useState<DocumentValidationError | null>(null);
+
   const [shopCapabilities, setShopCapabilities] = useState<{
     supportedPaperSizes: string[];
+    effectivePaperSizes?: Array<{ name: string; widthMm?: number; heightMm?: number }>;
     hasColorPrinter: boolean;
     hasDuplexPrinter: boolean;
     hasMonochromePrinter: boolean;
     isReadyForPrinting: boolean;
+    validCombinations?: Array<{
+      paperSize: string;
+      colorMode: 'BW' | 'COLOR';
+      duplex: boolean;
+    }>;
+    options?: {
+      color: { supported: boolean; reason?: string };
+      duplex: { supported: boolean; reason?: string };
+      paperSizes: Array<{ name: string; supported: boolean; reason?: string }>;
+    };
   } | null>(null);
+
+  const isCombinationValid = React.useCallback(
+    (paperSize: string, colorMode: 'BW' | 'COLOR', duplex: boolean): { isValid: boolean; reason?: string } => {
+      if (!shopCapabilities) return { isValid: true };
+      if (!shopCapabilities.isReadyForPrinting) {
+        return { isValid: false, reason: 'No registered online printers are currently available at this shop.' };
+      }
+
+      // 1. Check color support
+      if (colorMode === 'COLOR' && !shopCapabilities.hasColorPrinter) {
+        return { isValid: false, reason: 'Colour printing is currently unavailable at this shop.' };
+      }
+
+      // 2. Check duplex support
+      if (duplex && !shopCapabilities.hasDuplexPrinter) {
+        return { isValid: false, reason: 'Double-sided printing is currently unavailable at this shop.' };
+      }
+
+      // 3. Multi-printer combinations check
+      if (Array.isArray(shopCapabilities.validCombinations) && shopCapabilities.validCombinations.length > 0) {
+        const normSize = (paperSize || 'A4').toUpperCase();
+        const matches = shopCapabilities.validCombinations.some(
+          (c) => c.paperSize.toUpperCase() === normSize && c.colorMode === colorMode && c.duplex === duplex
+        );
+        if (!matches) {
+          if (colorMode === 'COLOR') {
+            return {
+              isValid: false,
+              reason: `Colour printing is not available for ${paperSize} with ${duplex ? 'double-sided' : 'single-sided'} mode.`
+            };
+          }
+          if (duplex) {
+            return {
+              isValid: false,
+              reason: `Double-sided printing is not available for ${paperSize} at this shop.`
+            };
+          }
+          return {
+            isValid: false,
+            reason: `The option combination (${paperSize}, ${colorMode}, ${duplex ? 'Double-sided' : 'Single-sided'}) is not available on any online printer.`
+          };
+        }
+      }
+
+      return { isValid: true };
+    },
+    [shopCapabilities]
+  );
 
   const fetchCapabilities = React.useCallback(async (targetSlugOrId?: string) => {
     const queryTarget = targetSlugOrId || shopSlug || remoteShop?.slug || activeShop?.slug || activeShop?.id;
@@ -394,7 +457,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   };
 
   // Prepare selected documents for secure upload after payment verification.
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (maintenanceMode) {
       showToast('Maintenance Active', 'System is under maintenance. File uploads are disabled.', 'error', 4000);
       return;
@@ -412,33 +475,11 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     for (let i = 0; i < selectedFiles.length; i++) {
       const file = selectedFiles[i];
 
-      if (file.size <= 0) {
-        setUploadError(`"${file.name}" is empty (0 bytes).`);
-        continue;
-      }
-
-      if (file.size > 50 * 1024 * 1024) {
-        setUploadError(`"${file.name}" exceeds the 50MB file size limit.`);
-        continue;
-      }
-
-      const lowerName = file.name.toLowerCase();
-      const isAllowedExt =
-        lowerName.endsWith('.pdf') ||
-        lowerName.endsWith('.jpg') ||
-        lowerName.endsWith('.jpeg') ||
-        lowerName.endsWith('.png') ||
-        lowerName.endsWith('.webp');
-
-      const isAllowedMime =
-        !file.type ||
-        file.type === 'application/pdf' ||
-        file.type === 'image/jpeg' ||
-        file.type === 'image/png' ||
-        file.type === 'image/webp';
-
-      if (!isAllowedExt || !isAllowedMime) {
-        setUploadError(`"${file.name}" is not permitted. Only PDF, JPEG, PNG, and WEBP are accepted.`);
+      // Perform deep client-side binary magic byte & format validation
+      const validation = await validateClientDocument(file);
+      if (!validation.isValid && validation.error) {
+        setCustomerErrorModal(validation.error);
+        // Do not upload or add to queue, but allow other valid selected files to proceed
         continue;
       }
 
@@ -525,15 +566,17 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   };
 
   // Handler for ID Card Front side upload
-  const handleFrontSideUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFrontSideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (agentStatus && !agentStatus.isAvailable) {
       showToast('Shop Offline', agentStatus.message || 'This print shop is currently offline. File uploads are disabled.', 'error', 5000);
       return;
     }
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 50 * 1024 * 1024) {
-      setUploadError(`"${file.name}" exceeds the 50MB file size limit.`);
+    const validation = await validateClientDocument(file);
+    if (!validation.isValid && validation.error) {
+      setCustomerErrorModal(validation.error);
+      e.target.value = '';
       return;
     }
     const url = URL.createObjectURL(file);
@@ -543,15 +586,17 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   };
 
   // Handler for ID Card Back side upload
-  const handleBackSideUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleBackSideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (agentStatus && !agentStatus.isAvailable) {
       showToast('Shop Offline', agentStatus.message || 'This print shop is currently offline. File uploads are disabled.', 'error', 5000);
       return;
     }
     const file = e.target.files?.[0];
     if (!file) return;
-    if (file.size > 50 * 1024 * 1024) {
-      setUploadError(`"${file.name}" exceeds the 50MB file size limit.`);
+    const validation = await validateClientDocument(file);
+    if (!validation.isValid && validation.error) {
+      setCustomerErrorModal(validation.error);
+      e.target.value = '';
       return;
     }
     const url = URL.createObjectURL(file);
@@ -804,12 +849,30 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       });
       const result = await response.json() as {
         success?: boolean;
+        code?: string;
+        title?: string;
+        message?: string;
         error?: string;
+        filename?: string;
+        detectedType?: string;
+        supportedFormats?: string[];
         job?: { id?: string; trackingToken?: string };
         statusMessage?: string;
         agentOnline?: boolean;
       };
       if (!response.ok || !result.success || !result.job?.id) {
+        if (result.code) {
+          setCustomerErrorModal({
+            isOpen: true,
+            code: (result.code as any) || 'INVALID_CONTENT',
+            title: result.title || 'Print Option Unavailable',
+            message: result.message || result.error || 'Selected print settings are currently unavailable at this shop.',
+            fileName: result.filename || 'Uploaded Document',
+            detectedType: result.detectedType,
+            supportedFormats: Array.isArray(result.supportedFormats) ? result.supportedFormats.join(', ') : undefined,
+            actionText: 'Review Settings'
+          });
+        }
         throw new Error(result.error || `Could not dispatch the paid order (HTTP ${response.status}).`);
       }
 
@@ -874,6 +937,22 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       const phoneCheck = validatePhone(customerPhone, false);
       if (!phoneCheck.isValid) {
         setStepError(phoneCheck.error || 'Please enter a valid 10-digit mobile number.');
+        return;
+      }
+    }
+
+    // Pre-checkout validation: Ensure all files match valid printer-supported option combinations
+    for (const file of files) {
+      const check = isCombinationValid(file.paperSize || 'A4', file.color || 'BW', file.sides === 'DOUBLE');
+      if (!check.isValid) {
+        setCustomerErrorModal({
+          isOpen: true,
+          code: 'NO_COMPATIBLE_PRINTER',
+          title: 'Print Option Unavailable',
+          message: `The print settings for "${file.fileName}" are unavailable: ${check.reason || 'No compatible printer available at this shop'}. Please adjust your settings.`,
+          fileName: file.fileName,
+          actionText: 'Adjust Settings'
+        });
         return;
       }
     }
@@ -1881,91 +1960,124 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-3 sm:gap-4">
-                                  {/* 1. Print Type (B&W vs Colour) */}
-                                  <div>
-                                    <label className="text-xs font-bold text-slate-700 block mb-1.5">Print type</label>
-                                    <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
-                                      <button
-                                        type="button"
-                                        onClick={() => updateFileConfig(file.id, { color: 'BW' })}
-                                        className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                                          file.color === 'BW'
-                                            ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                            : 'text-slate-600 hover:text-slate-900'
-                                        }`}
-                                      >
-                                        B&W
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => updateFileConfig(file.id, { color: 'COLOR' })}
-                                        className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer ${
-                                          file.color === 'COLOR'
-                                            ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                            : 'text-slate-600 hover:text-slate-900'
-                                        }`}
-                                      >
-                                        Colour
-                                      </button>
-                                    </div>
-                                  </div>
+                                  {(() => {
+                                    const isColorSupported = isCombinationValid(file.paperSize || 'A4', 'COLOR', file.sides === 'DOUBLE');
+                                    const isDuplexSupported = isCombinationValid(file.paperSize || 'A4', file.color || 'BW', true);
 
-                                  {/* 2. Print Sides (Single vs Double) */}
-                                  <div>
-                                    <label className="text-xs font-bold text-slate-700 block mb-1.5">Print sides</label>
-                                    <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
-                                      <button
-                                        type="button"
-                                        onClick={() => updateFileConfig(file.id, { sides: 'SINGLE' })}
-                                        className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer truncate px-0.5 ${
-                                          file.sides === 'SINGLE'
-                                            ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                            : 'text-slate-600 hover:text-slate-900'
-                                        }`}
-                                      >
-                                        Single Side
-                                      </button>
-                                      <button
-                                        type="button"
-                                        onClick={() => updateFileConfig(file.id, { sides: 'DOUBLE' })}
-                                        className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer truncate px-0.5 ${
-                                          file.sides === 'DOUBLE'
-                                            ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                            : 'text-slate-600 hover:text-slate-900'
-                                        }`}
-                                      >
-                                        Double Side
-                                      </button>
-                                    </div>
-                                  </div>
+                                    return (
+                                      <>
+                                        {/* 1. Print Type (B&W vs Colour) */}
+                                        <div>
+                                          <label className="text-xs font-bold text-slate-700 block mb-1.5">Print type</label>
+                                          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
+                                            <button
+                                              type="button"
+                                              onClick={() => updateFileConfig(file.id, { color: 'BW' })}
+                                              className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer ${
+                                                file.color === 'BW'
+                                                  ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
+                                                  : 'text-slate-600 hover:text-slate-900'
+                                              }`}
+                                            >
+                                              B&W
+                                            </button>
+                                            <button
+                                              type="button"
+                                              disabled={!isColorSupported.isValid}
+                                              onClick={() => isColorSupported.isValid && updateFileConfig(file.id, { color: 'COLOR' })}
+                                              title={!isColorSupported.isValid ? isColorSupported.reason : 'Colour'}
+                                              className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all ${
+                                                !isColorSupported.isValid
+                                                  ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-50'
+                                                  : file.color === 'COLOR'
+                                                    ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs cursor-pointer'
+                                                    : 'text-slate-600 hover:text-slate-900 cursor-pointer'
+                                              }`}
+                                            >
+                                              Colour
+                                            </button>
+                                          </div>
+                                          {!isColorSupported.isValid && (
+                                            <p className="text-[10px] text-amber-700 mt-1 flex items-start gap-1 font-medium leading-tight">
+                                              <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                                              <span>{isColorSupported.reason || 'Colour printing unavailable'}</span>
+                                            </p>
+                                          )}
+                                        </div>
 
-                                  {/* 3. Paper Size Selection */}
-                                  <div>
-                                    <div className="flex items-center justify-between mb-1.5">
-                                      <label className="text-xs font-bold text-slate-700 block">Paper size</label>
-                                      <span className="text-[10px] text-blue-600 font-bold">{file.paperSize || 'A4'}</span>
-                                    </div>
-                                    <div className="flex flex-wrap gap-1 p-1 bg-slate-100 rounded-xl">
-                                      {activeShopSizes.map((sz) => {
-                                        const isSelected = (file.paperSize || 'A4') === sz;
-                                        return (
-                                          <button
-                                            key={sz}
-                                            type="button"
-                                            onClick={() => updateFileConfig(file.id, { paperSize: sz as PaperSize })}
-                                            className={`flex-1 min-w-[50px] py-1.5 px-1.5 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer text-center truncate ${
-                                              isSelected
-                                                ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs font-extrabold'
-                                                : 'text-slate-600 hover:text-slate-900'
-                                            }`}
-                                            title={sz}
-                                          >
-                                            {sz}
-                                          </button>
-                                        );
-                                      })}
-                                    </div>
-                                  </div>
+                                        {/* 2. Print Sides (Single vs Double) */}
+                                        <div>
+                                          <label className="text-xs font-bold text-slate-700 block mb-1.5">Print sides</label>
+                                          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
+                                            <button
+                                              type="button"
+                                              onClick={() => updateFileConfig(file.id, { sides: 'SINGLE' })}
+                                              className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer truncate px-0.5 ${
+                                                file.sides === 'SINGLE'
+                                                  ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
+                                                  : 'text-slate-600 hover:text-slate-900'
+                                              }`}
+                                            >
+                                              Single Side
+                                            </button>
+                                            <button
+                                              type="button"
+                                              disabled={!isDuplexSupported.isValid}
+                                              onClick={() => isDuplexSupported.isValid && updateFileConfig(file.id, { sides: 'DOUBLE' })}
+                                              title={!isDuplexSupported.isValid ? isDuplexSupported.reason : 'Double Side'}
+                                              className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all truncate px-0.5 ${
+                                                !isDuplexSupported.isValid
+                                                  ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-50'
+                                                  : file.sides === 'DOUBLE'
+                                                    ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs cursor-pointer'
+                                                    : 'text-slate-600 hover:text-slate-900 cursor-pointer'
+                                              }`}
+                                            >
+                                              Double Side
+                                            </button>
+                                          </div>
+                                          {!isDuplexSupported.isValid && (
+                                            <p className="text-[10px] text-amber-700 mt-1 flex items-start gap-1 font-medium leading-tight">
+                                              <AlertCircle className="w-3 h-3 shrink-0 mt-0.5" />
+                                              <span>{isDuplexSupported.reason || 'Double-sided printing unavailable'}</span>
+                                            </p>
+                                          )}
+                                        </div>
+
+                                        {/* 3. Paper Size Selection */}
+                                        <div>
+                                          <div className="flex items-center justify-between mb-1.5">
+                                            <label className="text-xs font-bold text-slate-700 block">Paper size</label>
+                                            <span className="text-[10px] text-blue-600 font-bold">{file.paperSize || 'A4'}</span>
+                                          </div>
+                                          <div className="flex flex-wrap gap-1 p-1 bg-slate-100 rounded-xl">
+                                            {activeShopSizes.map((sz) => {
+                                              const isSelected = (file.paperSize || 'A4') === sz;
+                                              const isSizeSupported = isCombinationValid(sz, file.color || 'BW', file.sides === 'DOUBLE');
+                                              return (
+                                                <button
+                                                  key={sz}
+                                                  type="button"
+                                                  disabled={!isSizeSupported.isValid}
+                                                  onClick={() => isSizeSupported.isValid && updateFileConfig(file.id, { paperSize: sz as PaperSize })}
+                                                  className={`flex-1 min-w-[50px] py-1.5 px-1.5 text-[11px] sm:text-xs font-bold rounded-lg transition-all text-center truncate ${
+                                                    !isSizeSupported.isValid
+                                                      ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-50'
+                                                      : isSelected
+                                                        ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs font-extrabold cursor-pointer'
+                                                        : 'text-slate-600 hover:text-slate-900 cursor-pointer'
+                                                  }`}
+                                                  title={!isSizeSupported.isValid ? isSizeSupported.reason : sz}
+                                                >
+                                                  {sz}
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </div>
+                                      </>
+                                    );
+                                  })()}
 
                                   {/* 4. Copies Counter [-] 1 [+] */}
                                   <div>
@@ -2630,23 +2742,57 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                       <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
                       <span>Payment Verified</span>
                     </div>
-                    <div className={`flex items-center gap-2 font-semibold ${
-                      activeJob.printStatus === 'COMPLETED'
-                        ? 'text-emerald-700'
-                        : activeJob.printStatus === 'FAILED' || activeJob.printStatus === 'REQUIRES_ATTENTION'
-                          ? 'text-amber-700'
-                          : 'text-blue-700'
-                    }`}>
-                      {activeJob.printStatus === 'COMPLETED'
-                        ? <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
-                        : activeJob.printStatus === 'FAILED' || activeJob.printStatus === 'REQUIRES_ATTENTION'
-                          ? <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                          : <RotateCw className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />}
-                      <span>{activeJob.printStatus.replaceAll('_', ' ')}</span>
-                    </div>
-                    {activeJob.notes && (
-                      <p className="text-xs text-amber-800">{activeJob.notes}</p>
-                    )}
+                    {(() => {
+                      const status = activeJob.printStatus;
+                      if (status === 'COMPLETED') {
+                        return (
+                          <div className="flex items-center gap-2 font-semibold text-emerald-700">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                            <span>Printed & Ready for Pickup</span>
+                          </div>
+                        );
+                      }
+                      if (status === 'SUBMITTED_TO_SPOOLER') {
+                        return (
+                          <div className="flex items-center gap-2 font-semibold text-cyan-700">
+                            <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-600 shrink-0" />
+                            <span>Printer Processing Document</span>
+                          </div>
+                        );
+                      }
+                      if (status === 'AWAITING_RECONCILIATION' || status === 'REQUIRES_ATTENTION') {
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 font-semibold text-amber-800">
+                              <Printer className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                              <span>Printing in Progress at Counter</span>
+                            </div>
+                            <p className="text-[11px] text-amber-700">
+                              Your pages are queued at the shop counter. Please show your token #{activeJob.id} to collect them.
+                            </p>
+                          </div>
+                        );
+                      }
+                      if (status === 'FAILED') {
+                        return (
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2 font-semibold text-rose-700">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-rose-600" />
+                              <span>Print Queue Notice</span>
+                            </div>
+                            <p className="text-[11px] text-slate-600">
+                              Please ask the shop operator to release your print job or check printer paper.
+                            </p>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="flex items-center gap-2 font-semibold text-blue-700">
+                          <RotateCw className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                          <span>Preparing & Spooling Document...</span>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -2918,6 +3064,17 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
           </div>
         )}
       </AnimatePresence>
+
+      {/* Customer Error Popup Modal */}
+      <CustomerErrorModal
+        error={customerErrorModal}
+        onClose={() => setCustomerErrorModal(null)}
+        onChooseAnother={() => {
+          setCustomerErrorModal(null);
+          const el = document.getElementById(fileInputId);
+          if (el) el.click();
+        }}
+      />
     </div>
   );
 };

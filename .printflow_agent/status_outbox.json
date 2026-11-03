@@ -1,0 +1,54 @@
+[
+  {
+    "jobId": "job_test_1793620817130",
+    "eventType": "spooler_job_completed",
+    "status": "COMPLETED",
+    "spoolerJobId": "1042",
+    "printerName": "HP LaserJet P1007",
+    "retrySafe": false,
+    "pagesPrinted": 5,
+    "id": "job_test_1793620817130_COMPLETED_1793620817130_nmqy",
+    "createdAt": "2026-11-02T12:00:17.130Z",
+    "nextAttemptAt": 1793620817130,
+    "attemptCount": 0
+  },
+  {
+    "jobId": "job_test_1793620865017",
+    "eventType": "spooler_job_completed",
+    "status": "COMPLETED",
+    "spoolerJobId": "1042",
+    "printerName": "HP LaserJet P1007",
+    "retrySafe": false,
+    "pagesPrinted": 5,
+    "id": "job_test_1793620865017_COMPLETED_1793620865017_3o26",
+    "createdAt": "2026-11-02T12:01:05.017Z",
+    "nextAttemptAt": 1793620865017,
+    "attemptCount": 0
+  },
+  {
+    "jobId": "job_test_1793621029006",
+    "eventType": "spooler_job_completed",
+    "status": "COMPLETED",
+    "spoolerJobId": "1042",
+    "printerName": "HP LaserJet P1007",
+    "retrySafe": false,
+    "pagesPrinted": 5,
+    "id": "job_test_1793621029006_COMPLETED_1793621029006_7m3s",
+    "createdAt": "2026-11-02T12:03:49.006Z",
+    "nextAttemptAt": 1793621029006,
+    "attemptCount": 0
+  },
+  {
+    "jobId": "job_test_1793621217912",
+    "eventType": "spooler_job_completed",
+    "status": "COMPLETED",
+    "spoolerJobId": "1042",
+    "printerName": "HP LaserJet P1007",
+    "retrySafe": false,
+    "pagesPrinted": 5,
+    "id": "job_test_1793621217912_COMPLETED_1793621217912_437m",
+    "createdAt": "2026-11-02T12:06:57.912Z",
+    "nextAttemptAt": 1793621217912,
+    "attemptCount": 0
+  }
+]

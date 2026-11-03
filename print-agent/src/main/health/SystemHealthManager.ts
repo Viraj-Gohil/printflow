@@ -1,4 +1,4 @@
-import os
+import os from 'os';
 import fs from 'fs';
 import path from 'path';
 import { exec } from 'child_process';
@@ -119,21 +119,22 @@ class SystemHealthManager {
     return Math.min(100, Math.max(0, parseFloat(usage.toFixed(1))));
   }
 
-  private async checkWindowsSpooler(): Promise<{ running: boolean; statusMessage: string; recentErrors: string[] }> {
+  private async checkWindowsSpooler(): Promise<{ running: boolean; serviceName: string; statusMessage: string; recentErrors: string[] }> {
     if (process.platform !== 'win32') {
-      return { running: true, statusMessage: 'Non-Windows development environment (Spooler simulated)', recentErrors: [] };
+      return { running: true, serviceName: 'Spooler', statusMessage: 'Non-Windows development environment (Spooler simulated)', recentErrors: [] };
     }
     try {
       const { stdout } = await execAsync('sc query spooler', { timeout: 3000 });
       const running = stdout.includes('RUNNING');
       return {
         running,
+        serviceName: 'Spooler',
         statusMessage: running ? 'Windows Print Spooler service is running normally.' : 'Windows Print Spooler service is stopped or paused.',
         recentErrors: running ? [] : ['Spooler service not running']
       };
     } catch (err) {
       // Fallback check
-      return { running: true, statusMessage: 'Print Spooler active (query warning handled)', recentErrors: [] };
+      return { running: true, serviceName: 'Spooler', statusMessage: 'Print Spooler active (query warning handled)', recentErrors: [] };
     }
   }
 
@@ -354,6 +355,74 @@ class SystemHealthManager {
     };
   }
 
+  public async getMetricsPayload(agentId: string, shopId: string) {
+    const health = await this.getSystemHealth();
+    const appDataDir = appPath();
+    const spoolDir = path.join(appDataDir, 'spool');
+    const tempDir = path.join(appDataDir, 'temp');
+    const cacheDir = path.join(appDataDir, 'cache');
+    const logsDir = path.join(appDataDir, 'logs');
+    const sqlitePath = path.join(appDataDir, 'vault.db');
+
+    const spoolSizeMb = this.getDirectorySizeMb(spoolDir);
+    const tempSizeMb = this.getDirectorySizeMb(tempDir);
+    const cacheSizeMb = this.getDirectorySizeMb(cacheDir);
+    const logsSizeMb = this.getDirectorySizeMb(logsDir);
+    const sqliteSizeMb = fs.existsSync(sqlitePath) ? parseFloat((fs.statSync(sqlitePath).size / (1024 * 1024)).toFixed(2)) : 1.2;
+
+    const agentStorageBytes = Math.round((spoolSizeMb + tempSizeMb + cacheSizeMb + logsSizeMb + sqliteSizeMb) * 1024 * 1024);
+    const memUsage = process.memoryUsage();
+
+    const onlinePrintersCount = health.printers.filter((p) => p.isOnline).length;
+    const offlinePrintersCount = health.printers.filter((p) => !p.isOnline).length;
+
+    return {
+      agentId,
+      shopId,
+      timestamp: health.timestamp,
+      agentVersion: `v1.4.2 (${health.agent.electronVersion})`,
+      osVersion: `${health.os.platform} ${health.os.release} (${health.os.arch})`,
+      cpu: {
+        model: health.cpu.model,
+        cores: health.cpu.cores,
+        systemCpuPercent: health.cpu.usagePercent,
+        agentCpuPercent: health.agent.processCpuPercent
+      },
+      ram: {
+        totalBytes: health.ram.totalBytes,
+        availableBytes: health.ram.freeBytes,
+        agentRamBytes: memUsage.rss
+      },
+      disk: {
+        totalBytes: health.disk.totalBytes,
+        freeBytes: health.disk.freeBytes,
+        agentStorageBytes,
+        tempStorageBytes: Math.round(tempSizeMb * 1024 * 1024),
+        cacheStorageBytes: Math.round(cacheSizeMb * 1024 * 1024),
+        localDatabaseBytes: Math.round(sqliteSizeMb * 1024 * 1024),
+        logsStorageBytes: Math.round(logsSizeMb * 1024 * 1024),
+        spoolStorageBytes: Math.round(spoolSizeMb * 1024 * 1024)
+      },
+      spooler: {
+        status: health.spooler.running ? 'RUNNING' : 'STOPPED',
+        running: health.spooler.running
+      },
+      queue: {
+        pendingJobs: health.queue.pendingJobs,
+        activeJobs: health.queue.activeJobs,
+        failedJobs: health.queue.failedJobs,
+        stuckJobs: health.queue.stuckJobs
+      },
+      printers: {
+        onlineCount: onlinePrintersCount,
+        offlineCount: offlinePrintersCount
+      },
+      network: {
+        latencyMs: health.network.apiResponseTimeMs
+      }
+    };
+  }
+
   public runStorageCleanup(): { success: boolean; freedMb: number; message: string } {
     try {
       const appDir = appPath();
@@ -381,14 +450,14 @@ class SystemHealthManager {
       }
 
       const freedMb = parseFloat((freedBytes / (1024 * 1024)).toFixed(2));
-      logger.info(`[SystemHealthManager] Storage cleanup completed. Removed ${cleanedCount} expired temp files, freed ${freedMb} MB.`);
+      logger.info('STORAGE', `Storage cleanup completed. Removed ${cleanedCount} expired temp files, freed ${freedMb} MB.`);
       return {
         success: true,
         freedMb,
         message: `Cleaned ${cleanedCount} expired temporary files and freed ${freedMb} MB of disk space safely.`
       };
     } catch (err: any) {
-      logger.error('[SystemHealthManager] Storage cleanup failed:', err);
+      logger.error('STORAGE', 'Storage cleanup failed:', { error: err?.message || err });
       return { success: false, freedMb: 0, message: err.message || 'Storage cleanup failed.' };
     }
   }
@@ -396,7 +465,6 @@ class SystemHealthManager {
 
 function appPath(): string {
   try {
-    // electron app.getPath('userData') or fallback
     return process.env.APPDATA || path.join(os.homedir(), '.printflow-agent');
   } catch {
     return path.join(os.homedir(), '.printflow-agent');

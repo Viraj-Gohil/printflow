@@ -119,7 +119,7 @@ export class ApiClient {
   /**
    * Sends heartbeat ping to maintain online status and acknowledge connectivity
    */
-  public async sendHeartbeat(): Promise<{
+  public async sendHeartbeat(metricsPayload?: any): Promise<{
     success: boolean;
     status?: string;
     error?: string;
@@ -129,10 +129,21 @@ export class ApiClient {
     const url = `${this.getBaseUrl()}/api/agent/heartbeat`;
 
     try {
-      const response = await fetch(url, {
+      const headers = this.getHeaders();
+      const options: RequestInit = {
         method: 'POST',
-        headers: this.getHeaders()
-      });
+        headers
+      };
+
+      if (metricsPayload) {
+        options.headers = {
+          ...headers,
+          'Content-Type': 'application/json'
+        };
+        options.body = JSON.stringify(metricsPayload);
+      }
+
+      const response = await fetch(url, options);
 
       const data = (await response.json().catch(() => ({}))) as {
         success?: boolean;
@@ -151,6 +162,27 @@ export class ApiClient {
       }
 
       return { success: Boolean(data.success), status: data.status };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  /**
+   * Reports detailed resource metrics and telemetry to the backend
+   */
+  public async sendHealthReport(metricsPayload: any): Promise<{ success: boolean; error?: string }> {
+    const url = `${this.getBaseUrl()}/api/agent/health-report`;
+    try {
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          ...this.getHeaders(),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(metricsPayload)
+      });
+      const data = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string };
+      return { success: response.ok && Boolean(data.success), error: data.error };
     } catch (err: any) {
       return { success: false, error: err.message };
     }
@@ -361,29 +393,67 @@ export class ApiClient {
   }
 
   /**
-   * Updates job status (DOWNLOADING | PRINTING | COMPLETED | FAILED)
+   * Updates job status (DOWNLOADING | PRINTING | SUBMITTED_TO_SPOOLER | COMPLETED | FAILED | REQUIRES_ATTENTION | AWAITING_RECONCILIATION)
    */
   public async updateJobStatus(
     jobId: string,
-    status: 'QUEUED' | 'DOWNLOADING' | 'PRINTING' | 'COMPLETED' | 'FAILED' | 'REQUIRES_ATTENTION',
+    status: 'QUEUED' | 'ASSIGNED' | 'DOWNLOADING' | 'PRINTING' | 'SUBMITTED_TO_SPOOLER' | 'COMPLETED' | 'FAILED' | 'REQUIRES_ATTENTION' | 'AWAITING_RECONCILIATION',
     errorMessage?: string,
     printerName?: string,
     retrySafe?: boolean,
-    pagesPrinted?: number
+    pagesPrinted?: number,
+    spoolerJobId?: string | number
   ): Promise<{ success: boolean; error?: string }> {
     const url = `${this.getBaseUrl()}/api/agent/jobs/${encodeURIComponent(jobId)}/status`;
+    const correlationId = `corr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
+    logger.info('NETWORK', `[Sync] Updating job status (Correlation: ${correlationId})`, {
+      jobId,
+      status,
+      spoolerJobId: spoolerJobId || null,
+      printerName: printerName || null,
+      operationName: 'UPDATE_JOB_STATUS'
+    });
 
     try {
       const response = await fetch(url, {
         method: 'POST',
-        headers: this.getHeaders(),
-        body: JSON.stringify({ status, errorMessage, printerName, retrySafe, pagesPrinted })
+        headers: {
+          ...this.getHeaders(),
+          'x-correlation-id': correlationId
+        },
+        body: JSON.stringify({
+          status,
+          errorMessage,
+          printerName,
+          retrySafe,
+          pagesPrinted,
+          spoolerJobId
+        })
       });
 
-      const data = (await response.json()) as { success?: boolean; error?: string };
-      return { success: response.ok && Boolean(data.success), error: data.error };
+      const data = (await response.json().catch(() => ({}))) as { success?: boolean; error?: string };
+
+      if (!response.ok || !data.success) {
+        logger.warn('NETWORK', `[Sync] Status update rejected (HTTP ${response.status}) for job ${jobId}`, {
+          correlationId,
+          status,
+          httpStatus: response.status,
+          error: data.error
+        });
+        return { success: false, error: data.error || `HTTP ${response.status}` };
+      }
+
+      logger.info('NETWORK', `[Sync] Status ${status} synced successfully for job ${jobId} (Correlation: ${correlationId})`);
+      return { success: true };
     } catch (err: any) {
-      return { success: false, error: err.message };
+      const errMsg = err?.message || String(err);
+      logger.error('NETWORK', `[Sync] Network exception while syncing status for job ${jobId}`, {
+        correlationId,
+        status,
+        error: errMsg
+      });
+      return { success: false, error: errMsg };
     }
   }
 

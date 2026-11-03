@@ -1,4 +1,14 @@
-import { safeStorage } from 'electron';
+let safeStorage: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  safeStorage = require('electron').safeStorage;
+} catch {
+  safeStorage = {
+    isEncryptionAvailable: () => false,
+    encryptString: (s: string) => Buffer.from(s),
+    decryptString: (b: Buffer) => b.toString()
+  };
+}
 import crypto from 'crypto';
 import os from 'os';
 import { logger } from '../logger/AgentLogger.js';

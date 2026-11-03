@@ -12,25 +12,25 @@ export const Footer: React.FC = () => {
           {/* Brand & Purpose */}
           <div className="md:col-span-1 space-y-3.5">
             <div className="flex items-center gap-2.5">
-              <div className="w-9 h-9 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-xs">
+              <div className="w-9 h-9 rounded-2xl bg-[#00B52D] flex items-center justify-center text-white shadow-xs">
                 <Printer className="w-5 h-5 text-white" />
               </div>
-              <span className="text-xl font-bold tracking-tight text-slate-900">
+              <span className="text-xl font-extrabold tracking-tight text-[#080808]">
                 PrintFlow
               </span>
             </div>
-            <p className="text-xs text-slate-500 leading-relaxed">
+            <p className="text-xs text-[#777777] leading-relaxed">
               Simple printing. Smarter counters. Touchless QR-powered ordering and hardware queue orchestration for modern xerox & photocopy centers.
             </p>
-            <div className="pt-1 flex items-center gap-2 text-xs text-slate-500">
-              <Shield className="w-3.5 h-3.5 text-blue-600" />
+            <div className="pt-1 flex items-center gap-2 text-xs text-[#777777]">
+              <Shield className="w-3.5 h-3.5 text-[#00B52D]" />
               <span>Multi-tenant Cloud Architecture</span>
             </div>
           </div>
 
           {/* Product Links */}
           <div>
-            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3.5">
+            <h4 className="text-xs font-extrabold text-[#080808] uppercase tracking-wider mb-3.5">
               Platform
             </h4>
             <ul className="space-y-2.5 text-xs text-slate-600">
@@ -40,7 +40,7 @@ export const Footer: React.FC = () => {
                     navigate('/');
                     setTimeout(() => document.getElementById('how-it-works')?.scrollIntoView({ behavior: 'smooth' }), 100);
                   }}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   How It Works
                 </button>
@@ -51,7 +51,7 @@ export const Footer: React.FC = () => {
                     navigate('/');
                     setTimeout(() => document.getElementById('features')?.scrollIntoView({ behavior: 'smooth' }), 100);
                   }}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   Features & Tools
                 </button>
@@ -62,7 +62,7 @@ export const Footer: React.FC = () => {
                     navigate('/');
                     setTimeout(() => document.getElementById('print-agent')?.scrollIntoView({ behavior: 'smooth' }), 100);
                   }}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   Desktop Print Agent
                 </button>
@@ -73,7 +73,7 @@ export const Footer: React.FC = () => {
                     navigate('/');
                     setTimeout(() => document.getElementById('pricing')?.scrollIntoView({ behavior: 'smooth' }), 100);
                   }}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   Pricing Plans
                 </button>
@@ -84,7 +84,7 @@ export const Footer: React.FC = () => {
                     navigate('/');
                     setTimeout(() => document.getElementById('faq')?.scrollIntoView({ behavior: 'smooth' }), 100);
                   }}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   Frequently Asked Questions
                 </button>
@@ -94,14 +94,14 @@ export const Footer: React.FC = () => {
 
           {/* Solutions & Management */}
           <div>
-            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3.5">
+            <h4 className="text-xs font-extrabold text-[#080808] uppercase tracking-wider mb-3.5">
               Shop Solutions
             </h4>
             <ul className="space-y-2.5 text-xs text-slate-600">
               <li>
                 <button
                   onClick={() => navigate('/shop/settings')}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   Shop Configuration & UPI
                 </button>
@@ -109,7 +109,7 @@ export const Footer: React.FC = () => {
               <li>
                 <button
                   onClick={() => navigate('/shop/pricing')}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   Per-Page Rate Card
                 </button>
@@ -117,7 +117,7 @@ export const Footer: React.FC = () => {
               <li>
                 <button
                   onClick={() => navigate('/admin/subscriptions')}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   SaaS Plans & Pricing
                 </button>
@@ -125,7 +125,7 @@ export const Footer: React.FC = () => {
               <li>
                 <button
                   onClick={() => navigate('/admin/audit-logs')}
-                  className="hover:text-blue-600 transition-colors cursor-pointer text-left"
+                  className="hover:text-[#00B52D] transition-colors cursor-pointer text-left"
                 >
                   Security & Audit Logs
                 </button>
@@ -135,16 +135,16 @@ export const Footer: React.FC = () => {
 
           {/* Instant Portals */}
           <div>
-            <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider mb-3.5">
+            <h4 className="text-xs font-extrabold text-[#080808] uppercase tracking-wider mb-3.5">
               Quick Portals
             </h4>
             <div className="flex flex-col gap-2">
               <button
                 onClick={() => navigate('/auth/register')}
-                className="w-full text-left px-3.5 py-2.5 bg-blue-50/70 hover:bg-blue-100 rounded-xl text-xs font-bold text-blue-700 transition-all border border-blue-200 flex items-center justify-between cursor-pointer"
+                className="w-full text-left px-3.5 py-2.5 bg-[#EAF8ED] hover:bg-emerald-100/70 rounded-xl text-xs font-bold text-emerald-900 transition-all border border-emerald-200 flex items-center justify-between cursor-pointer"
               >
                 <span>Register New Shop</span>
-                <Store className="w-3.5 h-3.5 text-blue-600" />
+                <Store className="w-3.5 h-3.5 text-[#00B52D]" />
               </button>
               <button
                 onClick={() => navigate('/shop/dashboard')}

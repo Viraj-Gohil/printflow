@@ -1,8 +1,9 @@
 import fs from 'fs';
-import { PrintJobItem } from '../../renderer/types/agent.js';
+import { PrintJobItem, PrinterQueueState, PrinterQueueItem } from '../../renderer/types/agent.js';
 import { ApiClient } from '../api/ApiClient.js';
 import { WindowsPrinterManager } from '../printer/WindowsPrinterManager.js';
 import { localVault } from '../storage/LocalDataVault.js';
+import { outboxManager } from '../storage/OutboxManager.js';
 import { logger } from '../logger/AgentLogger.js';
 
 export class JobQueueManager {
@@ -10,30 +11,56 @@ export class JobQueueManager {
   private printerManager: WindowsPrinterManager;
   private activeJobs = new Map<string, PrintJobItem>(); // jobId -> job
   private printerProcessing = new Map<string, boolean>(); // printerName -> isProcessing
+  private printerPaused = new Map<string, boolean>(); // printerName -> isPaused
+  private physicalDeviceProcessing = new Map<string, string>(); // physicalDeviceId -> jobId
   private onJobUpdateListener?: (job: PrintJobItem) => void;
+  private onQueueStateChangeListener?: (queues: PrinterQueueState[]) => void;
   private activeDownloadsCount = 0;
   private maxConcurrentDownloads = 3;
 
-  // Runtime queue begins empty; authoritative jobs are reconciled from Neon on startup
   constructor(apiClient: ApiClient, printerManager: WindowsPrinterManager) {
     this.apiClient = apiClient;
     this.printerManager = printerManager;
+    outboxManager.setApiClient(apiClient);
   }
 
   public setOnJobUpdateListener(listener: (job: PrintJobItem) => void): void {
     this.onJobUpdateListener = listener;
   }
 
+  public setOnQueueStateChangeListener(listener: (queues: PrinterQueueState[]) => void): void {
+    this.onQueueStateChangeListener = listener;
+  }
+
+  public getPhysicalDeviceId(printerName: string): string {
+    const cached = this.printerManager.getCachedPrinters().find((p) => p.name === printerName);
+    if (cached) {
+      const port = (cached.portName || '').trim().toUpperCase();
+      const driver = (cached.driverName || '').trim().toUpperCase();
+      if (port && port !== 'PORTPROMPT:' && port !== 'NUL:') {
+        return `HW:${driver}:${port}`;
+      }
+    }
+    return `PRN:${printerName.trim().toUpperCase()}`;
+  }
+
   public reloadPendingJobs(): void {
     const allStored = localVault.getAllJobs();
     for (const job of allStored) {
-      if (job.printStatus === 'QUEUED' || job.printStatus === 'ASSIGNED' || job.printStatus === 'DOWNLOADING') {
-        if (job.printStatus === 'DOWNLOADING') {
-          job.printStatus = 'QUEUED'; // Reset interrupted download safely
+      if (['QUEUED', 'ASSIGNED', 'DOWNLOADING', 'PRINTING', 'PAUSED'].includes(job.printStatus)) {
+        if (job.printStatus === 'DOWNLOADING' || job.printStatus === 'PRINTING') {
+          // If spooling was not confirmed, reset to QUEUED for safe retry
+          if (!job.spoolSubmittedAt) {
+            job.printStatus = 'QUEUED';
+          } else {
+            job.printStatus = 'AWAITING_RECONCILIATION';
+            job.errorMessage = 'Agent restarted after spool submission; physical verification required.';
+          }
         }
         this.activeJobs.set(job.id, job);
       }
     }
+    this.notifyQueueStateChanged();
     void this.dispatchQueue();
   }
 
@@ -49,8 +76,121 @@ export class JobQueueManager {
     return Array.from(this.printerProcessing.values()).some((v) => v) || this.activeJobs.size > 0;
   }
 
+  public pausePrinterQueue(printerName: string): boolean {
+    const name = printerName.trim();
+    this.printerPaused.set(name, true);
+    logger.info('QUEUE', `Printer queue "${name}" was PAUSED by shop operator.`);
+    
+    // Mark waiting jobs for this printer as PAUSED
+    for (const job of this.activeJobs.values()) {
+      if (job.printerName === name && (job.printStatus === 'QUEUED' || job.printStatus === 'ASSIGNED')) {
+        job.printStatus = 'PAUSED';
+        job.updatedAt = new Date().toISOString();
+        localVault.saveJob(job);
+      }
+    }
+    this.notifyQueueStateChanged();
+    return true;
+  }
+
+  public resumePrinterQueue(printerName: string): boolean {
+    const name = printerName.trim();
+    this.printerPaused.set(name, false);
+    logger.info('QUEUE', `Printer queue "${name}" was RESUMED.`);
+    
+    // Reset PAUSED jobs for this printer back to QUEUED
+    for (const job of this.activeJobs.values()) {
+      if (job.printerName === name && job.printStatus === 'PAUSED') {
+        job.printStatus = 'QUEUED';
+        job.updatedAt = new Date().toISOString();
+        localVault.saveJob(job);
+      }
+    }
+    this.notifyQueueStateChanged();
+    void this.dispatchQueue();
+    return true;
+  }
+
+  public isPrinterQueuePaused(printerName: string): boolean {
+    return Boolean(this.printerPaused.get(printerName.trim()));
+  }
+
+  public getPrinterQueues(): PrinterQueueState[] {
+    const config = localVault.getConfig();
+    const registeredNames = config.registeredPrinterNames || [];
+    const discoveredPrinters = this.printerManager.getCachedPrinters();
+    const allStoredJobs = localVault.getAllJobs();
+
+    // Include registered printers + any cached printers
+    const targetPrinters = discoveredPrinters.filter(p => registeredNames.includes(p.name) || registeredNames.length === 0);
+
+    return targetPrinters.map((printer) => {
+      const isPaused = Boolean(this.printerPaused.get(printer.name));
+      const physicalDeviceId = this.getPhysicalDeviceId(printer.name);
+      
+      const printerJobs = Array.from(this.activeJobs.values()).filter(j => j.printerName === printer.name);
+      
+      const currentJob = printerJobs.find(j => 
+        j.printStatus === 'PRINTING' || j.printStatus === 'DOWNLOADING' || j.printStatus === 'SUBMITTED_TO_SPOOLER'
+      );
+
+      const waitingJobsList = printerJobs
+        .filter(j => j.printStatus === 'QUEUED' || j.printStatus === 'ASSIGNED' || j.printStatus === 'PAUSED')
+        .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+      const waitingQueue: PrinterQueueItem[] = waitingJobsList.map((job, idx) => ({
+        queuePosition: idx + 1,
+        job
+      }));
+
+      const completedCount = allStoredJobs.filter(j => j.printerName === printer.name && j.printStatus === 'COMPLETED').length;
+      const failedCount = allStoredJobs.filter(j => j.printerName === printer.name && (j.printStatus === 'FAILED' || j.printStatus === 'CANCELLED')).length;
+
+      let status: 'READY' | 'PRINTING' | 'OFFLINE' | 'PAUSED' | 'BUSY' | 'ERROR' = 'READY';
+      if (!printer.isOnline || printer.status === 'OFFLINE') {
+        status = 'OFFLINE';
+      } else if (isPaused) {
+        status = 'PAUSED';
+      } else if (currentJob) {
+        status = 'PRINTING';
+      } else if (printer.status === 'BUSY' || printer.status === 'ERROR') {
+        status = printer.status;
+      }
+
+      return {
+        printerName: printer.name,
+        displayName: printer.displayName || printer.name,
+        isOnline: printer.isOnline,
+        status,
+        isQueuePaused: isPaused,
+        physicalDeviceId,
+        capabilities: {
+          paperSizes: printer.capabilities?.paperSizes || ['A4'],
+          supportsColor: printer.capabilities?.supportsColor ?? null,
+          supportsDuplex: printer.capabilities?.supportsDuplex ?? null
+        },
+        currentJob,
+        waitingQueue,
+        completedCount,
+        failedCount
+      };
+    });
+  }
+
+  private notifyQueueStateChanged(): void {
+    if (this.onQueueStateChangeListener) {
+      try {
+        const queues = this.getPrinterQueues();
+        this.onQueueStateChangeListener(queues);
+      } catch {
+        // Ignore listener errors
+      }
+    }
+  }
+
   private notify(job: PrintJobItem): void {
     localVault.saveJob(job);
+    this.notifyQueueStateChanged();
     if (this.onJobUpdateListener) {
       try {
         this.onJobUpdateListener(job);
@@ -76,13 +216,9 @@ export class JobQueueManager {
   }
 
   /**
-   * Intelligent printer routing: selects best eligible online registered printer
-   * based on capabilities (color, paper size, duplex) and queue load.
-   */
-  /**
    * Smart Automatic Load Balancing routing algorithm:
    * Selects best eligible online registered printer based on strategy,
-   * capabilities, availability, and least estimated workload.
+   * capabilities, availability, pause state, and least estimated workload.
    */
   private selectEligiblePrinter(job: PrintJobItem): string | null {
     const config = localVault.getConfig();
@@ -95,8 +231,8 @@ export class JobQueueManager {
       printer.isOnline &&
       registeredNames.includes(printer.name) &&
       !disabledNames.includes(printer.name) &&
-      printer.status !== 'OFFLINE' &&
-      printer.status !== 'PAUSED'
+      !this.printerPaused.get(printer.name) &&
+      printer.status !== 'OFFLINE'
     );
 
     if (availablePrinters.length === 0) return null;
@@ -136,7 +272,7 @@ export class JobQueueManager {
 
     for (const j of this.activeJobs.values()) {
       if (j.printerName && printerWorkloadPages.has(j.printerName) && ['PRINTING', 'DOWNLOADING', 'ASSIGNED', 'QUEUED'].includes(j.printStatus)) {
-        const pages = j.files.reduce((acc, f) => acc + ((f.pageCount || f.estimatedPages || 1) * (f.copies || 1)), 0);
+        const pages = j.files.reduce((acc, f) => acc + ((f.pageCount || 1) * (f.copies || 1)), 0);
         printerWorkloadPages.set(j.printerName, (printerWorkloadPages.get(j.printerName) || 0) + pages);
         printerJobCounts.set(j.printerName, (printerJobCounts.get(j.printerName) || 0) + 1);
       }
@@ -161,12 +297,11 @@ export class JobQueueManager {
         if (isReadyA !== isReadyB) return isReadyA - isReadyB;
         if (workloadA !== workloadB) return workloadA - workloadB;
       } else {
-        // Default: CAPABILITY_LEAST_WORKLOAD (Capability-Based + Least Estimated Workload)
+        // Default: CAPABILITY_LEAST_WORKLOAD
         if (workloadA !== workloadB) return workloadA - workloadB;
         if (countA !== countB) return countA - countB;
       }
 
-      // Deterministic tie-breaking: default printer priority, then alphabetical name
       if (a.isDefault && !b.isDefault) return -1;
       if (!a.isDefault && b.isDefault) return 1;
       return a.name.localeCompare(b.name);
@@ -199,7 +334,7 @@ export class JobQueueManager {
       if (!printerName) continue; // Keep queued until a compatible printer comes online
 
       job.printerName = printerName;
-      if (!this.printerProcessing.get(printerName)) {
+      if (!this.printerProcessing.get(printerName) && !this.printerPaused.get(printerName)) {
         this.printerProcessing.set(printerName, true);
         void this.processPrinterQueue(printerName);
       }
@@ -208,11 +343,13 @@ export class JobQueueManager {
 
   /**
    * Processes the queue for a specific printer sequentially (concurrency = 1 per physical printer)
-   * while allowing other printers to run concurrently.
+   * while allowing other physical printers to run concurrently.
    */
   private async processPrinterQueue(printerName: string): Promise<void> {
     try {
       while (true) {
+        if (this.printerPaused.get(printerName)) break;
+
         // Find next queued job assigned to this printer
         const nextJob = Array.from(this.activeJobs.values()).find(
           (j) => (j.printStatus === 'QUEUED' || j.printStatus === 'ASSIGNED') && j.printerName === printerName
@@ -224,6 +361,7 @@ export class JobQueueManager {
       }
     } finally {
       this.printerProcessing.set(printerName, false);
+      this.notifyQueueStateChanged();
     }
   }
 
@@ -231,6 +369,14 @@ export class JobQueueManager {
     logger.info('AGENT', `Starting processing for print order ${job.id} on printer "${printerName}"`);
     const tempFilePaths: string[] = [];
     let spoolAttempted = false;
+    const physicalId = this.getPhysicalDeviceId(printerName);
+
+    // Enforce physical-device lock across logical printer aliases
+    while (this.physicalDeviceProcessing.has(physicalId) && this.physicalDeviceProcessing.get(physicalId) !== job.id) {
+      logger.info('QUEUE', `Physical hardware "${physicalId}" is active; waiting for lock release...`);
+      await new Promise((resolve) => setTimeout(resolve, 600));
+    }
+    this.physicalDeviceProcessing.set(physicalId, job.id);
 
     try {
       // 1. Claim on cloud backend atomically if not already claimed
@@ -251,8 +397,12 @@ export class JobQueueManager {
       job.updatedAt = new Date().toISOString();
       this.notify(job);
 
-      const downloading = await this.apiClient.updateJobStatus(job.id, 'DOWNLOADING', undefined, printerName);
-      if (!downloading.success) throw new Error(downloading.error || 'Could not persist downloading status.');
+      outboxManager.enqueue({
+        jobId: job.id,
+        eventType: 'document_download_started',
+        status: 'DOWNLOADING',
+        printerName
+      });
 
       if (!job.files || job.files.length === 0) throw new Error('Print job contains no documents.');
 
@@ -287,14 +437,25 @@ export class JobQueueManager {
         this.activeDownloadsCount--;
       }
 
+      outboxManager.enqueue({
+        jobId: job.id,
+        eventType: 'document_download_completed',
+        status: 'DOWNLOADING',
+        printerName
+      });
+
       // 4. Mark PRINTING (Spooling to Windows Printer)
       job.printStatus = 'PRINTING';
       job.printProgress = undefined;
       job.updatedAt = new Date().toISOString();
       this.notify(job);
 
-      const printing = await this.apiClient.updateJobStatus(job.id, 'PRINTING', undefined, printerName);
-      if (!printing.success) throw new Error(printing.error || 'Could not persist printing status.');
+      outboxManager.enqueue({
+        jobId: job.id,
+        eventType: 'print_submission_started',
+        status: 'PRINTING',
+        printerName
+      });
 
       const config = localVault.getConfig();
       let pagesPrinted = 0;
@@ -308,13 +469,18 @@ export class JobQueueManager {
           config.spoolerTimeoutMs
         );
         spoolAttempted = spoolAttempted || spoolResult.submitted;
-        if (!spoolResult.success) {
+        if (spoolResult.spoolerJobId) {
+          job.spoolerJobId = spoolResult.spoolerJobId;
+        }
+
+        if (!spoolResult.success && !spoolResult.submitted) {
           throw new Error(spoolResult.error || `Windows spooler rejected ${file.fileName}.`);
         }
         pagesPrinted += file.pageCount * file.copies;
       }
 
-      // 5. Mark COMPLETED
+      // 5. Physical print succeeded! Immediately persist completion locally
+      job.spoolSubmittedAt = new Date().toISOString();
       job.printStatus = 'COMPLETED';
       job.errorMessage = undefined;
       job.retrySafe = false;
@@ -322,42 +488,54 @@ export class JobQueueManager {
       job.updatedAt = new Date().toISOString();
       this.notify(job);
 
-      const completed = await this.apiClient.updateJobStatus(
-        job.id,
-        'COMPLETED',
-        undefined,
+      // Queue durable status synchronization to backend
+      outboxManager.enqueue({
+        jobId: job.id,
+        eventType: 'spooler_job_completed',
+        status: 'COMPLETED',
+        spoolerJobId: job.spoolerJobId,
         printerName,
-        false,
+        retrySafe: false,
         pagesPrinted
-      );
-      if (!completed.success) throw new Error(completed.error || 'Could not persist completed print outcome.');
+      });
 
-      logger.info('AGENT', `Successfully completed physical print job ${job.id} on "${printerName}"`);
+      logger.info('AGENT', `Physical printing successfully completed for job ${job.id} on "${printerName}". Spooler Job ID: ${job.spoolerJobId || 'assigned'}`);
       this.activeJobs.delete(job.id);
     } catch (err: any) {
       const errorMessage = err instanceof Error ? err.message : 'Unknown print error';
-      logger.error('AGENT', `Failed print job ${job.id} on "${printerName}": ${errorMessage}`);
+      logger.error('AGENT', `Print pipeline error for job ${job.id} on "${printerName}": ${errorMessage}`);
 
-      job.printStatus = spoolAttempted ? 'MANUAL_ATTENTION' : 'FAILED';
-      job.errorMessage = spoolAttempted
-        ? `Print outcome uncertain. Check printer output before reprinting. ${errorMessage}`
-        : errorMessage;
-      job.retrySafe = !spoolAttempted;
+      if (spoolAttempted) {
+        job.printStatus = 'AWAITING_RECONCILIATION';
+        job.errorMessage = `Document submitted to printer. Verification required: ${errorMessage}`;
+        job.retrySafe = false;
+      } else {
+        job.printStatus = 'FAILED';
+        job.errorMessage = errorMessage;
+        job.retrySafe = true;
+      }
+
       job.updatedAt = new Date().toISOString();
       this.notify(job);
 
-      await this.apiClient.updateJobStatus(
-        job.id,
-        spoolAttempted ? 'REQUIRES_ATTENTION' : 'FAILED',
-        job.errorMessage,
+      // Enqueue the terminal status into outbox
+      outboxManager.enqueue({
+        jobId: job.id,
+        eventType: spoolAttempted ? 'spooler_submission_accepted' : 'backend_status_sync_failed',
+        status: job.printStatus,
+        spoolerJobId: job.spoolerJobId,
+        errorMessage: job.errorMessage,
         printerName,
-        !spoolAttempted
-      ).catch(() => {});
+        retrySafe: job.retrySafe
+      });
 
       if (spoolAttempted) {
-        this.activeJobs.delete(job.id); // Remove from queue if attention is required to prevent loop
+        this.activeJobs.delete(job.id); // Prevent re-execution loop
       }
     } finally {
+      if (this.physicalDeviceProcessing.get(physicalId) === job.id) {
+        this.physicalDeviceProcessing.delete(physicalId);
+      }
       // Clean up temp files safely
       for (const filePath of tempFilePaths) {
         try {

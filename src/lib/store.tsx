@@ -209,6 +209,7 @@ interface AppContextType {
   }) => PrintJob;
   simulateCustomerPrintJob: (shopId?: string) => PrintJob;
   updateJobStatus: (jobId: string, printStatus: PrintStatus, paymentStatus?: PaymentStatus) => void;
+  reconcileJob: (jobId: string, action: 'CONFIRM_PRINTED' | 'CONFIRM_NOT_PRINTED' | 'INVESTIGATE', notes?: string) => Promise<{ success: boolean; error?: string }>;
 
   // Pricing Rules
   pricingRules: PricingRule[];
@@ -1692,6 +1693,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             printStatus: job.printStatus,
             paymentMethod: 'Razorpay Online Payment',
             assignedPrinterName: job.printerName,
+            spoolerJobId: job.spoolerJobId,
+            spoolSubmittedAt: job.spoolSubmittedAt,
+            reconciledAt: job.reconciledAt,
+            reconciliationAction: job.reconciliationAction,
+            reconciliationNotes: job.reconciliationNotes,
             notes: job.errorMessage,
             createdAt: job.createdAt,
             updatedAt: job.updatedAt,
@@ -1875,6 +1881,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setStoredItem('print_jobs', next);
       return next;
     });
+  };
+
+  const reconcileJob = async (
+    jobId: string,
+    action: 'CONFIRM_PRINTED' | 'CONFIRM_NOT_PRINTED' | 'INVESTIGATE',
+    notes?: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    const targetJob = printJobs.find((j) => j.id === jobId);
+    const shopId = targetJob?.shopId || activeShop.id;
+    try {
+      const response = await fetch(apiUrl(`/api/shops/${encodeURIComponent(shopId)}/print-jobs/${encodeURIComponent(jobId)}/reconcile`), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-shop-id': shopId,
+          'x-user-role': currentUser?.role || 'SHOP_OWNER'
+        },
+        body: JSON.stringify({ action, notes })
+      });
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        showToast('Reconciliation Failed', data.error || 'Server error', 'error', 4000);
+        return { success: false, error: data.error };
+      }
+
+      const newStatus = action === 'CONFIRM_PRINTED' ? 'COMPLETED' : action === 'CONFIRM_NOT_PRINTED' ? 'FAILED' : 'AWAITING_RECONCILIATION';
+      setPrintJobs((prev) => {
+        const next = prev.map((j) => (j.id === jobId ? {
+          ...j,
+          printStatus: newStatus as any,
+          reconciledAt: new Date().toISOString(),
+          reconciliationAction: action,
+          reconciliationNotes: notes || j.reconciliationNotes,
+          updatedAt: new Date().toISOString()
+        } : j));
+        setStoredItem('print_jobs', next);
+        return next;
+      });
+      showToast('Status Reconciled', `Job #${jobId} status updated to ${newStatus}.`, 'success', 3500);
+      return { success: true };
+    } catch (err: any) {
+      showToast('Network Error', err.message || 'Could not reconcile print status.', 'error', 4000);
+      return { success: false, error: err.message };
+    }
   };
 
   const updatePricingRule = (ruleId: string, pricePerPage: number) => {
@@ -2635,6 +2685,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         createPrintJob,
         simulateCustomerPrintJob,
         updateJobStatus,
+        reconcileJob,
         pricingRules,
         updatePricingRule,
         savePricingRules,

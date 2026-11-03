@@ -16,11 +16,14 @@ export type JobPrintStatus =
   | 'ASSIGNED'
   | 'DOWNLOADING'
   | 'PRINTING'
+  | 'SUBMITTED_TO_SPOOLER'
   | 'COMPLETED'
   | 'FAILED'
   | 'CANCELLED'
+  | 'PAUSED'
   | 'MANUAL_ATTENTION'
-  | 'REQUIRES_ATTENTION';
+  | 'REQUIRES_ATTENTION'
+  | 'AWAITING_RECONCILIATION';
 
 export interface ShopDetails {
   shopId: string;
@@ -127,6 +130,13 @@ export interface PrintJobItem {
   retrySafe?: boolean;
   pagesPrinted?: number;
   printerName?: string;
+  spoolerJobId?: string | number;
+  spoolSubmittedAt?: string;
+  reconciledAt?: string;
+  reconciliationAction?: 'CONFIRM_PRINTED' | 'CONFIRM_NOT_PRINTED' | 'INVESTIGATE';
+  reconciliationNotes?: string;
+  assignmentReason?: string;
+  outboxPending?: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -146,7 +156,7 @@ export interface AgentLogEntry {
   id: string;
   timestamp: string;
   level: 'INFO' | 'WARN' | 'ERROR' | 'DEBUG';
-  category: 'AGENT' | 'SPOOLER' | 'NETWORK' | 'AUTH' | 'RECOVERY' | 'STORAGE';
+  category: 'AGENT' | 'SPOOLER' | 'NETWORK' | 'AUTH' | 'RECOVERY' | 'STORAGE' | 'QUEUE';
   message: string;
   details?: Record<string, any>;
 }
@@ -156,6 +166,29 @@ export interface TestPrintResult {
   jobId?: string;
   printerName: string;
   message: string;
+}
+
+export interface PrinterQueueItem {
+  queuePosition: number;
+  job: PrintJobItem;
+}
+
+export interface PrinterQueueState {
+  printerName: string;
+  displayName: string;
+  isOnline: boolean;
+  status: 'READY' | 'PRINTING' | 'OFFLINE' | 'PAUSED' | 'BUSY' | 'ERROR';
+  isQueuePaused: boolean;
+  physicalDeviceId: string;
+  capabilities: {
+    paperSizes: string[];
+    supportsColor: boolean | null;
+    supportsDuplex: boolean | null;
+  };
+  currentJob?: PrintJobItem;
+  waitingQueue: PrinterQueueItem[];
+  completedCount: number;
+  failedCount: number;
 }
 
 export interface ElectronAgentAPI {
@@ -184,8 +217,11 @@ export interface ElectronAgentAPI {
   resetPrinterConfig?: (printerName: string) => Promise<{ success: boolean; config?: StoredPrinterConfig; error?: string }>;
   getPrinterDetectionDetails?: (printerName: string) => Promise<{ success: boolean; hardware?: HardwareCapabilities; error?: string }>;
   
-  // Jobs Queue
+  // Jobs Queue & Per-Printer Queue Management
   getJobs: () => Promise<PrintJobItem[]>;
+  getPrinterQueues: () => Promise<PrinterQueueState[]>;
+  pausePrinterQueue: (printerName: string) => Promise<{ success: boolean; error?: string }>;
+  resumePrinterQueue: (printerName: string) => Promise<{ success: boolean; error?: string }>;
   pollNow: () => Promise<{ success: boolean; newJobsCount: number; error?: string }>;
   reprintJob: (jobId: string) => Promise<{ success: boolean; error?: string }>;
   cancelJob: (jobId: string) => Promise<{ success: boolean; error?: string }>;
@@ -210,6 +246,7 @@ export interface ElectronAgentAPI {
   onLogAdded: (callback: (log: AgentLogEntry) => void) => () => void;
   onPrintersUpdated: (callback: (printers: DiscoveredPrinter[]) => void) => () => void;
   onPrinterScanningChanged?: (callback: (isScanning: boolean) => void) => () => void;
+  onQueueStateChanged?: (callback: (queues: PrinterQueueState[]) => void) => () => void;
   copyText: (text: string) => Promise<boolean>;
 }
 

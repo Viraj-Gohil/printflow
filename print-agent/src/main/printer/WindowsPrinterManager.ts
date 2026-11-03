@@ -3,7 +3,13 @@ import util from 'util';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { BrowserWindow } from 'electron';
+let BrowserWindow: any;
+try {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  BrowserWindow = require('electron').BrowserWindow;
+} catch {
+  BrowserWindow = undefined;
+}
 import { DiscoveredPrinter, PrintFileItem, TestPrintResult } from '../../renderer/types/agent.js';
 import { PrintSettingsAdapter } from './PrintSettingsAdapter.js';
 import { printerCapabilityDetector } from './engine/PrinterCapabilityDetector.js';
@@ -44,7 +50,7 @@ export class WindowsPrinterManager {
   /**
    * Optimized discovery: separates full hardware capability detection from lightweight status polling.
    */
-  public async discoverPrinters(mainWindow?: BrowserWindow | null, forceFull = false): Promise<DiscoveredPrinter[]> {
+  public async discoverPrinters(mainWindow?: any | null, forceFull = false): Promise<DiscoveredPrinter[]> {
     if (this.activeScanPromise) {
       this.metrics.skippedScansCount++;
       logger.info('SPOOLER', 'Discovery scan already in progress, returning existing scan operation (skipped duplicate).');
@@ -223,7 +229,7 @@ export class WindowsPrinterManager {
     tempFilePath: string,
     targetPrinterName?: string,
     timeoutMs = 30000
-  ): Promise<{ success: boolean; submitted: boolean; error?: string }> {
+  ): Promise<{ success: boolean; submitted: boolean; spoolerJobId?: string | number; error?: string }> {
     if (this.cachedPrinters.length === 0) {
       await this.discoverPrinters(null, true);
     }
@@ -276,6 +282,7 @@ export class WindowsPrinterManager {
     return {
       success: printResult.success,
       submitted: printResult.submitted,
+      spoolerJobId: printResult.spoolerJobId,
       error: printResult.error
     };
   }

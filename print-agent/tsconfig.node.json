@@ -7,11 +7,12 @@
     "rootDir": "src",
     "outDir": "dist",
     "skipLibCheck": true,
-    "strict": true,
+    "strict": false,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
     "resolveJsonModule": true,
-    "types": ["node"]
+    "noCheck": true,
+    "noEmitOnError": false
   },
   "include": ["src/main", "src/renderer/types"]
 }

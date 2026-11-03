@@ -209,6 +209,7 @@ export class WindowsSpoolerAdapter implements IPrinterAdapter {
       success: result.success,
       submitted: result.submitted,
       jobId: result.jobId,
+      spoolerJobId: result.spoolerJobId,
       adapterName: this.adapterName,
       error: result.errorMessage
     };

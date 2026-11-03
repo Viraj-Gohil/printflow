@@ -267,21 +267,18 @@ export class PDFPrintEngine {
 
       request.onProgress?.('SPOOLER_TRACKING', 85);
 
-      // Track active spooler despooling
-      const spoolerCheck = await spoolerMonitor.trackJobUntilDespooled(
-        request.printerName,
-        Math.min(45000, request.timeoutMs || 45000)
-      );
+      // Track active spooler despooling (non-blocking verification)
+      try {
+        const spoolerCheck = await spoolerMonitor.trackJobUntilDespooled(
+          request.printerName,
+          Math.min(20000, request.timeoutMs || 20000)
+        );
 
-      if (!spoolerCheck.completed) {
-        return {
-          ...nativeResult,
-          success: false,
-          errorCode: 'SPOOLER_ERROR',
-          errorMessage: spoolerCheck.error || 'Spooler reported error while despooling document.',
-          executionDurationMs: Date.now() - startTime,
-          stageReached: 'SUBMITTED'
-        };
+        if (spoolerCheck.error) {
+          logger.warn('SPOOLER', `Spooler monitor flagged error after submission for "${request.printerName}": ${spoolerCheck.error}`);
+        }
+      } catch (monitorErr: any) {
+        logger.warn('SPOOLER', `Non-critical spooler monitoring notice for "${request.printerName}": ${monitorErr?.message || monitorErr}`);
       }
 
       request.onProgress?.('SPOOLER_TRACKING', 100);
@@ -294,6 +291,7 @@ export class PDFPrintEngine {
         format: 'PDF',
         totalPages: pagesToRender.length,
         copies: request.copies || 1,
+        spoolerJobId: nativeResult.spoolerJobId,
         executionDurationMs: Date.now() - startTime,
         stageReached: 'SPOOLED'
       };

@@ -34,6 +34,7 @@ export interface PrintExecutionResult {
   submitted: boolean;
   error?: string;
   jobId?: string;
+  spoolerJobId?: string | number;
   adapterName: string;
 }
 

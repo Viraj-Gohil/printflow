@@ -180,6 +180,32 @@ export const JobStatusBadge: React.FC<{ status: JobPrintStatus; className?: stri
           <span>Queued</span>
         </span>
       );
+    case 'SUBMITTED_TO_SPOOLER':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-cyan-50 text-cyan-800 border border-cyan-200 dark:bg-cyan-950/40 dark:text-cyan-300 dark:border-cyan-800',
+            className
+          )}
+        >
+          <Printer className="w-3.5 h-3.5 text-cyan-600" />
+          <span>Spooler Accepted</span>
+        </span>
+      );
+    case 'AWAITING_RECONCILIATION':
+      return (
+        <span
+          className={cn(
+            'inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium',
+            'bg-amber-50 text-amber-800 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800',
+            className
+          )}
+        >
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
+          <span>Awaiting Verification</span>
+        </span>
+      );
     case 'MANUAL_ATTENTION':
     case 'REQUIRES_ATTENTION':
       return (
