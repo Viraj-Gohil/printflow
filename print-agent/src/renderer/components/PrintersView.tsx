@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { AgentConfig, DiscoveredPrinter, TestPrintResult } from '../types/agent';
+import React, { useState, useMemo } from 'react';
+import { AgentConfig, DiscoveredPrinter, TestPrintResult, PlanEntitlements } from '../types/agent';
 import {
   Printer,
   RefreshCw,
@@ -13,14 +13,20 @@ import {
   Power,
   PowerOff,
   Sliders,
-  Settings2
+  Lock,
+  ArrowUpRight,
+  Sparkles,
+  Wifi,
+  Laptop
 } from 'lucide-react';
 import { PrinterConfigModal } from './PrinterConfigModal.js';
+import { PrinterDriverSetupModal } from './PrinterDriverSetupModal.js';
 
 interface PrintersViewProps {
   printers: DiscoveredPrinter[];
   config: AgentConfig;
   isScanning: boolean;
+  entitlements?: PlanEntitlements | null;
   onRescan: () => void;
   onTestPrint: (printerName: string) => Promise<TestPrintResult>;
   onSelectPrinter: (printerName: string) => void;
@@ -32,6 +38,7 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
   printers,
   config,
   isScanning,
+  entitlements,
   onRescan,
   onTestPrint,
   onSelectPrinter,
@@ -42,9 +49,43 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
   const [registeringPrinter, setRegisteringPrinter] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<TestPrintResult | null>(null);
   const [configModalPrinter, setConfigModalPrinter] = useState<DiscoveredPrinter | null>(null);
+  const [isSetupWizardOpen, setIsSetupWizardOpen] = useState(false);
+
   const registeredNames = config.registeredPrinterNames || [];
   const printerLimit = config.printerLimit ?? 1;
   const isLimitReached = registeredNames.length >= printerLimit;
+
+  // Separate physical printers from virtual drivers (PDF, XPS, Fax, OneNote)
+  const physicalPrinters = useMemo(() => {
+    return printers.filter((p) => {
+      const name = (p.name || p.displayName || '').toLowerCase();
+      return !name.includes('pdf') && !name.includes('xps') && !name.includes('onenote') && !name.includes('fax');
+    });
+  }, [printers]);
+
+  const virtualPrinters = useMemo(() => {
+    return printers.filter((p) => {
+      const name = (p.name || p.displayName || '').toLowerCase();
+      return name.includes('pdf') || name.includes('xps') || name.includes('onenote') || name.includes('fax');
+    });
+  }, [printers]);
+
+  const counts = useMemo(() => {
+    const totalPhysical = physicalPrinters.length;
+    const onlinePhysical = physicalPrinters.filter((p) => p.isOnline).length;
+    const offlinePhysical = totalPhysical - onlinePhysical;
+    const registeredCount = registeredNames.length;
+    const unregisteredCount = physicalPrinters.filter((p) => !registeredNames.includes(p.name)).length;
+
+    return {
+      totalPhysical,
+      onlinePhysical,
+      offlinePhysical,
+      registeredCount,
+      unregisteredCount,
+      virtualCount: virtualPrinters.length
+    };
+  }, [physicalPrinters, virtualPrinters, registeredNames]);
 
   const handleSavePrinterConfig = async (printerName: string, ownerConfig: any) => {
     if (window.electronAgentAPI?.savePrinterOwnerConfig) {
@@ -103,74 +144,189 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
   };
 
   return (
-    <div className="space-y-6 animate-fade-in">
-      {/* Top Controls Bar */}
-      <div className="pf-card p-6 border border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-2xl shadow-card flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+    <div className="space-y-6 animate-fade-in font-sans">
+      {/* 2. PAGE HEADER */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-[#E1E7E1] dark:border-slate-800">
         <div>
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <h2 className="text-base font-bold text-[#0F172A] dark:text-white">
-              Installed Windows Printers ({printers.length})
-            </h2>
-            <span
-              className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full border ${
-                registeredNames.length > 0
-                  ? 'bg-[#EFF6FF] text-[#1D4ED8] border-[#BFDBFE] dark:bg-blue-950/40 dark:text-blue-300 dark:border-blue-800'
-                  : 'bg-[#FEF2F2] text-[#B91C1C] border-[#FECACA] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800'
-              }`}
-            >
-              Registered for Shop: {registeredNames.length} / {printerLimit || 1} Allowed
-            </span>
-            {isLimitReached && (
-              <span className="text-[10.5px] font-medium text-[#64748B] dark:text-slate-400">
-                (Subscription plan capacity reached)
-              </span>
-            )}
-          </div>
-          <p className="text-xs text-[#64748B] dark:text-slate-400 mt-1">
-            Real physical and network printers discovered via Windows Print Spooler. Registered printers are synchronized with PrintFlow and receive incoming customer orders.
+          <h1 className="text-[24px] font-bold text-[#111111] dark:text-white tracking-tight leading-tight">
+            Printers
+          </h1>
+          <p className="text-[14px] text-[#646B65] dark:text-slate-400 mt-1">
+            Discover, configure and manage physical printers connected to this Windows workstation.
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={onRescan}
-          disabled={isScanning}
-          className="primary-button text-xs font-semibold shrink-0 cursor-pointer"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-          <span>{isScanning ? 'Discovering Devices...' : 'Refresh Hardware'}</span>
-        </button>
+        <div className="flex items-center gap-2.5 shrink-0 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setIsSetupWizardOpen(true)}
+            className="primary-button !min-h-[34px] !py-1.5 !px-3.5 text-xs font-semibold cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5" />
+            <span>Driver Setup Assistant</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={onRescan}
+            disabled={isScanning}
+            className="secondary-button !min-h-[34px] !py-1.5 !px-3.5 text-xs font-semibold cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 text-[#00B32D] ${isScanning ? 'animate-spin' : ''}`} />
+            <span>{isScanning ? 'Discovering...' : 'Refresh Hardware'}</span>
+          </button>
+        </div>
       </div>
 
-      {/* Discovery Loading Indicator */}
-      {isScanning && (
-        <div className="p-3.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800 rounded-xl text-xs text-blue-700 dark:text-blue-300 flex items-center justify-between animate-pulse">
-          <div className="flex items-center gap-2.5">
-            <RefreshCw className="w-4 h-4 animate-spin text-blue-600 dark:text-blue-400" />
-            <span className="font-medium">Discovering installed Windows printers and status...</span>
+      {/* 3. PRINTER OVERVIEW SUMMARY CARDS */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
+        {/* Metric 1: Physical Printers */}
+        <div className="pf-card p-4 border border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-[10px] shadow-card">
+          <span className="text-[12px] font-semibold text-[#646B65] dark:text-slate-400 block">Physical Printers</span>
+          <div className="flex items-center justify-between mt-1.5">
+            <span className="text-[28px] font-bold text-[#111111] dark:text-white font-mono leading-none">
+              {counts.totalPhysical}
+            </span>
+            <div className="w-7 h-7 rounded-md bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center">
+              <Printer className="w-3.5 h-3.5 stroke-[2]" />
+            </div>
           </div>
-          <span className="text-[11px] opacity-80 font-semibold px-2 py-0.5 bg-blue-100 dark:bg-blue-900/60 rounded-full">Auto Discovery Active</span>
+          <span className="text-[11px] text-[#646B65] dark:text-slate-400 mt-2 block truncate">
+            {counts.virtualCount} Virtual Drivers Excluded
+          </span>
+        </div>
+
+        {/* Metric 2: Registered for Shop */}
+        <div className="pf-card p-4 border border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-[10px] shadow-card">
+          <span className="text-[12px] font-semibold text-[#646B65] dark:text-slate-400 block">Registered for Shop</span>
+          <div className="flex items-center justify-between mt-1.5">
+            <span className="text-[28px] font-bold text-[#111111] dark:text-white font-mono leading-none">
+              {counts.registeredCount} / {printerLimit}
+            </span>
+            <div className="w-7 h-7 rounded-md bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center">
+              <ShieldCheck className="w-3.5 h-3.5 stroke-[2]" />
+            </div>
+          </div>
+          <span className="text-[11px] text-[#008F25] font-semibold mt-2 block truncate">
+            {isLimitReached ? 'Plan Limit Reached' : `${printerLimit - counts.registeredCount} Slot(s) Free`}
+          </span>
+        </div>
+
+        {/* Metric 3: Online Printers */}
+        <div className="pf-card p-4 border border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-[10px] shadow-card">
+          <span className="text-[12px] font-semibold text-[#646B65] dark:text-slate-400 block">Online &amp; Ready</span>
+          <div className="flex items-center justify-between mt-1.5">
+            <span className="text-[28px] font-bold text-[#111111] dark:text-white font-mono leading-none">
+              {counts.onlinePhysical}
+            </span>
+            <div className="w-7 h-7 rounded-md bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center">
+              <CheckCircle2 className="w-3.5 h-3.5 stroke-[2]" />
+            </div>
+          </div>
+          <span className="text-[11px] text-[#008F25] font-semibold mt-2 block truncate">
+            Ready to Spool
+          </span>
+        </div>
+
+        {/* Metric 4: Offline Printers */}
+        <div className="pf-card p-4 border border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-[10px] shadow-card">
+          <span className="text-[12px] font-semibold text-[#646B65] dark:text-slate-400 block">Offline Devices</span>
+          <div className="flex items-center justify-between mt-1.5">
+            <span className="text-[28px] font-bold text-[#111111] dark:text-white font-mono leading-none">
+              {counts.offlinePhysical}
+            </span>
+            <div className="w-7 h-7 rounded-md bg-[#FEF2F2] text-[#DC2626] flex items-center justify-center">
+              <PowerOff className="w-3.5 h-3.5 stroke-[2]" />
+            </div>
+          </div>
+          <span className={`text-[11px] font-semibold mt-2 block truncate ${
+            counts.offlinePhysical > 0 ? 'text-[#DC2626]' : 'text-[#848D86]'
+          }`}>
+            {counts.offlinePhysical > 0 ? 'Power or Cable Check' : 'Zero Devices Offline'}
+          </span>
+        </div>
+
+        {/* Metric 5: Unregistered / Attention */}
+        <div className="pf-card p-4 border border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-[10px] shadow-card">
+          <span className="text-[12px] font-semibold text-[#646B65] dark:text-slate-400 block">Unregistered</span>
+          <div className="flex items-center justify-between mt-1.5">
+            <span className="text-[28px] font-bold text-[#111111] dark:text-white font-mono leading-none">
+              {counts.unregisteredCount}
+            </span>
+            <div className="w-7 h-7 rounded-md bg-[#FFFBEB] text-[#E6A000] flex items-center justify-center">
+              <ShieldAlert className="w-3.5 h-3.5 stroke-[2]" />
+            </div>
+          </div>
+          <span className="text-[11px] text-[#E6A000] font-semibold mt-2 block truncate">
+            Local Windows Devices
+          </span>
+        </div>
+      </div>
+
+      {/* 4. DISCOVERY LOADING BAR */}
+      {isScanning && (
+        <div className="p-3.5 rounded-[10px] bg-[#E8F8EC] border border-[#BCEAC4] text-[#008F25] dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300 text-xs flex items-center justify-between animate-pulse">
+          <div className="flex items-center gap-2.5">
+            <RefreshCw className="w-4 h-4 animate-spin text-[#00B32D]" />
+            <span className="font-semibold">Discovering installed Windows Win32 printers and hardware capabilities...</span>
+          </div>
+          <span className="text-[11px] font-bold px-2.5 py-0.5 bg-[#BCEAC4] text-[#008F25] rounded-full">Hardware Scan Active</span>
         </div>
       )}
 
-      {/* Test Print Result Toast */}
+      {/* PLAN CAPACITY WARNING */}
+      {isLimitReached && (
+        <div className="p-4 rounded-[10px] bg-[#E8F8EC] border border-[#BCEAC4] text-xs text-[#111111] dark:bg-emerald-950/30 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-card">
+          <div className="flex items-start gap-3">
+            <div className="w-8 h-8 rounded-lg bg-[#BCEAC4] text-[#008F25] flex items-center justify-center shrink-0 mt-0.5">
+              <Lock className="w-4 h-4" />
+            </div>
+            <div>
+              <p className="font-bold text-[#111111] dark:text-white">
+                Printer Connection Limit Reached ({registeredNames.length} / {printerLimit} Slots Used)
+              </p>
+              <p className="text-[#646B65] dark:text-slate-400 mt-0.5">
+                Your current {entitlements?.planName || config.shopDetails?.planName || 'Starter'} plan allows up to {printerLimit} printer connection(s). Upgrade to Growth (5 printers) or Business (10 printers) to register additional counter machines.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              const server = (config.serverUrl || 'https://printflow.devpixel.space').replace(/\/+$/, '');
+              const url = `${server}/shop/subscription`;
+              if (window.electronAgentAPI?.openExternal) {
+                window.electronAgentAPI.openExternal(url);
+              } else {
+                window.open(url, '_blank');
+              }
+            }}
+            className="primary-button !min-h-[32px] !text-xs font-semibold shrink-0 cursor-pointer"
+          >
+            <ArrowUpRight className="w-3.5 h-3.5" />
+            <span>Upgrade Subscription</span>
+          </button>
+        </div>
+      )}
+
+      {/* TEST PRINT RESULT TOAST */}
       {testResult && (
         <div
-          className={`p-4 rounded-xl border text-xs flex items-center justify-between gap-3 animate-fade-in ${
+          className={`p-3.5 rounded-[10px] border text-xs flex items-center justify-between gap-3 animate-fade-in ${
             testResult.success
-              ? 'bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-              : 'bg-[#FEF2F2] border-[#FECACA] text-[#991B1B] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800'
+              ? 'bg-[#E8F8EC] border-[#BCEAC4] text-[#008F25] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+              : 'bg-[#FEF2F2] border-[#FECACA] text-[#B91C1C] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800'
           }`}
         >
           <div className="flex items-center gap-2.5">
             {testResult.success ? (
-              <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0" />
+              <CheckCircle2 className="w-4 h-4 text-[#00B32D] shrink-0" />
             ) : (
-              <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0" />
+              <AlertCircle className="w-4 h-4 text-[#DC2626] shrink-0" />
             )}
             <div>
-              <span className="font-semibold">{testResult.message}</span>
-              <p className="text-[11px] opacity-80 mt-0.5">Target: {testResult.printerName}</p>
+              <span className="font-bold">{testResult.message}</span>
+              <p className="text-[11px] opacity-80 mt-0.5 font-mono">Target: {testResult.printerName}</p>
             </div>
           </div>
           <button
@@ -183,31 +339,41 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
         </div>
       )}
 
-      {/* Empty State when no printers detected */}
+      {/* EMPTY STATE */}
       {printers.length === 0 && (
-        <div className="pf-card p-12 text-center rounded-2xl border border-dashed border-[#CBD5E1] dark:border-slate-700 bg-white dark:bg-[#131D33] space-y-4">
-          <div className="w-14 h-14 rounded-2xl bg-[#F1F5F9] dark:bg-slate-800 text-[#94A3B8] flex items-center justify-center mx-auto">
+        <div className="pf-card p-12 text-center rounded-[10px] border border-dashed border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] space-y-4">
+          <div className="w-14 h-14 rounded-lg bg-[#F0F4F1] dark:bg-slate-800 text-[#848D86] flex items-center justify-center mx-auto">
             <Printer className="w-7 h-7 stroke-[1.75]" />
           </div>
           <div className="max-w-md mx-auto space-y-1">
-            <h3 className="text-base font-bold text-[#0F172A] dark:text-white">No Windows Printers Detected</h3>
-            <p className="text-xs text-[#64748B] dark:text-slate-400 leading-relaxed">
-              Ensure your photocopy machine or printer is powered on and connected via USB or local network, with appropriate Windows drivers installed.
+            <h3 className="text-base font-bold text-[#111111] dark:text-white">No Windows Printers Detected</h3>
+            <p className="text-xs text-[#646B65] dark:text-slate-400 leading-relaxed">
+              Ensure your photocopy machine or printer is powered on and connected via USB or local network, with appropriate Windows Win32 drivers installed.
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onRescan}
-            disabled={isScanning}
-            className="primary-button text-xs font-semibold"
-          >
-            <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
-            <span>Rescan Windows Hardware</span>
-          </button>
+          <div className="flex items-center justify-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => setIsSetupWizardOpen(true)}
+              className="primary-button text-xs font-semibold cursor-pointer"
+            >
+              <Sparkles className="w-4 h-4" />
+              <span>Launch Driver Setup Assistant</span>
+            </button>
+            <button
+              type="button"
+              onClick={onRescan}
+              disabled={isScanning}
+              className="secondary-button text-xs font-semibold cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 text-[#00B32D] ${isScanning ? 'animate-spin' : ''}`} />
+              <span>Rescan Windows Hardware</span>
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Printers Grid */}
+      {/* 5. PRINTER CARDS GRID */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
         {printers.map((printer) => {
           const isEnabled = !(config.disabledPrinterNames || []).includes(printer.name);
@@ -218,72 +384,80 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
             (config.selectedPrinterName ? config.selectedPrinterName === printer.name : printer.isDefault);
           const canRegister = !isRegistered && (!isLimitReached || registeredNames.length < printerLimit);
 
+          const isVirtual = virtualPrinters.some(v => v.name === printer.name);
+
           return (
             <div
               key={printer.name}
-              className={`pf-card p-6 space-y-4 rounded-2xl border transition-all duration-200 ${
+              className={`pf-card p-5 space-y-4 rounded-[10px] border transition-all duration-200 ${
                 isSelected
-                  ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20 shadow-md'
+                  ? 'border-[#00B32D] ring-2 ring-[#00B32D]/20 shadow-md'
                   : isRegistered
-                  ? 'border-[#BFDBFE] dark:border-blue-900 bg-white dark:bg-[#131D33]'
-                  : 'border-[#E2E8F0] dark:border-slate-800 hover:border-[#CBD5E1] opacity-90'
-              } bg-white dark:bg-[#131D33]`}
+                  ? 'border-[#BCEAC4] dark:border-emerald-900 bg-white dark:bg-[#131D33]'
+                  : 'border-[#E1E7E1] dark:border-slate-800 hover:border-[#C8D1C8] opacity-95'
+              } bg-white dark:bg-[#131D33] shadow-card`}
             >
-              {/* Card Header: Icon, Name, and Status Badges */}
+              {/* Header: Icon, Name, and Status Badge */}
               <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3.5 min-w-0">
+                <div className="flex items-start gap-3.5 min-w-0">
                   <div
-                    className={`w-11 h-11 rounded-xl flex items-center justify-center shrink-0 ${
+                    className={`w-10 h-10 rounded-lg flex items-center justify-center shrink-0 ${
                       isSelected
-                        ? 'bg-[#EFF6FF] text-[#2563EB] border border-[#BFDBFE]'
+                        ? 'bg-[#E8F8EC] text-[#008F25] border border-[#BCEAC4]'
                         : isRegistered
-                        ? 'bg-[#ECFDF5] text-[#059669] border border-[#A7F3D0]'
-                        : 'bg-[#F8FAFC] dark:bg-slate-900 text-[#64748B] border border-[#E2E8F0] dark:border-slate-800'
+                        ? 'bg-[#E8F8EC] text-[#008F25] border border-[#BCEAC4]'
+                        : 'bg-[#F0F4F1] dark:bg-slate-900 text-[#646B65] border border-[#E1E7E1] dark:border-slate-800'
                     }`}
                   >
                     <Printer className="w-5 h-5 stroke-[2]" />
                   </div>
+
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="text-sm font-bold text-[#0F172A] dark:text-white truncate" title={printer.displayName}>
+                      <h3 className="text-sm font-bold text-[#111111] dark:text-white truncate" title={printer.displayName}>
                         {printer.displayName}
                       </h3>
                       {printer.isDefault && (
-                        <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]">
-                          Default
+                        <span className="text-[11px] font-bold px-2 py-0.5 rounded-full bg-[#E8F8EC] text-[#008F25] border border-[#BCEAC4]">
+                          Windows Default
+                        </span>
+                      )}
+                      {isVirtual && (
+                        <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400">
+                          Virtual Driver
                         </span>
                       )}
                     </div>
-                    <p className="text-[11.5px] text-[#64748B] dark:text-slate-400 truncate mt-0.5 flex items-center gap-1">
-                      <HardDrive className="w-3 h-3 text-[#94A3B8] shrink-0" />
+                    <p className="text-[12px] text-[#646B65] dark:text-slate-400 truncate mt-0.5 flex items-center gap-1 font-mono">
+                      <HardDrive className="w-3 h-3 text-[#848D86] shrink-0" />
                       <span className="truncate">{printer.name}</span>
                     </p>
                   </div>
                 </div>
 
-                {/* Online / Offline badge */}
+                {/* Online / Offline status badge */}
                 <span
-                  className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${
+                  className={`shrink-0 inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold ${
                     printer.isOnline
-                      ? 'bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]'
+                      ? 'bg-[#E8F8EC] text-[#008F25] border border-[#BCEAC4]'
                       : 'bg-[#FEF2F2] text-[#B91C1C] border border-[#FECACA]'
                   }`}
                 >
-                  <span className={`w-1.5 h-1.5 rounded-full ${printer.isOnline ? 'bg-[#10B981]' : 'bg-[#EF4444]'}`} />
+                  <span className={`w-2 h-2 rounded-full ${printer.isOnline ? 'bg-[#00B32D]' : 'bg-[#DC2626]'}`} />
                   <span>{printer.isOnline ? 'Online' : 'Offline'}</span>
                 </span>
               </div>
 
-              {/* Status Badges Row: Registration & Enablement */}
+              {/* Status Badges Row */}
               <div className="flex items-center gap-2 flex-wrap">
                 {isRegistered ? (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-[#ECFDF5] text-[#047857] border border-[#A7F3D0]">
-                    <ShieldCheck className="w-3.5 h-3.5 text-[#10B981]" />
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-[#E8F8EC] text-[#008F25] border border-[#BCEAC4]">
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#00B32D]" />
                     <span>Registered for Shop</span>
                   </span>
                 ) : (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-[#F1F5F9] dark:bg-slate-800 text-[#64748B] dark:text-slate-400 border border-[#E2E8F0] dark:border-slate-700">
-                    <ShieldAlert className="w-3.5 h-3.5 text-[#94A3B8]" />
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-medium bg-[#F0F4F1] dark:bg-slate-800 text-[#646B65] dark:text-slate-400 border border-[#E1E7E1] dark:border-slate-700">
+                    <ShieldAlert className="w-3.5 h-3.5 text-[#848D86]" />
                     <span>Unregistered (Local Only)</span>
                   </span>
                 )}
@@ -296,49 +470,39 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                 )}
 
                 {isSelected && (
-                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-semibold bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE]">
-                    <Check className="w-3 h-3 text-[#2563EB]" />
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md text-[11px] font-bold bg-[#E8F8EC] text-[#008F25] border border-[#BCEAC4]">
+                    <Check className="w-3 h-3 text-[#00B32D]" />
                     <span>Primary Spool Target</span>
                   </span>
                 )}
               </div>
 
-              {/* Hardware Capabilities & Specifications */}
-              <div className="grid grid-cols-2 gap-2 text-xs p-3 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800">
+              {/* Hardware Specs & Capabilities */}
+              <div className="grid grid-cols-2 gap-2 text-xs p-3 rounded-lg bg-[#F0F4F1] dark:bg-slate-900 border border-[#E1E7E1] dark:border-slate-800">
                 <div>
-                  <span className="text-[10.5px] text-[#64748B] dark:text-slate-400 block font-medium">Color Mode</span>
-                  <span className="font-semibold text-[#0F172A] dark:text-slate-200">
+                  <span className="text-[11px] text-[#646B65] dark:text-slate-400 block font-medium">Color Capability</span>
+                  <span className="font-bold text-[#111111] dark:text-slate-200">
                     {printer.capabilities.supportsColor ? 'Color & Monochrome' : 'Monochrome (B&W)'}
                   </span>
                 </div>
                 <div>
-                  <span className="text-[10.5px] text-[#64748B] dark:text-slate-400 block font-medium">Duplex (Double-sided)</span>
-                  <span className="font-semibold text-[#0F172A] dark:text-slate-200">
-                    {printer.capabilities.supportsDuplex ? 'Supported' : 'Simplex only'}
+                  <span className="text-[11px] text-[#646B65] dark:text-slate-400 block font-medium">Duplex Printing</span>
+                  <span className="font-bold text-[#111111] dark:text-slate-200">
+                    {printer.capabilities.supportsDuplex ? 'Double-sided' : 'Single-sided'}
                   </span>
                 </div>
-                <div className="col-span-2 pt-1 border-t border-[#E2E8F0] dark:border-slate-800">
-                  <span className="text-[10.5px] text-[#64748B] dark:text-slate-400 block font-medium">Paper Sizes</span>
-                  <span className="text-[11.5px] text-[#475569] dark:text-slate-300">
+                <div className="col-span-2 pt-1.5 border-t border-[#E1E7E1] dark:border-slate-800">
+                  <span className="text-[11px] text-[#646B65] dark:text-slate-400 block font-medium">Supported Media Sizes</span>
+                  <span className="text-[12px] text-[#111111] dark:text-slate-300 font-medium">
                     {printer.capabilities.paperSizes && printer.capabilities.paperSizes.length > 0
-                      ? printer.capabilities.paperSizes.slice(0, 4).join(', ')
+                      ? printer.capabilities.paperSizes.slice(0, 5).join(', ')
                       : 'A4, Letter, Legal'}
                   </span>
                 </div>
               </div>
 
-              {/* Guidance Notice if printer needs to be registered */}
-              {!isRegistered && (
-                <div className="p-2.5 rounded-lg bg-[#EFF6FF] dark:bg-blue-950/30 border border-[#BFDBFE] dark:border-blue-900 text-[11px] text-[#1E40AF] dark:text-blue-300 flex items-start gap-2">
-                  <AlertCircle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-[#2563EB]" />
-                  <span>
-                    Click <strong>Register for Shop</strong> below to link this printer to your PrintFlow counter so it can process cloud print jobs.
-                  </span>
-                </div>
-              )}
-
-              {/* Action Buttons: Register/Unregister, Enable/Disable, Test Print, Primary */}
-              <div className="flex flex-col gap-2 pt-1 border-t border-[#E2E8F0] dark:border-slate-800">
+              {/* Action Buttons */}
+              <div className="flex flex-col gap-2 pt-1 border-t border-[#E1E7E1] dark:border-slate-800">
                 <div className="flex items-center justify-between gap-2 flex-wrap">
                   {/* Register / Unregister Toggle */}
                   {isRegistered ? (
@@ -346,7 +510,7 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                       type="button"
                       onClick={() => handleToggleRegistration(printer.name, false)}
                       disabled={registeringPrinter === printer.name}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#E2E8F0] text-[#64748B] hover:text-[#B91C1C] hover:border-[#FECACA] hover:bg-[#FEF2F2] transition-colors cursor-pointer"
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold border border-[#E1E7E1] text-[#646B65] hover:text-[#DC2626] hover:border-[#FECACA] hover:bg-[#FEF2F2] transition-colors cursor-pointer"
                       title="Unregister this printer to free a subscription slot"
                     >
                       {registeringPrinter === printer.name ? (
@@ -360,20 +524,22 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                     <button
                       type="button"
                       onClick={() => handleToggleRegistration(printer.name, true)}
-                      disabled={registeringPrinter === printer.name || !printer.isOnline || (!canRegister && printerLimit > 0)}
-                      className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors cursor-pointer ${
+                      disabled={registeringPrinter === printer.name || !printer.isOnline || (!canRegister && printerLimit > 0) || isVirtual}
+                      className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-md text-xs font-bold transition-colors cursor-pointer ${
                         !canRegister && printerLimit > 0
-                          ? 'bg-[#F1F5F9] text-[#94A3B8] border border-[#E2E8F0] cursor-not-allowed'
-                          : 'bg-[#2563EB] text-white hover:bg-[#1D4ED8] shadow-xs'
+                          ? 'bg-[#F0F4F1] dark:bg-slate-800 text-[#848D86] dark:text-slate-500 border border-[#E1E7E1] dark:border-slate-700 cursor-not-allowed'
+                          : 'bg-[#00B32D] text-white hover:bg-[#008F25] shadow-xs'
                       }`}
-                      title={!canRegister && printerLimit > 0 ? `Plan limit reached (${printerLimit} allowed). Unregister another printer first.` : 'Register this printer to receive customer orders'}
+                      title={isVirtual ? 'Virtual drivers cannot be registered' : !canRegister && printerLimit > 0 ? `Plan limit reached (${printerLimit} allowed). Upgrade subscription.` : 'Register printer for customer orders'}
                     >
                       {registeringPrinter === printer.name ? (
                         <RefreshCw className="w-3 h-3 animate-spin" />
+                      ) : !canRegister && printerLimit > 0 ? (
+                        <Lock className="w-3.5 h-3.5 text-[#848D86]" />
                       ) : (
                         <ShieldCheck className="w-3.5 h-3.5" />
                       )}
-                      <span>Register for Shop</span>
+                      <span>{!canRegister && printerLimit > 0 ? 'Plan Limit Reached' : 'Register for Shop'}</span>
                     </button>
                   )}
 
@@ -381,22 +547,22 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                   <button
                     type="button"
                     onClick={() => onSetPrinterEnabled(printer.name, !isEnabled)}
-                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium text-[#475569] dark:text-slate-300 border border-[#E2E8F0] dark:border-slate-700 hover:bg-[#F8FAFC] dark:hover:bg-slate-800 transition-colors cursor-pointer"
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md text-xs font-semibold text-[#646B65] dark:text-slate-300 border border-[#E1E7E1] dark:border-slate-700 hover:bg-[#F0F4F1] dark:hover:bg-slate-800 transition-colors cursor-pointer"
                   >
-                    <Power className={`w-3 h-3 ${isEnabled ? 'text-[#10B981]' : 'text-[#94A3B8]'}`} />
+                    <Power className={`w-3 h-3 ${isEnabled ? 'text-[#00B32D]' : 'text-[#848D86]'}`} />
                     <span>{isEnabled ? 'Enabled' : 'Disabled'}</span>
                   </button>
                 </div>
 
                 <div className="flex items-center justify-between gap-2 pt-1 flex-wrap">
-                  {/* Configure Capabilities button */}
+                  {/* Configure Options */}
                   <button
                     type="button"
                     onClick={() => setConfigModalPrinter(printer)}
-                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 transition-colors cursor-pointer"
+                    className="secondary-button !min-h-[32px] !py-1 !px-3 text-xs font-semibold cursor-pointer"
                     title="Customize allowed paper sizes, color modes, and duplex options for this printer"
                   >
-                    <Sliders className="w-3 h-3 text-blue-600 dark:text-blue-400" />
+                    <Sliders className="w-3 h-3 text-[#00B32D]" />
                     <span>Configure Options</span>
                   </button>
 
@@ -406,10 +572,10 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                     onClick={() => handleTest(printer.name)}
                     disabled={testingPrinter === printer.name || !printer.isOnline}
                     className="secondary-button !min-h-[32px] !py-1 !px-3 text-xs font-semibold cursor-pointer"
-                    title={!isRegistered ? 'Printer must be registered to run print tests' : 'Spool a test page to this device'}
+                    title="Spool a test page to this device"
                   >
-                    <Play className={`w-3 h-3 text-[#2563EB] ${testingPrinter === printer.name ? 'animate-spin' : ''}`} />
-                    <span>{testingPrinter === printer.name ? 'Printing Test...' : 'Test Print'}</span>
+                    <Play className={`w-3 h-3 text-[#00B32D] ${testingPrinter === printer.name ? 'animate-spin' : ''}`} />
+                    <span>{testingPrinter === printer.name ? 'Printing...' : 'Test Print'}</span>
                   </button>
 
                   {/* Primary Target Selection */}
@@ -417,16 +583,16 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
                     type="button"
                     onClick={() => onSelectPrinter(printer.name)}
                     disabled={!isRegistered || !isEnabled}
-                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-semibold transition-colors ${
+                    className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-md text-xs font-bold transition-colors ${
                       !isRegistered || !isEnabled
-                        ? 'opacity-40 cursor-not-allowed text-[#94A3B8] border border-[#E2E8F0]'
+                        ? 'opacity-40 cursor-not-allowed text-[#848D86] border border-[#E1E7E1]'
                         : isSelected
-                        ? 'bg-[#EFF6FF] text-[#1D4ED8] border border-[#BFDBFE] cursor-default'
-                        : 'bg-white text-[#475569] border border-[#E2E8F0] hover:bg-[#F8FAFC] cursor-pointer'
+                        ? 'bg-[#E8F8EC] text-[#008F25] border border-[#BCEAC4] cursor-default'
+                        : 'bg-white text-[#646B65] border border-[#E1E7E1] hover:bg-[#F0F4F1] cursor-pointer'
                     }`}
                   >
-                    {isSelected && <Check className="w-3.5 h-3.5 text-[#2563EB]" />}
-                    <span>{isSelected ? 'Primary' : 'Set as Primary'}</span>
+                    {isSelected && <Check className="w-3.5 h-3.5 text-[#00B32D]" />}
+                    <span>{isSelected ? 'Primary Target' : 'Set Primary'}</span>
                   </button>
                 </div>
               </div>
@@ -443,6 +609,26 @@ export const PrintersView: React.FC<PrintersViewProps> = ({
           onSaveConfig={handleSavePrinterConfig}
           onResetToDefaults={handleResetPrinterConfig}
           onRefreshCapabilities={handleRefreshCapabilities}
+        />
+      )}
+
+      {isSetupWizardOpen && (
+        <PrinterDriverSetupModal
+          isOpen={isSetupWizardOpen}
+          onClose={() => setIsSetupWizardOpen(false)}
+          config={config}
+          printers={printers}
+          isScanning={isScanning}
+          onRescanPrinters={async () => {
+            onRescan();
+            return printers;
+          }}
+          onRegisterPrinter={async (name, registered) => {
+            await onSetPrinterRegistered(name, registered);
+          }}
+          onSelectPrimaryPrinter={(name) => {
+            onSelectPrinter(name);
+          }}
         />
       )}
     </div>

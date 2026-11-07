@@ -11,7 +11,7 @@ export default defineConfig({
     outDir: 'dist/renderer',
     emptyOutDir: true,
     rollupOptions: {
-      input: path.resolve(__dirname, 'index.html')
+      input: path.resolve(import.meta.dirname || process.cwd(), 'index.html')
     }
   },
   server: {

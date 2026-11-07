@@ -32,7 +32,10 @@ import {
   ExternalLink,
   Key,
   Zap,
-  Search
+  Search,
+  Files,
+  GripVertical,
+  HelpCircle
 } from 'lucide-react';
 import { validatePhone, validatePageRange } from '../../lib/validation';
 import { ContinuousPdfViewer } from './ContinuousPdfViewer';
@@ -41,6 +44,7 @@ import * as pdfjsLib from 'pdfjs-dist';
 if (typeof window !== 'undefined') {
   pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.mjs`;
 }
+import { PDFDocument } from 'pdf-lib';
 import {
   loadRazorpayScript,
   DEFAULT_RAZORPAY_TEST_KEY,
@@ -97,6 +101,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     readyPrinters?: string[];
   } | null>(null);
   const [isCheckingAgentStatus, setIsCheckingAgentStatus] = useState<boolean>(false);
+  const [isManualCheckingStatus, setIsManualCheckingStatus] = useState<boolean>(false);
   const [alternativeShops, setAlternativeShops] = useState<Array<{ id: string; name: string; slug: string; isAvailable?: boolean }>>([]);
 
   const [customerErrorModal, setCustomerErrorModal] = useState<DocumentValidationError | null>(null);
@@ -201,6 +206,25 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     }
     return null;
   }, [shopSlug, remoteShop?.slug, activeShop?.slug, activeShop?.id, fetchCapabilities]);
+
+  const handleManualRefreshStatus = async () => {
+    if (isManualCheckingStatus || isCheckingAgentStatus) return;
+    setIsManualCheckingStatus(true);
+    try {
+      const minDelay = new Promise((resolve) => setTimeout(resolve, 2000));
+      const [freshStatus] = await Promise.all([
+        checkAgentAvailability(),
+        minDelay
+      ]);
+      if (freshStatus && freshStatus.isAvailable) {
+        showToast('Shop Online', 'This print shop is online and ready for printing.', 'success', 3000);
+      }
+    } catch {
+      // Gracefully handled
+    } finally {
+      setIsManualCheckingStatus(false);
+    }
+  };
 
   useEffect(() => {
     void checkAgentAvailability();
@@ -326,18 +350,9 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
   // Document preview modal
   const [previewFile, setPreviewFile] = useState<FilePrintConfig | null>(null);
-  const [previewMode, setPreviewMode] = useState<'SHEET' | 'NATIVE'>('SHEET');
 
-  // 2-in-1 ID Card Merge State
-  const [uploadMode, setUploadMode] = useState<'STANDARD' | 'ID_MERGE'>('STANDARD');
-  const [idCardType, setIdCardType] = useState<string>('Aadhaar Card');
-  const [frontSide, setFrontSide] = useState<{ file: File; url: string; name: string } | null>(null);
-  const [backSide, setBackSide] = useState<{ file: File; url: string; name: string } | null>(null);
-
-  // Existing files merge modal
-  const [showExistingMergeModal, setShowExistingMergeModal] = useState<boolean>(false);
-  const [mergeSelectedFrontId, setMergeSelectedFrontId] = useState<string>('');
-  const [mergeSelectedBackId, setMergeSelectedBackId] = useState<string>('');
+  // Help modal
+  const [helpOpen, setHelpOpen] = useState(false);
 
   // Validation & error states
   const [customerPhone, setCustomerPhone] = useState<string>('');
@@ -565,155 +580,6 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
     e.target.value = '';
   };
 
-  // Handler for ID Card Front side upload
-  const handleFrontSideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (agentStatus && !agentStatus.isAvailable) {
-      showToast('Shop Offline', agentStatus.message || 'This print shop is currently offline. File uploads are disabled.', 'error', 5000);
-      return;
-    }
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const validation = await validateClientDocument(file);
-    if (!validation.isValid && validation.error) {
-      setCustomerErrorModal(validation.error);
-      e.target.value = '';
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setFrontSide({ file, url, name: file.name });
-    setUploadError(null);
-    e.target.value = '';
-  };
-
-  // Handler for ID Card Back side upload
-  const handleBackSideUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (agentStatus && !agentStatus.isAvailable) {
-      showToast('Shop Offline', agentStatus.message || 'This print shop is currently offline. File uploads are disabled.', 'error', 5000);
-      return;
-    }
-    const file = e.target.files?.[0];
-    if (!file) return;
-    const validation = await validateClientDocument(file);
-    if (!validation.isValid && validation.error) {
-      setCustomerErrorModal(validation.error);
-      e.target.value = '';
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setBackSide({ file, url, name: file.name });
-    setUploadError(null);
-    e.target.value = '';
-  };
-
-  // Merge the Front + Back ID Card into 1 Single A4 Page item
-  const handleMergeIdCard = () => {
-    if (!frontSide && !backSide) {
-      setUploadError('Please upload at least the Front side or Back side of the ID card.');
-      return;
-    }
-
-    setUploadError(null);
-    const fileId = `id_merge_${Date.now()}`;
-    const cleanTypeName = idCardType.trim().replace(/\s+/g, '_');
-    const fileName = `${cleanTypeName}_Front_Back_1Page.pdf`;
-
-    const mergedConfig: FilePrintConfig = {
-      id: fileId,
-      fileName,
-      fileSize: (frontSide?.file.size || 0) + (backSide?.file.size || 0) || 1.2 * 1024 * 1024,
-      fileType: 'application/pdf',
-      previewUrl: frontSide?.url || backSide?.url,
-      frontPreviewUrl: frontSide?.url,
-      backPreviewUrl: backSide?.url,
-      isIdCardMerge: true,
-      idCardType,
-      estimatedPages: 1, // Crucial: Both sides on 1 page!
-      paperSize: 'A4',
-      color: 'COLOR',
-      sides: 'SINGLE',
-      orientation: 'PORTRAIT',
-      copies: 1,
-      pageSelection: 'ALL',
-      pagesPerSheet: 1,
-      unitPrice: 10.0,
-      totalPrice: 10.0
-    };
-
-    mergedConfig.unitPrice = calculateUnitPrice(mergedConfig.paperSize, mergedConfig.color || 'COLOR', mergedConfig.sides);
-    mergedConfig.totalPrice = calculateFileTotal(mergedConfig);
-
-    setFiles((prev) => [...prev, mergedConfig]);
-    setExpandedFileIds((prev) => ({ ...prev, [fileId]: true }));
-
-    // Reset front and back
-    setFrontSide(null);
-    setBackSide(null);
-
-    showToast(
-      'ID Card 2-in-1 Merged!',
-      `Configured ${idCardType} (Front & Back) on 1 single page.`,
-      'success',
-      4000
-    );
-  };
-
-  // Merge 2 existing uploaded files from the list into 1 Page
-  const handleMergeExistingFiles = () => {
-    if (!mergeSelectedFrontId || !mergeSelectedBackId) {
-      setUploadError('Please select both Front side and Back side files to merge.');
-      return;
-    }
-    if (mergeSelectedFrontId === mergeSelectedBackId) {
-      setUploadError('Please select two distinct files (Front and Back cannot be the same file).');
-      return;
-    }
-
-    const frontF = files.find((f) => f.id === mergeSelectedFrontId);
-    const backF = files.find((f) => f.id === mergeSelectedBackId);
-    if (!frontF || !backF) return;
-
-    const fileId = `id_merge_${Date.now()}`;
-    const mergedConfig: FilePrintConfig = {
-      id: fileId,
-      fileName: `ID_Card_Front_Back_Merged_1Page.pdf`,
-      fileSize: frontF.fileSize + backF.fileSize,
-      fileType: 'application/pdf',
-      previewUrl: frontF.previewUrl || backF.previewUrl,
-      frontPreviewUrl: frontF.previewUrl,
-      backPreviewUrl: backF.previewUrl,
-      isIdCardMerge: true,
-      idCardType: 'ID / Aadhaar Card',
-      estimatedPages: 1,
-      paperSize: 'A4',
-      color: frontF.color || 'BW',
-      sides: 'SINGLE',
-      orientation: 'PORTRAIT',
-      copies: frontF.copies || 1,
-      pageSelection: 'ALL',
-      pagesPerSheet: 1,
-      unitPrice: 2.0,
-      totalPrice: 2.0
-    };
-
-    mergedConfig.unitPrice = calculateUnitPrice(mergedConfig.paperSize, mergedConfig.color || 'BW', mergedConfig.sides);
-    mergedConfig.totalPrice = calculateFileTotal(mergedConfig);
-
-    setFiles((prev) => [
-      ...prev.filter((f) => f.id !== frontF.id && f.id !== backF.id),
-      mergedConfig
-    ]);
-    setExpandedFileIds((prev) => ({ ...prev, [fileId]: true }));
-    setShowExistingMergeModal(false);
-    setMergeSelectedFrontId('');
-    setMergeSelectedBackId('');
-
-    showToast(
-      'Files Merged to 1 Page!',
-      `Merged into 1 single A4 page with Front and Back sides.`,
-      'success',
-      4000
-    );
-  };
 
   const removeFile = (id: string) => {
     setFiles((prev) => prev.filter((f) => f.id !== id));
@@ -1320,7 +1186,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
   };
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-900 font-sans pb-24">
+    <div className="min-h-screen customer-page text-[#111111] font-['Manrope',sans-serif] pb-24">
       {maintenanceMode && (
         <div className="bg-amber-50 border-b border-amber-200 px-4 py-3 text-amber-900 text-xs sm:text-sm font-medium flex items-center justify-between gap-3 sticky top-0 z-40 shadow-xs">
           <div className="flex items-center gap-2.5 max-w-7xl mx-auto w-full">
@@ -1332,57 +1198,58 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
           </div>
         </div>
       )}
-      {/* 1. TOP HEADER (Matching Reference QuickPrint / Campus Copy Centre) */}
-      <header className="bg-white border-b border-slate-200/90 sticky top-0 z-30 shadow-2xs font-heading">
-        <div className="max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-2.5 sm:py-0 sm:h-16 flex flex-col sm:flex-row items-center justify-between gap-2 sm:gap-4">
-          <div className="flex items-center gap-2.5 w-full sm:w-auto justify-between sm:justify-start">
-            <div className="flex items-center gap-2.5 min-w-0">
-              <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-blue-600 text-white flex items-center justify-center shadow-xs shrink-0">
-                <Printer className="w-5 h-5" />
-              </div>
-              <div className="min-w-0">
-                <span className="font-heading font-bold text-base sm:text-xl text-slate-900 block truncate max-w-[180px] sm:max-w-xs leading-tight tracking-tight">
-                  {shop.name}
-                </span>
-                <span className="text-[11px] text-slate-500 font-semibold tracking-tight truncate block max-w-[180px] sm:max-w-xs">
-                  {shop.city || 'Counter Print Portal'}
-                </span>
-              </div>
+      {/* 1. TOP HEADER (EasyToPrint Official Branding & Shop Identity) */}
+      <header className="bg-white border-b border-[#E1E7E1] sticky top-0 z-30 shadow-2xs font-['Manrope',sans-serif]">
+        <div className="max-w-7xl mx-auto px-2.5 sm:px-6 lg:px-8 h-14 sm:h-16 flex items-center justify-between gap-2 sm:gap-4">
+          {/* Left Section: [Printer Icon] [Shop Name / EasyToPrint] */}
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+            {/* 1. Printer Icon */}
+            <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center shrink-0 border border-[#A7F3D0]/70">
+              <Printer className="w-4 h-4 sm:w-4.5 sm:h-4.5 text-[#00B32D]" />
             </div>
 
-            {/* Mobile Track Print button inside top row on small screens */}
-            <div className="flex sm:hidden items-center gap-2">
-              <a
-                href="#/track-print"
-                className="px-2.5 py-1 bg-blue-50 text-blue-700 font-bold text-xs rounded-lg border border-blue-200 flex items-center gap-1 shrink-0"
+            {/* 2 & 3. Vertically Stacked: Dynamic Shop Name + EasyToPrint Brand */}
+            <div className="min-w-0 flex-1">
+              <span
+                className="font-semibold text-xs sm:text-sm md:text-base text-[#111111] leading-tight block truncate"
+                title={shop.name}
               >
-                <Search className="w-3 h-3" />
-                <span>Track</span>
-              </a>
+                {shop.name}
+              </span>
+              <span className="text-[10px] sm:text-xs text-[#646B65] font-normal leading-tight block truncate">
+                EasyToPrint
+              </span>
             </div>
           </div>
 
-          <div className="flex items-center justify-between sm:justify-end gap-2 w-full sm:w-auto">
-            <div className="hidden sm:flex items-center gap-2">
-              <a
-                href="#/track-print"
-                className="px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 font-bold text-xs rounded-xl border border-blue-200 transition-colors flex items-center gap-1.5"
-              >
-                <Search className="w-3.5 h-3.5" />
-                <span>Track Print</span>
-              </a>
-            </div>
-            <div className="flex items-center gap-1.5 text-[11px] sm:text-xs font-semibold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200 truncate w-full sm:w-auto justify-center sm:justify-start">
-              <ShieldCheck className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-600 shrink-0" />
-              <span className="hidden md:inline">Files are automatically deleted after printing</span>
-              <span className="inline md:hidden">Auto-deleted after printing</span>
-            </div>
+          {/* Right Section: [Track] [?] */}
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+            {/* 1. Track Button (position it on the left of right section) */}
+            <a
+              href="#/track-print"
+              className="h-8 sm:h-9 px-2.5 sm:px-3 bg-[#E8F8EC] hover:bg-[#d5f3dc] text-[#008F25] font-medium text-xs rounded-xl border border-[#A7F3D0] transition-colors flex items-center gap-1 sm:gap-1.5 shrink-0 shadow-2xs"
+              title="Track Print Order"
+            >
+              <Search className="w-3.5 h-3.5 text-[#00B32D] shrink-0" />
+              <span>Track</span>
+            </a>
+
+            {/* 2. Info Button (?) (position it at the extreme right) */}
+            <button
+              type="button"
+              onClick={() => setHelpOpen(true)}
+              className="h-8 sm:h-9 w-8 sm:w-9 bg-white hover:bg-slate-50 text-[#646B65] font-medium text-xs rounded-xl border border-[#E1E7E1] transition-colors flex items-center justify-center shrink-0 shadow-2xs cursor-pointer"
+              title="How to Print / Information"
+              aria-label="Info"
+            >
+              <HelpCircle className="w-4 h-4 text-[#646B65] shrink-0" />
+            </button>
           </div>
         </div>
 
         {/* 2. PROGRESS STEPPER (Only Upload, Review, Pay) */}
         {currentStep <= 3 && (
-          <div className="border-t border-slate-100 bg-white py-3 px-4">
+          <div className="border-t border-[#E1E7E1] bg-white py-3 px-4">
             <div className="max-w-md mx-auto flex items-center justify-between text-xs">
               {/* Step 1: Upload */}
               <button
@@ -1393,18 +1260,18 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
                     currentStep > 1
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-blue-600 text-white ring-2 ring-blue-600/20'
+                      ? 'bg-[#00B32D] text-white'
+                      : 'bg-[#00B32D] text-white ring-2 ring-[#00B32D]/20'
                   }`}
                 >
                   {currentStep > 1 ? <Check className="w-3.5 h-3.5" /> : '1'}
                 </div>
-                <span className={currentStep >= 1 ? 'text-blue-700' : 'text-slate-400'}>Upload</span>
+                <span className={currentStep >= 1 ? 'text-[#008F25]' : 'text-[#646B65]'}>Upload</span>
               </button>
 
               <div
                 className={`h-0.5 flex-1 mx-3 sm:mx-4 transition-colors ${
-                  currentStep >= 2 ? 'bg-blue-600' : 'bg-slate-200'
+                  currentStep >= 2 ? 'bg-[#00B32D]' : 'bg-[#E1E7E1]'
                 }`}
               />
 
@@ -1420,20 +1287,20 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
                     currentStep > 2
-                      ? 'bg-blue-600 text-white'
+                      ? 'bg-[#00B32D] text-white'
                       : currentStep === 2
-                      ? 'bg-blue-600 text-white ring-2 ring-blue-600/20'
-                      : 'bg-slate-100 text-slate-400'
+                      ? 'bg-[#00B32D] text-white ring-2 ring-[#00B32D]/20'
+                      : 'bg-[#F7F8F7] text-[#646B65] border border-[#E1E7E1]'
                   }`}
                 >
                   {currentStep > 2 ? <Check className="w-3.5 h-3.5" /> : '2'}
                 </div>
-                <span className={currentStep >= 2 ? 'text-blue-700' : 'text-slate-400'}>Review</span>
+                <span className={currentStep >= 2 ? 'text-[#008F25]' : 'text-[#646B65]'}>Review</span>
               </button>
 
               <div
                 className={`h-0.5 flex-1 mx-3 sm:mx-4 transition-colors ${
-                  currentStep >= 3 ? 'bg-blue-600' : 'bg-slate-200'
+                  currentStep >= 3 ? 'bg-[#00B32D]' : 'bg-[#E1E7E1]'
                 }`}
               />
 
@@ -1449,13 +1316,13 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                 <div
                   className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-all ${
                     currentStep === 3
-                      ? 'bg-blue-600 text-white ring-2 ring-blue-600/20'
-                      : 'bg-slate-100 text-slate-400'
+                      ? 'bg-[#00B32D] text-white ring-2 ring-[#00B32D]/20'
+                      : 'bg-[#F7F8F7] text-[#646B65] border border-[#E1E7E1]'
                   }`}
                 >
                   3
                 </div>
-                <span className={currentStep === 3 ? 'text-blue-700' : 'text-slate-400'}>Pay</span>
+                <span className={currentStep === 3 ? 'text-[#008F25]' : 'text-[#646B65]'}>Pay</span>
               </button>
             </div>
           </div>
@@ -1463,7 +1330,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
       </header>
 
       {/* 3. MAIN WORKSPACE */}
-      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 sm:pt-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-3 sm:pt-8">
         <AnimatePresence mode="wait">
           {/* ========================================================================= */}
           {/* STEP 1: UPLOAD & CUSTOMIZE (3-STEP FLOW: UPLOAD -> REVIEW -> PAY)        */}
@@ -1475,333 +1342,129 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               initial="initial"
               animate="animate"
               exit="exit"
-              className="max-w-3xl mx-auto space-y-6"
+              className="max-w-3xl mx-auto space-y-3.5 sm:space-y-6"
             >
-              <div>
-                <span className="text-[11px] font-bold tracking-wider text-blue-600 uppercase block mb-1 font-mono">
-                  STEP 1 OF 3
-                </span>
-                <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-900 tracking-tight">
-                  Upload Documents
-                </h1>
-                <p className="text-xs sm:text-sm text-slate-500 mt-1">
-                  Upload your files, then choose print settings for each one.
-                </p>
-              </div>
-
-              {/* SHOP AGENT OFFLINE / PRINTER UNAVAILABLE WARNING BANNER */}
+              {/* COMPACT OFFLINE STATUS BADGE */}
               {agentStatus && !agentStatus.isAvailable && (
-                <div className="p-5 bg-rose-50 border-2 border-rose-200 rounded-3xl text-rose-950 space-y-3 shadow-sm">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
-                      <AlertCircle className="w-5 h-5" />
+                <div className="px-3 py-2 sm:px-4 sm:py-2.5 bg-rose-50 border border-rose-200 rounded-xl sm:rounded-2xl text-rose-950 shadow-2xs">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span className="font-medium text-xs sm:text-sm text-rose-950">
+                          {agentStatus.reason === 'PRINTER_UNAVAILABLE'
+                            ? 'Print Agent Connected · No Printer Ready'
+                            : 'Shop is currently offline'}
+                        </span>
+                        <span className="hidden sm:inline text-xs text-rose-700/80 font-normal">
+                          · Uploads paused
+                        </span>
+                      </div>
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <h3 className="font-bold text-sm text-rose-950">
-                        {agentStatus.reason === 'PRINTER_UNAVAILABLE' ? 'Print Agent Connected · No Printer Ready' : 'This Print Shop is Currently Offline'}
-                      </h3>
-                      <p className="text-xs text-rose-800 mt-0.5 font-medium leading-relaxed">
-                        {agentStatus.message}
-                      </p>
-                      <p className="text-[11px] text-rose-700/90 mt-1 italic">
-                        Document uploads and orders are paused until the shop agent connects.
-                      </p>
+
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <span className="px-2 py-0.5 rounded-md bg-rose-100 text-rose-800 text-[10px] font-black uppercase tracking-wide">
+                        Offline
+                      </span>
+                      <button
+                        type="button"
+                        onClick={handleManualRefreshStatus}
+                        disabled={isCheckingAgentStatus || isManualCheckingStatus}
+                        className="px-2.5 py-1 bg-white hover:bg-rose-100/60 active:scale-95 text-rose-700 font-bold text-xs rounded-lg border border-rose-200 shadow-2xs transition-all flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                        title="Check shop availability"
+                      >
+                        <RotateCw className={`w-3.5 h-3.5 ${(isCheckingAgentStatus || isManualCheckingStatus) ? 'animate-spin' : ''}`} />
+                        <span className="text-[11px]">Refresh</span>
+                      </button>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => void checkAgentAvailability()}
-                      disabled={isCheckingAgentStatus}
-                      className="px-3.5 py-1.5 bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs rounded-xl shadow-2xs transition-all flex items-center gap-1.5 shrink-0 cursor-pointer disabled:opacity-50"
-                    >
-                      <RotateCw className={`w-3.5 h-3.5 ${isCheckingAgentStatus ? 'animate-spin' : ''}`} />
-                      <span>Refresh</span>
-                    </button>
                   </div>
 
                   {alternativeShops.length > 0 && (
-                    <div className="pt-3 border-t border-rose-200/80 text-xs">
-                      <span className="font-bold text-rose-900 block mb-2 uppercase text-[10px] tracking-wider">
-                        Available Nearby Print Shops (Online):
+                    <div className="mt-2 pt-1.5 border-t border-rose-200/60 flex items-center justify-between text-xs">
+                      <span className="text-[11px] font-medium text-rose-800 truncate">
+                        Nearby online: <strong>{alternativeShops[0].name}</strong>
                       </span>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                        {alternativeShops.map((alt) => (
-                          <button
-                            key={alt.id}
-                            type="button"
-                            onClick={() => navigate(`/print/${alt.slug}`)}
-                            className="p-2.5 bg-white hover:bg-rose-100/50 border border-rose-200 rounded-xl text-left transition-all cursor-pointer flex items-center justify-between gap-2 shadow-2xs"
-                          >
-                            <div className="min-w-0">
-                              <span className="font-bold text-slate-900 block truncate">{alt.name}</span>
-                              <span className="text-[10px] text-emerald-600 font-bold">● Online & Ready</span>
-                            </div>
-                            <ArrowRight className="w-4 h-4 text-rose-600 shrink-0" />
-                          </button>
-                        ))}
-                      </div>
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/print/${alternativeShops[0].slug}`)}
+                        className="text-[11px] font-bold text-rose-700 hover:text-rose-900 underline flex items-center gap-0.5 ml-2 shrink-0"
+                      >
+                        Switch
+                        <ArrowRight className="w-3 h-3" />
+                      </button>
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Upload Mode Switcher: Standard Documents vs ID / Aadhaar 2-in-1 Merge */}
-              <div className="flex flex-col sm:flex-row p-1 bg-slate-200/80 rounded-2xl max-w-md mx-auto gap-1">
-                <button
-                  type="button"
-                  onClick={() => setUploadMode('STANDARD')}
-                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
-                    uploadMode === 'STANDARD'
-                      ? 'bg-white text-slate-900 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <FileText className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                  <span>Standard Files</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setUploadMode('ID_MERGE')}
-                  className={`flex-1 py-2.5 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center justify-center gap-1.5 whitespace-nowrap ${
-                    uploadMode === 'ID_MERGE'
-                      ? 'bg-white text-blue-700 shadow-2xs ring-1 ring-blue-600/20'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <CreditCard className="w-3.5 h-3.5 text-blue-600 shrink-0" />
-                  <span>ID / Aadhaar 2-in-1</span>
-                  <span className="text-[9px] font-black uppercase px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded-md shrink-0">
-                    Merge
-                  </span>
-                </button>
+              {/* Upload Header Section */}
+              <div className="text-center space-y-2 mb-6">
+                <h1 className="text-2xl font-semibold text-[#111111]">Upload Your Documents</h1>
+                <p className="text-sm font-normal text-[#646B65]">Upload your files for printing. PDF, JPG and PNG supported.</p>
               </div>
 
-              {uploadMode === 'STANDARD' ? (
-                /* Standard Upload Box */
-                <div className="border-2 border-dashed border-blue-200 hover:border-blue-400 bg-white rounded-3xl p-6 sm:p-8 text-center shadow-xs transition-colors">
-                  <div className="w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 flex items-center justify-center mx-auto mb-3 shadow-2xs">
-                    {uploadingQueue.length > 0 ? (
-                      <RotateCw className="w-6 h-6 animate-spin text-blue-600" />
+              {/* Standard Upload Box */}
+              <div className="border-2 border-dashed border-[#E1E7E1] hover:border-[#00B32D] bg-white rounded-3xl p-6 sm:p-8 text-center shadow-xs transition-colors">
+                <div className="w-12 h-12 rounded-2xl bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center mx-auto mb-3 shadow-2xs">
+                  {uploadingQueue.length > 0 ? (
+                    <RotateCw className="w-6 h-6 animate-spin text-[#00B32D]" />
+                  ) : (
+                    <Upload className="w-6 h-6" />
+                  )}
+                </div>
+                <h2 className="text-base font-medium text-[#111111]">
+                  {uploadingQueue.length > 0 ? 'Preparing documents...' : 'Click or Drag to Upload'}
+                </h2>
+                <p className="text-xs font-normal text-[#646B65] mt-0.5 mb-5">
+                  Supported formats: PDF, JPG and PNG · Up to 50 MB each
+                </p>
+
+                <div className="flex items-center justify-center">
+                  <label
+                    htmlFor={uploadingQueue.length > 0 || maintenanceMode || (agentStatus !== null && !agentStatus.isAvailable) ? undefined : fileInputId}
+                    className={`h-11 px-6 font-medium text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 transition-all ${
+                      maintenanceMode || (agentStatus !== null && !agentStatus.isAvailable)
+                        ? 'bg-slate-300 text-slate-600 cursor-not-allowed opacity-90'
+                        : uploadingQueue.length > 0
+                        ? 'bg-[#00B32D]/70 text-white cursor-wait opacity-80'
+                        : 'bg-[#00B32D] hover:bg-[#008F25] active:scale-95 text-white cursor-pointer'
+                    }`}
+                  >
+                    {maintenanceMode ? (
+                      <>
+                        <AlertTriangle className="w-4 h-4 shrink-0 text-amber-700" />
+                        <span>Maintenance (Uploads Disabled)</span>
+                      </>
+                    ) : agentStatus && !agentStatus.isAvailable ? (
+                      <>
+                        <AlertCircle className="w-4 h-4 shrink-0 text-rose-700" />
+                        <span>Shop Offline (Uploads Paused)</span>
+                      </>
+                    ) : uploadingQueue.length > 0 ? (
+                      <>
+                        <RotateCw className="w-4 h-4 animate-spin shrink-0" />
+                        <span>Uploading files...</span>
+                      </>
                     ) : (
-                      <Upload className="w-6 h-6" />
+                      <>
+                        <Upload className="w-4 h-4 shrink-0" />
+                        <span>Choose Files</span>
+                      </>
                     )}
-                  </div>
-                  <h2 className="text-base font-bold text-slate-900">
-                    {uploadingQueue.length > 0 ? 'Preparing documents...' : 'Upload your documents'}
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5 mb-5">
-                    PDF, JPG and PNG supported · Up to 50 MB each
-                  </p>
-
-                  <div className="flex items-center justify-center">
-                    <label
-                      htmlFor={uploadingQueue.length > 0 || maintenanceMode || (agentStatus !== null && !agentStatus.isAvailable) ? undefined : fileInputId}
-                      className={`h-11 px-6 font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-2 transition-all ${
-                        maintenanceMode || (agentStatus !== null && !agentStatus.isAvailable)
-                          ? 'bg-slate-300 text-slate-600 cursor-not-allowed opacity-90'
-                          : uploadingQueue.length > 0
-                          ? 'bg-blue-400 text-white cursor-wait opacity-80'
-                          : 'bg-blue-600 hover:bg-blue-700 active:scale-95 text-white cursor-pointer'
-                      }`}
-                    >
-                      {maintenanceMode ? (
-                        <>
-                          <AlertTriangle className="w-4 h-4 shrink-0 text-amber-700" />
-                          <span>Maintenance (Uploads Disabled)</span>
-                        </>
-                      ) : agentStatus && !agentStatus.isAvailable ? (
-                        <>
-                          <AlertCircle className="w-4 h-4 shrink-0 text-rose-700" />
-                          <span>Shop Offline (Uploads Paused)</span>
-                        </>
-                      ) : uploadingQueue.length > 0 ? (
-                        <>
-                          <RotateCw className="w-4 h-4 animate-spin shrink-0" />
-                          <span>Uploading files...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Upload className="w-4 h-4 shrink-0" />
-                          <span>Choose Files</span>
-                        </>
-                      )}
-                      <input
-                        id={fileInputId}
-                        type="file"
-                        multiple
-                        disabled={uploadingQueue.length > 0 || Boolean(maintenanceMode) || Boolean(agentStatus && !agentStatus.isAvailable)}
-                        accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
-                        onChange={handleFileUpload}
-                        className="hidden"
-                      />
-                    </label>
-                  </div>
-
-                  <p className="text-[11px] text-slate-400 mt-3 font-medium">or drag and drop files here</p>
+                    <input
+                      id={fileInputId}
+                      type="file"
+                      multiple
+                      disabled={uploadingQueue.length > 0 || Boolean(maintenanceMode) || Boolean(agentStatus && !agentStatus.isAvailable)}
+                      accept=".pdf,.jpg,.jpeg,.png,.webp,application/pdf,image/*"
+                      onChange={handleFileUpload}
+                      className="hidden"
+                    />
+                  </label>
                 </div>
-              ) : (
-                /* ID / Aadhaar 2-in-1 Merger Box */
-                <div className="bg-white rounded-3xl border border-blue-200/90 p-5 sm:p-6 shadow-sm space-y-5">
-                  <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <CreditCard className="w-5 h-5 text-blue-600" />
-                        <h2 className="text-base font-bold text-slate-900">
-                          Aadhaar / ID Card 2-in-1 Print (Single Page)
-                        </h2>
-                      </div>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Upload Front & Back sides — both print neatly on 1 single A4 sheet (standard Xerox format)
-                      </p>
-                    </div>
-                    <span className="text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2.5 py-1 rounded-lg border border-emerald-200 shrink-0">
-                      1 Page Xerox Rate
-                    </span>
-                  </div>
 
-                  {/* ID Card Type Selector */}
-                  <div className="space-y-1.5">
-                    <label className="text-xs font-bold text-slate-700 block">Select Document Type:</label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {['Aadhaar Card', 'PAN Card', 'Driving License', 'Voter ID', 'Student / Work ID'].map((type) => (
-                        <button
-                          key={type}
-                          type="button"
-                          onClick={() => setIdCardType(type)}
-                          className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                            idCardType === type
-                              ? 'bg-blue-600 text-white shadow-2xs'
-                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
-                          }`}
-                        >
-                          {type}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* 2 Side Upload Boxes: Front Side & Back Side */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
-                    {/* 1. FRONT SIDE */}
-                    <div className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-slate-50/70 rounded-2xl p-4 text-center transition-colors relative flex flex-col items-center justify-center min-h-[160px]">
-                      {frontSide ? (
-                        <div className="w-full space-y-2">
-                          <div className="relative w-full max-w-[220px] aspect-[85.6/53.98] mx-auto rounded-xl border border-slate-300 shadow-2xs overflow-hidden bg-white">
-                            <img src={frontSide.url} alt="Front ID" className="w-full h-full object-cover" />
-                            <span className="absolute top-1.5 left-1.5 px-2 py-0.5 bg-emerald-600 text-white rounded text-[9px] font-black tracking-wide">
-                              FRONT SIDE ✓
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 font-bold truncate max-w-[200px] mx-auto">
-                            {frontSide.name}
-                          </p>
-                          <div className="flex items-center justify-center gap-2">
-                            <label className="text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer">
-                              Replace
-                              <input
-                                type="file"
-                                accept="image/*,.pdf"
-                                onChange={handleFrontSideUpload}
-                                className="hidden"
-                              />
-                            </label>
-                            <span className="text-slate-300">·</span>
-                            <button
-                              type="button"
-                              onClick={() => setFrontSide(null)}
-                              className="text-[11px] font-bold text-red-500 hover:text-red-700 cursor-pointer"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <label className="cursor-pointer w-full flex flex-col items-center justify-center p-2">
-                          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center mb-2">
-                            <Camera className="w-5 h-5" />
-                          </div>
-                          <span className="text-xs font-bold text-slate-900 block">1. Front Side</span>
-                          <span className="text-[11px] text-slate-500 mt-0.5">Photo & Details side</span>
-                          <span className="mt-2.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-blue-600 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs inline-block">
-                            Choose Front Side
-                          </span>
-                          <input
-                            type="file"
-                            accept="image/*,.pdf"
-                            onChange={handleFrontSideUpload}
-                            className="hidden"
-                          />
-                        </label>
-                      )}
-                    </div>
-
-                    {/* 2. BACK SIDE */}
-                    <div className="border-2 border-dashed border-slate-200 hover:border-blue-400 bg-slate-50/70 rounded-2xl p-4 text-center transition-colors relative flex flex-col items-center justify-center min-h-[160px]">
-                      {backSide ? (
-                        <div className="w-full space-y-2">
-                          <div className="relative w-full max-w-[220px] aspect-[85.6/53.98] mx-auto rounded-xl border border-slate-300 shadow-2xs overflow-hidden bg-white">
-                            <img src={backSide.url} alt="Back ID" className="w-full h-full object-cover" />
-                            <span className="absolute top-1.5 left-1.5 px-2 py-0.5 bg-emerald-600 text-white rounded text-[9px] font-black tracking-wide">
-                              BACK SIDE ✓
-                            </span>
-                          </div>
-                          <p className="text-[11px] text-slate-600 font-bold truncate max-w-[200px] mx-auto">
-                            {backSide.name}
-                          </p>
-                          <div className="flex items-center justify-center gap-2">
-                            <label className="text-[11px] font-bold text-blue-600 hover:text-blue-700 cursor-pointer">
-                              Replace
-                              <input
-                                type="file"
-                                accept="image/*,.pdf"
-                                onChange={handleBackSideUpload}
-                                className="hidden"
-                              />
-                            </label>
-                            <span className="text-slate-300">·</span>
-                            <button
-                              type="button"
-                              onClick={() => setBackSide(null)}
-                              className="text-[11px] font-bold text-red-500 hover:text-red-700 cursor-pointer"
-                            >
-                              Remove
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <label className="cursor-pointer w-full flex flex-col items-center justify-center p-2">
-                          <div className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center mb-2">
-                            <Camera className="w-5 h-5" />
-                          </div>
-                          <span className="text-xs font-bold text-slate-900 block">2. Back Side</span>
-                          <span className="text-[11px] text-slate-500 mt-0.5">Address & QR Code side</span>
-                          <span className="mt-2.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-blue-600 text-xs font-bold rounded-xl border border-blue-200 shadow-2xs inline-block">
-                            Choose Back Side
-                          </span>
-                          <input
-                            type="file"
-                            accept="image/*,.pdf"
-                            onChange={handleBackSideUpload}
-                            className="hidden"
-                          />
-                        </label>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Merge Action Button */}
-                  <div className="pt-2">
-                    <button
-                      type="button"
-                      onClick={handleMergeIdCard}
-                      disabled={!frontSide && !backSide}
-                      className="w-full h-12 bg-blue-600 hover:bg-blue-700 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      <Layers className="w-4 h-4" />
-                      <span>Merge Front & Back onto 1 Page · Add to Print</span>
-                    </button>
-                  </div>
-                </div>
-              )}
+                <p className="text-[11px] font-normal text-[#646B65] mt-3">or drag and drop files here</p>
+              </div>
 
                 {/* Live Upload Loading Progress Status Card */}
                 {uploadingQueue.length > 0 && (
@@ -1809,31 +1472,31 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                     {uploadingQueue.map((item) => (
                       <div
                         key={item.id}
-                        className="bg-white rounded-2xl border border-blue-200 p-4 shadow-2xs space-y-2"
+                        className="bg-white rounded-2xl border border-[#A7F3D0] p-4 shadow-2xs space-y-2"
                       >
                         <div className="flex items-center justify-between text-xs">
                           <div className="flex items-center gap-2.5 min-w-0">
-                            <div className="w-8 h-8 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
+                            <div className="w-8 h-8 rounded-xl bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center shrink-0">
                               <RotateCw className="w-4 h-4 animate-spin" />
                             </div>
                             <div className="min-w-0">
-                              <span className="font-bold text-slate-900 truncate block max-w-[200px] sm:max-w-md">
+                              <span className="font-bold text-[#111111] truncate block max-w-[200px] sm:max-w-md">
                                 {item.name}
                               </span>
-                              <span className="text-[11px] text-slate-500">
+                              <span className="text-[11px] text-[#646B65]">
                                 {(item.size / 1024 / 1024).toFixed(1)} MB · Uploading & processing pages...
                               </span>
                             </div>
                           </div>
-                          <span className="font-mono font-bold text-blue-600 text-xs shrink-0">
+                          <span className="font-mono font-bold text-[#008F25] text-xs shrink-0">
                             {item.progress}%
                           </span>
                         </div>
 
                         {/* Animated Progress Bar */}
-                        <div className="w-full h-1.5 bg-slate-100 rounded-full overflow-hidden">
+                        <div className="w-full h-1.5 bg-[#F7F8F7] rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-blue-600 rounded-full transition-all duration-300 ease-out"
+                            className="h-full bg-[#00B32D] rounded-full transition-all duration-300 ease-out"
                             style={{ width: `${item.progress}%` }}
                           />
                         </div>
@@ -1861,22 +1524,22 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                   <div className="space-y-4 pt-2">
                     <div className="flex items-center justify-between">
                       <div className="flex items-baseline gap-1.5">
-                        <h2 className="text-base font-bold text-slate-900">Your files</h2>
-                        <span className="text-xs text-slate-500 font-medium">
+                        <h2 className="text-base font-bold text-[#111111]">Your files</h2>
+                        <span className="text-xs text-[#646B65] font-medium">
                           {files.length} document{files.length !== 1 ? 's' : ''} added
                         </span>
                       </div>
 
                       <label
                         htmlFor={fileInputId}
-                        className="px-3.5 py-1.5 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-2xs transition-all hover:border-slate-300 active:scale-95"
+                        className="px-3.5 py-1.5 bg-white border border-[#E1E7E1] hover:bg-[#F7F8F7] text-[#111111] text-xs font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer shadow-2xs transition-all hover:border-[#00B32D]/40 active:scale-95"
                       >
-                        <Plus className="w-3.5 h-3.5 text-slate-600" />
+                        <Plus className="w-3.5 h-3.5 text-[#00B32D]" />
                         <span>Add more files</span>
                       </label>
                     </div>
 
-                    {/* Expandable File Cards List (Matching Reference UI) */}
+                    {/* Expandable File Cards List */}
                     <div className="space-y-4">
                       {files.map((file) => {
                         const isExpanded = expandedFileIds[file.id] ?? false;
@@ -1885,38 +1548,44 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                         return (
                           <div
                             key={file.id}
-                            className="bg-white rounded-2xl border border-slate-200/90 shadow-2xs overflow-hidden transition-all"
+                            className="bg-white rounded-2xl border border-[#E1E7E1] shadow-2xs overflow-hidden transition-all"
                           >
                             {/* Card Header Row */}
                             <div className="p-4 sm:p-5 flex items-center justify-between gap-3">
                               <div className="flex items-center gap-3 min-w-0">
                                 <div
                                   className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
-                                    isPdf ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'
+                                    isPdf ? 'bg-red-50 text-red-600' : 'bg-[#E8F8EC] text-[#00B32D]'
                                   }`}
                                 >
                                   {isPdf ? (
                                     <FileText className="w-5 h-5 text-red-600" />
                                   ) : (
-                                    <ImageIcon className="w-5 h-5 text-emerald-600" />
+                                    <ImageIcon className="w-5 h-5 text-[#00B32D]" />
                                   )}
                                 </div>
                                 <div className="min-w-0">
-                                  <h3 className="text-sm font-bold text-slate-900 truncate max-w-[200px] sm:max-w-md">
+                                  <h3 className="text-sm font-bold text-[#111111] truncate max-w-[200px] sm:max-w-md">
                                     {file.fileName}
                                   </h3>
-                                  <div className="flex items-center gap-2 text-xs text-slate-500 mt-0.5 flex-wrap">
+                                  <div className="flex items-center gap-2 text-xs text-[#646B65] mt-0.5 flex-wrap">
                                     <span>{(file.fileSize / 1024 / 1024).toFixed(1)} MB</span>
                                     <span>·</span>
                                     <span>{file.estimatedPages} page{file.estimatedPages > 1 ? 's' : ''}</span>
                                     <span>·</span>
                                     <span>{file.orientation === 'LANDSCAPE' ? 'Landscape' : 'Portrait'}</span>
                                   </div>
-                                  <div className="mt-1">
-                                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-emerald-700 bg-emerald-50 px-2 py-0.2 rounded-full">
-                                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                                  <div className="mt-1 flex items-center gap-2 flex-wrap">
+                                    <span className="inline-flex items-center gap-1 text-[11px] font-bold text-[#008F25] bg-[#E8F8EC] px-2 py-0.2 rounded-full border border-[#A7F3D0]">
+                                      <span className="w-1.5 h-1.5 rounded-full bg-[#00B32D]" />
                                       <span>Ready</span>
                                     </span>
+                                    {file.isMerged && (
+                                      <span className="px-2 py-0.5 rounded-full bg-[#E8F8EC] border border-[#A7F3D0] text-[#008F25] text-[10px] font-bold inline-flex items-center gap-1">
+                                        <CheckCircle2 className="w-3 h-3 text-[#00B32D]" />
+                                        <span>Merged Document</span>
+                                      </span>
+                                    )}
                                   </div>
                                 </div>
                               </div>
@@ -1931,10 +1600,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                             </div>
 
                             {/* Action Bar: Preview (Left) & Hide settings / Configure (Right) */}
-                            <div className="px-4 sm:px-5 py-2.5 bg-slate-50/70 border-t border-slate-100 flex items-center justify-between text-xs font-semibold">
+                            <div className="px-4 sm:px-5 py-2.5 bg-[#F7F8F7] border-t border-[#E1E7E1] flex items-center justify-between text-xs font-semibold">
                               <button
                                 onClick={() => setPreviewFile(file)}
-                                className="text-blue-600 hover:text-blue-700 flex items-center gap-1.5 cursor-pointer"
+                                className="text-[#008F25] hover:text-[#00B32D] flex items-center gap-1.5 cursor-pointer font-bold"
                               >
                                 <Eye className="w-3.5 h-3.5" />
                                 <span>Preview</span>
@@ -1942,7 +1611,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                               <button
                                 onClick={() => toggleExpand(file.id)}
-                                className="text-blue-600 hover:text-blue-700 flex items-center gap-1 cursor-pointer font-bold"
+                                className="text-[#008F25] hover:text-[#00B32D] flex items-center gap-1 cursor-pointer font-bold"
                               >
                                 <span>{isExpanded ? 'Hide settings' : 'Configure'}</span>
                                 {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
@@ -1951,10 +1620,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                             {/* Collapsible Print Settings Area */}
                             {isExpanded && (
-                              <div className="p-4 sm:p-5 border-t border-slate-100 space-y-4 bg-white">
+                              <div className="p-4 sm:p-5 border-t border-[#E1E7E1] space-y-4 bg-white">
                                 <div className="flex items-center justify-between">
-                                  <h4 className="text-xs font-bold text-slate-900">Print settings</h4>
-                                  <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
+                                  <h4 className="text-xs font-bold text-[#111111]">Print settings</h4>
+                                  <span className="text-[10px] font-semibold text-[#008F25] bg-[#E8F8EC] px-2 py-0.5 rounded-full border border-[#A7F3D0]">
                                     For this file only
                                   </span>
                                 </div>
@@ -1968,15 +1637,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                       <>
                                         {/* 1. Print Type (B&W vs Colour) */}
                                         <div>
-                                          <label className="text-xs font-bold text-slate-700 block mb-1.5">Print type</label>
-                                          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
+                                          <label className="text-xs font-bold text-[#111111] block mb-1.5">Print type</label>
+                                          <div className="grid grid-cols-2 gap-1 p-1 bg-[#F7F8F7] border border-[#E1E7E1] rounded-xl">
                                             <button
                                               type="button"
                                               onClick={() => updateFileConfig(file.id, { color: 'BW' })}
                                               className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer ${
                                                 file.color === 'BW'
-                                                  ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                                  : 'text-slate-600 hover:text-slate-900'
+                                                  ? 'bg-[#E8F8EC] text-[#008F25] border border-[#00B32D] shadow-2xs font-extrabold'
+                                                  : 'text-[#646B65] hover:text-[#111111]'
                                               }`}
                                             >
                                               B&W
@@ -1990,8 +1659,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                                 !isColorSupported.isValid
                                                   ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-50'
                                                   : file.color === 'COLOR'
-                                                    ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs cursor-pointer'
-                                                    : 'text-slate-600 hover:text-slate-900 cursor-pointer'
+                                                    ? 'bg-[#E8F8EC] text-[#008F25] border border-[#00B32D] shadow-2xs cursor-pointer font-extrabold'
+                                                    : 'text-[#646B65] hover:text-[#111111] cursor-pointer'
                                               }`}
                                             >
                                               Colour
@@ -2007,15 +1676,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                                         {/* 2. Print Sides (Single vs Double) */}
                                         <div>
-                                          <label className="text-xs font-bold text-slate-700 block mb-1.5">Print sides</label>
-                                          <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl">
+                                          <label className="text-xs font-bold text-[#111111] block mb-1.5">Print sides</label>
+                                          <div className="grid grid-cols-2 gap-1 p-1 bg-[#F7F8F7] border border-[#E1E7E1] rounded-xl">
                                             <button
                                               type="button"
                                               onClick={() => updateFileConfig(file.id, { sides: 'SINGLE' })}
                                               className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer truncate px-0.5 ${
                                                 file.sides === 'SINGLE'
-                                                  ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                                  : 'text-slate-600 hover:text-slate-900'
+                                                  ? 'bg-[#E8F8EC] text-[#008F25] border border-[#00B32D] shadow-2xs font-extrabold'
+                                                  : 'text-[#646B65] hover:text-[#111111]'
                                               }`}
                                             >
                                               Single Side
@@ -2029,8 +1698,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                                 !isDuplexSupported.isValid
                                                   ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-50'
                                                   : file.sides === 'DOUBLE'
-                                                    ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs cursor-pointer'
-                                                    : 'text-slate-600 hover:text-slate-900 cursor-pointer'
+                                                    ? 'bg-[#E8F8EC] text-[#008F25] border border-[#00B32D] shadow-2xs cursor-pointer font-extrabold'
+                                                    : 'text-[#646B65] hover:text-[#111111] cursor-pointer'
                                               }`}
                                             >
                                               Double Side
@@ -2047,10 +1716,10 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                         {/* 3. Paper Size Selection */}
                                         <div>
                                           <div className="flex items-center justify-between mb-1.5">
-                                            <label className="text-xs font-bold text-slate-700 block">Paper size</label>
-                                            <span className="text-[10px] text-blue-600 font-bold">{file.paperSize || 'A4'}</span>
+                                            <label className="text-xs font-bold text-[#111111] block">Paper size</label>
+                                            <span className="text-[10px] text-[#008F25] font-bold">{file.paperSize || 'A4'}</span>
                                           </div>
-                                          <div className="flex flex-wrap gap-1 p-1 bg-slate-100 rounded-xl">
+                                          <div className="flex flex-wrap gap-1 p-1 bg-[#F7F8F7] border border-[#E1E7E1] rounded-xl">
                                             {activeShopSizes.map((sz) => {
                                               const isSelected = (file.paperSize || 'A4') === sz;
                                               const isSizeSupported = isCombinationValid(sz, file.color || 'BW', file.sides === 'DOUBLE');
@@ -2064,8 +1733,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                                     !isSizeSupported.isValid
                                                       ? 'opacity-40 cursor-not-allowed text-slate-400 bg-slate-50'
                                                       : isSelected
-                                                        ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs font-extrabold cursor-pointer'
-                                                        : 'text-slate-600 hover:text-slate-900 cursor-pointer'
+                                                        ? 'bg-[#E8F8EC] text-[#008F25] border border-[#00B32D] shadow-2xs font-extrabold cursor-pointer'
+                                                        : 'text-[#646B65] hover:text-[#111111] cursor-pointer'
                                                   }`}
                                                   title={!isSizeSupported.isValid ? isSizeSupported.reason : sz}
                                                 >
@@ -2081,18 +1750,18 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                                   {/* 4. Copies Counter [-] 1 [+] */}
                                   <div>
-                                    <label className="text-xs font-bold text-slate-700 block mb-1.5">Copies</label>
-                                    <div className="flex items-center justify-between p-1 bg-slate-100 rounded-xl h-10 px-2">
+                                    <label className="text-xs font-bold text-[#111111] block mb-1.5">Copies</label>
+                                    <div className="flex items-center justify-between p-1 bg-[#F7F8F7] border border-[#E1E7E1] rounded-xl h-10 px-2">
                                       <button
                                         type="button"
                                         onClick={() =>
                                           updateFileConfig(file.id, { copies: Math.max(1, (file.copies || 1) - 1) })
                                         }
-                                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-white hover:bg-slate-200 active:scale-95 flex items-center justify-center font-bold text-slate-700 cursor-pointer shadow-2xs"
+                                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-white hover:bg-[#E1E7E1] active:scale-95 flex items-center justify-center font-bold text-[#111111] cursor-pointer shadow-2xs border border-[#E1E7E1]"
                                       >
                                         <Minus className="w-3.5 h-3.5" />
                                       </button>
-                                      <span className="font-extrabold text-sm font-mono text-slate-900">
+                                      <span className="font-extrabold text-sm font-mono text-[#111111]">
                                         {file.copies || 1}
                                       </span>
                                       <button
@@ -2100,22 +1769,22 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                         onClick={() =>
                                           updateFileConfig(file.id, { copies: (file.copies || 1) + 1 })
                                         }
-                                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-white hover:bg-slate-200 active:scale-95 flex items-center justify-center font-bold text-slate-700 cursor-pointer shadow-2xs"
+                                        className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg bg-white hover:bg-[#E1E7E1] active:scale-95 flex items-center justify-center font-bold text-[#111111] cursor-pointer shadow-2xs border border-[#E1E7E1]"
                                       >
-                                        <Plus className="w-3.5 h-3.5" />
+                                        <Plus className="w-3.5 h-3.5 text-[#00B32D]" />
                                       </button>
                                     </div>
                                   </div>
 
                                   {/* 5. Orientation */}
                                   <div>
-                                    <label className="text-xs font-bold text-slate-700 block mb-1.5">Orientation</label>
+                                    <label className="text-xs font-bold text-[#111111] block mb-1.5">Orientation</label>
                                     <select
                                       value={file.orientation || 'PORTRAIT'}
                                       onChange={(e) =>
                                         updateFileConfig(file.id, { orientation: e.target.value as any })
                                       }
-                                      className="w-full h-10 px-3 bg-slate-100 hover:bg-slate-200/70 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer transition-colors"
+                                      className="w-full h-10 px-3 bg-[#F7F8F7] hover:bg-[#E1E7E1]/50 border border-[#E1E7E1] rounded-xl text-[11px] sm:text-xs font-bold text-[#111111] focus:outline-none focus:ring-1 focus:ring-[#00B32D] cursor-pointer transition-colors"
                                     >
                                       <option value="PORTRAIT">Auto (Portrait)</option>
                                       <option value="LANDSCAPE">Auto (Landscape)</option>
@@ -2124,13 +1793,13 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                                   {/* 6. Pages per sheet */}
                                   <div>
-                                    <label className="text-xs font-bold text-slate-700 block mb-1.5">Pages per sheet</label>
+                                    <label className="text-xs font-bold text-[#111111] block mb-1.5">Pages per sheet</label>
                                     <select
                                       value={file.pagesPerSheet || 1}
                                       onChange={(e) =>
                                         updateFileConfig(file.id, { pagesPerSheet: Number(e.target.value) as PagesPerSheet })
                                       }
-                                      className="w-full h-10 px-3 bg-slate-100 hover:bg-slate-200/70 border border-slate-200 rounded-xl text-[11px] sm:text-xs font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-600 cursor-pointer transition-colors"
+                                      className="w-full h-10 px-3 bg-[#F7F8F7] hover:bg-[#E1E7E1]/50 border border-[#E1E7E1] rounded-xl text-[11px] sm:text-xs font-bold text-[#111111] focus:outline-none focus:ring-1 focus:ring-[#00B32D] cursor-pointer transition-colors"
                                     >
                                       <option value={1}>1 page/sheet</option>
                                       <option value={2}>2 pages/sheet (N-up)</option>
@@ -2140,15 +1809,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                                   {/* 7. Pages to Print (Spans 2 columns) */}
                                   <div className="col-span-2 pt-1">
-                                    <label className="text-xs font-bold text-slate-700 block mb-1.5">Pages to print</label>
-                                    <div className="grid grid-cols-2 gap-1 p-1 bg-slate-100 rounded-xl mb-2">
+                                    <label className="text-xs font-bold text-[#111111] block mb-1.5">Pages to print</label>
+                                    <div className="grid grid-cols-2 gap-1 p-1 bg-[#F7F8F7] border border-[#E1E7E1] rounded-xl mb-2">
                                       <button
                                         type="button"
                                         onClick={() => updateFileConfig(file.id, { pageSelection: 'ALL' })}
                                         className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer ${
                                           file.pageSelection === 'ALL'
-                                            ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                            : 'text-slate-600 hover:text-slate-900'
+                                            ? 'bg-[#E8F8EC] text-[#008F25] border border-[#00B32D] shadow-2xs font-extrabold'
+                                            : 'text-[#646B65] hover:text-[#111111]'
                                         }`}
                                       >
                                         All Pages
@@ -2158,8 +1827,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                         onClick={() => updateFileConfig(file.id, { pageSelection: 'CUSTOM' })}
                                         className={`py-2 text-[11px] sm:text-xs font-bold rounded-lg transition-all cursor-pointer ${
                                           file.pageSelection === 'CUSTOM'
-                                            ? 'bg-blue-50 text-blue-700 border border-blue-600 shadow-2xs'
-                                            : 'text-slate-600 hover:text-slate-900'
+                                            ? 'bg-[#E8F8EC] text-[#008F25] border border-[#00B32D] shadow-2xs font-extrabold'
+                                            : 'text-[#646B65] hover:text-[#111111]'
                                         }`}
                                       >
                                         Custom Pages
@@ -2173,9 +1842,9 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                                           placeholder="e.g. 1-3, 5, 8"
                                           value={file.customRange || ''}
                                           onChange={(e) => updateFileConfig(file.id, { customRange: e.target.value })}
-                                          className="w-full h-10 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:outline-none focus:ring-1 focus:ring-blue-600"
+                                          className="w-full h-10 px-3.5 bg-white border border-[#E1E7E1] rounded-xl text-xs font-mono focus:outline-none focus:ring-1 focus:ring-[#00B32D]"
                                         />
-                                        <p className="text-[10px] text-slate-400">
+                                        <p className="text-[10px] text-[#646B65]">
                                           Specify page ranges separated by commas.
                                         </p>
                                       </div>
@@ -2190,20 +1859,20 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                     </div>
 
                     {/* Bottom Action Bar for Upload Step */}
-                    <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3.5 bg-white p-5 rounded-3xl border border-slate-200 shadow-2xs">
+                    <div className="pt-2 flex flex-col sm:flex-row items-center justify-between gap-3.5 bg-white p-5 rounded-3xl border border-[#E1E7E1] shadow-2xs">
                       <div>
-                        <span className="text-xs font-semibold text-slate-500 block">Ready to print</span>
+                        <span className="text-xs font-semibold text-[#646B65] block">Ready to print</span>
                         <div className="flex items-baseline gap-2">
-                          <span className="text-xl font-black font-mono text-slate-900">
+                          <span className="text-xl font-black font-mono text-[#111111]">
                             {files.length} Document{files.length > 1 ? 's' : ''}
                           </span>
-                          <span className="text-xs text-slate-400">· Review details in next step</span>
+                          <span className="text-xs text-[#646B65]">· Review details in next step</span>
                         </div>
                       </div>
 
                       <button
                         onClick={handleProceedToReview}
-                        className="w-full sm:w-auto h-12 px-7 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                        className="w-full sm:w-auto h-12 px-7 bg-[#00B32D] hover:bg-[#008F25] active:scale-95 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                       >
                         <span>Continue to Review</span>
                         <ArrowRight className="w-4 h-4" />
@@ -2231,21 +1900,21 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                 <button
                   type="button"
                   onClick={() => setCurrentStep(1)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-slate-950 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[#111111] hover:text-black bg-white hover:bg-[#F7F8F7] border border-[#E1E7E1] rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer"
                 >
-                  <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
+                  <ArrowLeft className="w-3.5 h-3.5 text-[#646B65]" />
                   <span>Back to Upload</span>
                 </button>
-                <span className="text-[10px] font-bold tracking-widest text-blue-600 uppercase font-mono">
+                <span className="text-[10px] font-bold tracking-widest text-[#008F25] uppercase font-mono">
                   STEP 2 OF 3
                 </span>
               </div>
 
               <div className="text-center space-y-0.5">
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                <h1 className="text-xl sm:text-2xl font-bold text-[#111111] tracking-tight">
                   Review your print order
                 </h1>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-[#646B65]">
                   Check the details before continuing to payment.
                 </p>
               </div>
@@ -2259,27 +1928,27 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                   return (
                     <div
                       key={file.id}
-                      className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-2xs space-y-3"
+                      className="bg-white rounded-2xl border border-[#E1E7E1] p-4 shadow-2xs space-y-3"
                     >
                       {/* Top Row: Icon + Title/Details + Price */}
                       <div className="flex items-center justify-between gap-3">
                         <div className="flex items-center gap-3 min-w-0 flex-1">
                           <div
                             className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${
-                              isPdf ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-600'
+                              isPdf ? 'bg-red-50 text-red-600' : 'bg-[#E8F8EC] text-[#00B32D]'
                             }`}
                           >
                             {isPdf ? (
                               <FileText className="w-4 h-4 text-red-600" />
                             ) : (
-                              <ImageIcon className="w-4 h-4 text-emerald-600" />
+                              <ImageIcon className="w-4 h-4 text-[#00B32D]" />
                             )}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <h3 className="text-xs sm:text-sm font-bold text-slate-900 truncate">
+                            <h3 className="text-xs sm:text-sm font-bold text-[#111111] truncate">
                               {file.fileName}
                             </h3>
-                            <p className="text-[11px] text-slate-500 mt-0.5">
+                            <p className="text-[11px] text-[#646B65] mt-0.5">
                               {pagesToPrint} page{pagesToPrint > 1 ? 's' : ''} · {file.copies} cop{file.copies > 1 ? 'ies' : 'y'}
                             </p>
                           </div>
@@ -2287,48 +1956,47 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                         {/* Top-Right Price */}
                         <div className="shrink-0 text-right">
-                          <span className="font-mono font-black text-base sm:text-lg text-slate-900">
+                          <span className="font-mono font-black text-base sm:text-lg text-[#111111]">
                             ₹{file.totalPrice.toFixed(0)}
                           </span>
                         </div>
                       </div>
 
                       {/* Middle Row: Pill Tags */}
-                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-medium text-slate-600">
-                        <span className="px-2 py-0.5 bg-slate-100 rounded-md">
+                      <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-medium text-[#111111]">
+                        <span className="px-2 py-0.5 bg-[#F7F8F7] border border-[#E1E7E1] rounded-md">
                           {file.color === 'COLOR' ? 'Colour' : 'B&W'}
                         </span>
-                        <span className="px-2 py-0.5 bg-slate-100 rounded-md">{file.paperSize}</span>
-                        <span className="px-2 py-0.5 bg-slate-100 rounded-md">
+                        <span className="px-2 py-0.5 bg-[#F7F8F7] border border-[#E1E7E1] rounded-md">{file.paperSize}</span>
+                        <span className="px-2 py-0.5 bg-[#F7F8F7] border border-[#E1E7E1] rounded-md">
                           {file.sides === 'DOUBLE' ? 'Double Side' : 'Single Side'}
                         </span>
-                        <span className="px-2 py-0.5 bg-slate-100 rounded-md">
+                        <span className="px-2 py-0.5 bg-[#F7F8F7] border border-[#E1E7E1] rounded-md">
                           {file.pagesPerSheet || 1} page/sheet
                         </span>
-                        <span className="px-2 py-0.5 bg-slate-100 rounded-md">
+                        <span className="px-2 py-0.5 bg-[#F7F8F7] border border-[#E1E7E1] rounded-md">
                           Auto ({file.orientation === 'LANDSCAPE' ? 'Landscape' : 'Portrait'})
                         </span>
                         {file.pageSelection === 'CUSTOM' && file.customRange && (
-                          <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md font-mono">
+                          <span className="px-2 py-0.5 bg-[#E8F8EC] text-[#008F25] border border-[#A7F3D0] rounded-md font-mono">
                             Pages: {file.customRange}
                           </span>
                         )}
                       </div>
 
                       {/* Bottom Row: Actions */}
-                      <div className="pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
-                        <span className="text-[11px] text-slate-400 font-medium">Print specification</span>
+                      <div className="pt-2 border-t border-[#E1E7E1] flex items-center justify-between gap-2">
+                        <span className="text-[11px] text-[#646B65] font-medium">Print specification</span>
 
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
                             onClick={() => {
                               setPreviewFile(file);
-                              setPreviewMode('SHEET');
                             }}
-                            className="h-7 px-2.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-[11px] font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all active:scale-95 shadow-2xs"
+                            className="h-7 px-2.5 bg-[#E8F8EC] hover:bg-[#d5f3dc] text-[#008F25] border border-[#A7F3D0] text-[11px] font-bold rounded-lg flex items-center gap-1 cursor-pointer transition-all active:scale-95 shadow-2xs"
                           >
-                            <Eye className="w-3.5 h-3.5" />
+                            <Eye className="w-3.5 h-3.5 text-[#00B32D]" />
                             <span>Preview</span>
                           </button>
 
@@ -2338,9 +2006,9 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                               setExpandedFileIds((p) => ({ ...p, [file.id]: true }));
                               setCurrentStep(1);
                             }}
-                            className="h-7 px-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-semibold rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
+                            className="h-7 px-2.5 bg-[#F7F8F7] hover:bg-[#E1E7E1] text-[#111111] border border-[#E1E7E1] text-[11px] font-semibold rounded-lg flex items-center gap-1 cursor-pointer transition-colors"
                           >
-                            <Edit3 className="w-3.5 h-3.5" />
+                            <Edit3 className="w-3.5 h-3.5 text-[#00B32D]" />
                             <span>Edit</span>
                           </button>
                         </div>
@@ -2351,15 +2019,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               </div>
 
               {/* Total Calculation Card */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 p-4 sm:p-5 shadow-2xs space-y-2 text-xs">
-                <div className="flex items-center justify-between text-slate-600">
+              <div className="bg-white rounded-2xl border border-[#E1E7E1] p-4 sm:p-5 shadow-2xs space-y-2 text-xs">
+                <div className="flex items-center justify-between text-[#646B65]">
                   <span>Printing Charges</span>
-                  <span className="font-mono font-bold text-slate-800">₹{subtotal.toFixed(0)}</span>
+                  <span className="font-mono font-bold text-[#111111]">₹{subtotal.toFixed(0)}</span>
                 </div>
 
-                <div className="pt-2 border-t border-dashed border-slate-200 flex items-baseline justify-between">
-                  <span className="text-sm font-extrabold text-slate-900">Total</span>
-                  <span className="text-xl font-black font-mono text-slate-950">₹{grandTotal.toFixed(0)}</span>
+                <div className="pt-2 border-t border-dashed border-[#E1E7E1] flex items-baseline justify-between">
+                  <span className="text-sm font-extrabold text-[#111111]">Total</span>
+                  <span className="text-xl font-black font-mono text-[#008F25]">₹{grandTotal.toFixed(0)}</span>
                 </div>
               </div>
 
@@ -2367,7 +2035,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               <div className="space-y-3 pt-2">
                 <button
                   onClick={handleProceedToPayment}
-                  className="w-full h-12 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
+                  className="w-full h-12 bg-[#00B32D] hover:bg-[#008F25] active:scale-95 text-white font-bold text-xs uppercase tracking-wider rounded-xl shadow-xs transition-all flex items-center justify-center gap-2 cursor-pointer"
                 >
                   <span>Continue to Payment</span>
                   <ArrowRight className="w-4 h-4" />
@@ -2375,7 +2043,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                 <button
                   onClick={() => setCurrentStep(1)}
-                  className="w-full py-2.5 text-xs font-semibold text-slate-600 hover:text-slate-900 text-center transition-colors cursor-pointer"
+                  className="w-full py-2.5 text-xs font-semibold text-[#646B65] hover:text-[#111111] text-center transition-colors cursor-pointer"
                 >
                   ← Back to Upload
                 </button>
@@ -2400,66 +2068,66 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                 <button
                   type="button"
                   onClick={() => setCurrentStep(2)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-slate-950 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-[#111111] hover:text-black bg-white hover:bg-[#F7F8F7] border border-[#E1E7E1] rounded-xl transition-all active:scale-95 shadow-2xs cursor-pointer"
                 >
-                  <ArrowLeft className="w-3.5 h-3.5 text-slate-600" />
+                  <ArrowLeft className="w-3.5 h-3.5 text-[#646B65]" />
                   <span>Back to Review</span>
                 </button>
-                <span className="text-[10px] font-bold tracking-widest text-blue-600 uppercase font-mono">
+                <span className="text-[10px] font-bold tracking-widest text-[#008F25] uppercase font-mono">
                   STEP 3 OF 3
                 </span>
               </div>
 
               <div className="text-center space-y-0.5">
-                <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+                <h1 className="text-xl sm:text-2xl font-bold text-[#111111] tracking-tight">
                   Complete Payment
                 </h1>
-                <p className="text-xs text-slate-500">
+                <p className="text-xs text-[#646B65]">
                   Pay securely to dispatch your print order to <strong>{shop.name}</strong>
                 </p>
               </div>
 
               {/* Payment Card: Clean, Modern & Direct */}
-              <div className="bg-white rounded-3xl border border-slate-200/90 p-5 sm:p-7 shadow-sm space-y-5">
+              <div className="bg-white rounded-3xl border border-[#E1E7E1] p-5 sm:p-7 shadow-sm space-y-5">
                 {/* Header Price & Security Badge */}
-                <div className="flex items-center justify-between pb-4 border-b border-slate-100">
+                <div className="flex items-center justify-between pb-4 border-b border-[#E1E7E1]">
                   <div>
-                    <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider block">
+                    <span className="text-[11px] font-bold text-[#646B65] uppercase tracking-wider block">
                       Total Payable Amount
                     </span>
-                    <span className="font-mono font-black text-3xl text-slate-900 tracking-tight">
+                    <span className="font-mono font-black text-3xl text-[#111111] tracking-tight">
                       ₹{grandTotal.toFixed(0)}
                     </span>
                   </div>
 
                   <div className="text-right">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-emerald-700 bg-emerald-50 px-3 py-1 rounded-full border border-emerald-200">
-                      <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                    <span className="inline-flex items-center gap-1.5 text-xs font-bold text-[#008F25] bg-[#E8F8EC] px-3 py-1 rounded-full border border-[#A7F3D0]">
+                      <ShieldCheck className="w-4 h-4 text-[#00B32D]" />
                       <span>100% Secure Payment</span>
                     </span>
-                    <span className="text-[10px] text-slate-500 font-mono block mt-1">
+                    <span className="text-[10px] text-[#646B65] font-mono block mt-1">
                       Official Payment Gateway
                     </span>
                   </div>
                 </div>
 
                 {/* Print Order Summary Card */}
-                <div className="bg-slate-50/80 rounded-2xl border border-slate-200/80 p-4 space-y-3 text-xs">
-                  <div className="flex items-center justify-between text-slate-800 font-bold">
+                <div className="bg-[#F7F8F7] rounded-2xl border border-[#E1E7E1] p-4 space-y-3 text-xs">
+                  <div className="flex items-center justify-between text-[#111111] font-bold">
                     <span className="uppercase tracking-wider text-[11px]">Order Summary</span>
-                    <span className="text-[11px] text-slate-500 font-normal">
+                    <span className="text-[11px] text-[#646B65] font-normal">
                       {files.length} document{files.length > 1 ? 's' : ''}
                     </span>
                   </div>
 
                   <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
                     {files.map((f, i) => (
-                      <div key={f.id || i} className="p-2.5 bg-white rounded-xl border border-slate-200/70 space-y-1 text-left">
-                        <div className="flex items-center justify-between font-bold text-slate-900">
+                      <div key={f.id || i} className="p-2.5 bg-white rounded-xl border border-[#E1E7E1] space-y-1 text-left">
+                        <div className="flex items-center justify-between font-bold text-[#111111]">
                           <span className="truncate max-w-[220px]">{f.fileName}</span>
                           <span className="font-mono">₹{f.totalPrice.toFixed(0)}</span>
                         </div>
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-slate-500">
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#646B65]">
                           <span>{f.estimatedPages} {f.estimatedPages === 1 ? 'Page' : 'Pages'}</span>
                           <span>·</span>
                           <span>{f.color === 'COLOR' ? 'Color' : 'B&W'}</span>
@@ -2474,23 +2142,23 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                     ))}
                   </div>
 
-                  <div className="pt-2 border-t border-slate-200 space-y-1.5 text-slate-600 text-left">
+                  <div className="pt-2 border-t border-[#E1E7E1] space-y-1.5 text-[#646B65] text-left">
                     <div className="flex items-center justify-between">
                       <span>Printing Charges</span>
-                      <span className="font-mono font-semibold text-slate-900">₹{subtotal.toFixed(0)}</span>
+                      <span className="font-mono font-semibold text-[#111111]">₹{subtotal.toFixed(0)}</span>
                     </div>
-                    <div className="pt-2 border-t border-slate-200 flex items-center justify-between font-bold text-slate-900 text-sm">
+                    <div className="pt-2 border-t border-[#E1E7E1] flex items-center justify-between font-bold text-[#111111] text-sm">
                       <span>Total Amount</span>
-                      <span className="font-mono text-emerald-700 text-base">₹{grandTotal.toFixed(0)}</span>
+                      <span className="font-mono text-[#008F25] text-base font-extrabold">₹{grandTotal.toFixed(0)}</span>
                     </div>
                   </div>
                 </div>
 
                 {/* Optional Mobile Number for SMS Token */}
                 <div className="text-left space-y-1.5">
-                  <label className="text-xs font-bold text-slate-800 flex items-center justify-between">
-                    <span>Mobile Number for SMS Token <span className="text-[10px] text-slate-400 font-normal">(Optional)</span></span>
-                    <span className="text-[10px] text-slate-400 font-mono">10 digits</span>
+                  <label className="text-xs font-bold text-[#111111] flex items-center justify-between">
+                    <span>Mobile Number for SMS Token <span className="text-[10px] text-[#646B65] font-normal">(Optional)</span></span>
+                    <span className="text-[10px] text-[#646B65] font-mono">10 digits</span>
                   </label>
                   <input
                     type="tel"
@@ -2504,7 +2172,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                       setCustomerPhone(e.target.value.replace(/\D/g, ''));
                     }}
                     onBlur={() => setPhoneTouched(true)}
-                    className="w-full h-11 px-3.5 bg-slate-50 border border-slate-200 rounded-xl text-xs font-mono focus:outline-none focus:ring-2 focus:ring-emerald-500 bg-white"
+                    className="w-full h-11 px-3.5 bg-white border border-[#E1E7E1] rounded-xl text-xs font-mono focus:outline-none focus:ring-2 focus:ring-[#00B32D] focus:border-[#00B32D]"
                   />
                   {phoneTouched && customerPhone.trim() && !validatePhone(customerPhone, false).isValid && (
                     <p className="text-[11px] text-red-600 font-medium">
@@ -2616,7 +2284,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                     type="button"
                     disabled={isProcessingPayment || isCheckingStatus || paymentPendingState?.kind === 'DISPATCH'}
                     onClick={handlePayNow}
-                    className="w-full h-14 bg-emerald-600 hover:bg-emerald-700 active:scale-[0.99] text-white font-black text-sm uppercase tracking-wider rounded-2xl shadow-md transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
+                    className="w-full h-14 bg-[#00B32D] hover:bg-[#008F25] active:scale-[0.99] text-white font-black text-sm uppercase tracking-wider rounded-2xl shadow-md transition-all flex items-center justify-center gap-2.5 cursor-pointer disabled:opacity-75 disabled:cursor-not-allowed"
                   >
                     {isProcessingPayment ? (
                       <>
@@ -2635,7 +2303,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                       </>
                     ) : (
                       <>
-                        <Lock className="w-4 h-4 text-emerald-200" />
+                        <Lock className="w-4 h-4 text-emerald-100" />
                         <span>{paymentFailedState ? 'Retry Payment' : 'Pay Now'} · ₹{grandTotal.toFixed(0)}</span>
                         <ArrowRight className="w-4 h-4" />
                       </>
@@ -2649,7 +2317,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                         type="button"
                         onClick={() => handleManualStatusCheck(activeOrderId)}
                         disabled={isCheckingStatus}
-                        className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-900 underline underline-offset-2 flex items-center justify-center gap-1 mx-auto cursor-pointer"
+                        className="text-[11px] font-semibold text-[#008F25] hover:text-[#00B32D] underline underline-offset-2 flex items-center justify-center gap-1 mx-auto cursor-pointer"
                       >
                         <RotateCw className={`w-3 h-3 ${isCheckingStatus ? 'animate-spin' : ''}`} />
                         <span>Already completed UPI payment? Click here to check status</span>
@@ -2659,23 +2327,23 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
 
                   {/* Supported Payment Channels */}
                   <div className="pt-2 text-center space-y-2">
-                    <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[11px] text-slate-500 font-medium px-1">
+                    <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 text-[11px] text-[#646B65] font-medium px-1">
                       <span className="shrink-0">Supported:</span>
-                      <span className="font-bold text-slate-800 shrink-0">UPI</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="font-bold text-slate-800 shrink-0">Google Pay</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="font-bold text-slate-800 shrink-0">PhonePe</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="font-bold text-slate-800 shrink-0">Paytm</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="font-bold text-slate-800 shrink-0">Cards</span>
-                      <span className="text-slate-300">·</span>
-                      <span className="font-bold text-slate-800 shrink-0">NetBanking</span>
+                      <span className="font-bold text-[#111111] shrink-0">UPI</span>
+                      <span className="text-[#E1E7E1]">·</span>
+                      <span className="font-bold text-[#111111] shrink-0">Google Pay</span>
+                      <span className="text-[#E1E7E1]">·</span>
+                      <span className="font-bold text-[#111111] shrink-0">PhonePe</span>
+                      <span className="text-[#E1E7E1]">·</span>
+                      <span className="font-bold text-[#111111] shrink-0">Paytm</span>
+                      <span className="text-[#E1E7E1]">·</span>
+                      <span className="font-bold text-[#111111] shrink-0">Cards</span>
+                      <span className="text-[#E1E7E1]">·</span>
+                      <span className="font-bold text-[#111111] shrink-0">NetBanking</span>
                     </div>
 
-                    <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-slate-400 font-mono px-1">
-                      <Lock className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <div className="flex flex-wrap items-center justify-center gap-1.5 text-[11px] text-[#646B65] font-mono px-1">
+                      <Lock className="w-3.5 h-3.5 text-[#00B32D] shrink-0" />
                       <span className="text-center">Razorpay Secure Checkout · Instant Printer Dispatch</span>
                     </div>
                   </div>
@@ -2685,7 +2353,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               <div className="text-center">
                 <button
                   onClick={() => setCurrentStep(2)}
-                  className="text-xs font-semibold text-slate-500 hover:text-slate-800 transition-colors"
+                  className="text-xs font-semibold text-[#646B65] hover:text-[#111111] transition-colors"
                 >
                   ← Back to Order Review
                 </button>
@@ -2705,16 +2373,16 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               exit="exit"
               className="max-w-md mx-auto space-y-6"
             >
-              <div className="bg-white rounded-3xl border border-slate-200 p-6 sm:p-8 shadow-sm space-y-5 text-center">
-                <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto shadow-2xs">
+              <div className="bg-white rounded-3xl border border-[#E1E7E1] p-6 sm:p-8 shadow-sm space-y-5 text-center">
+                <div className="w-14 h-14 rounded-full bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center mx-auto shadow-2xs">
                   <CheckCircle2 className="w-7 h-7" />
                 </div>
 
                 <div>
-                  <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-widest font-mono">
+                  <span className="text-[10px] font-bold text-[#008F25] uppercase tracking-widest font-mono">
                     Payment Confirmed · Order Dispatched
                   </span>
-                  <h1 className="text-3xl sm:text-4xl font-black text-slate-900 mt-1 font-mono tracking-tight">
+                  <h1 className="text-3xl sm:text-4xl font-black text-[#111111] mt-1 font-mono tracking-tight">
                     {activeJob.id}
                   </h1>
                   <div className="pt-2 flex items-center justify-center">
@@ -2723,39 +2391,39 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                         navigator.clipboard?.writeText(activeJob.id);
                         showToast('Token Copied!', `Order code #${activeJob.id} copied to clipboard`, 'info', 3000);
                       }}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-700 text-xs font-semibold rounded-xl cursor-pointer transition-colors"
+                      className="inline-flex items-center gap-1.5 px-3.5 py-1.5 bg-[#F7F8F7] hover:bg-[#E1E7E1] active:scale-95 text-[#111111] border border-[#E1E7E1] text-xs font-semibold rounded-xl cursor-pointer transition-colors"
                     >
-                      <Copy className="w-3.5 h-3.5" />
+                      <Copy className="w-3.5 h-3.5 text-[#00B32D]" />
                       <span>Copy Order Token</span>
                     </button>
                   </div>
-                  <p className="text-xs text-slate-500 mt-2">
+                  <p className="text-xs text-[#646B65] mt-2">
                     Show this token code at <strong>{shop.name}</strong> counter to collect your prints.
                   </p>
                 </div>
 
                 {/* Queue Status Box */}
-                <div className="p-4 bg-slate-50 rounded-2xl text-left space-y-2 border border-slate-100">
-                  <span className="text-xs font-bold text-slate-800 block">Queue Status</span>
+                <div className="p-4 bg-[#F7F8F7] rounded-2xl text-left space-y-2 border border-[#E1E7E1]">
+                  <span className="text-xs font-bold text-[#111111] block">Queue Status</span>
                   <div className="space-y-1.5 text-xs">
-                    <div className="flex items-center gap-2 text-emerald-700 font-semibold">
-                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <div className="flex items-center gap-2 text-[#008F25] font-semibold">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#00B32D] shrink-0" />
                       <span>Payment Verified</span>
                     </div>
                     {(() => {
                       const status = activeJob.printStatus;
                       if (status === 'COMPLETED') {
                         return (
-                          <div className="flex items-center gap-2 font-semibold text-emerald-700">
-                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-emerald-600" />
+                          <div className="flex items-center gap-2 font-semibold text-[#008F25]">
+                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0 text-[#00B32D]" />
                             <span>Printed & Ready for Pickup</span>
                           </div>
                         );
                       }
                       if (status === 'SUBMITTED_TO_SPOOLER') {
                         return (
-                          <div className="flex items-center gap-2 font-semibold text-cyan-700">
-                            <RotateCw className="w-3.5 h-3.5 animate-spin text-cyan-600 shrink-0" />
+                          <div className="flex items-center gap-2 font-semibold text-emerald-700">
+                            <RotateCw className="w-3.5 h-3.5 animate-spin text-[#00B32D] shrink-0" />
                             <span>Printer Processing Document</span>
                           </div>
                         );
@@ -2787,8 +2455,8 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                         );
                       }
                       return (
-                        <div className="flex items-center gap-2 font-semibold text-blue-700">
-                          <RotateCw className="w-3.5 h-3.5 animate-spin text-blue-600 shrink-0" />
+                        <div className="flex items-center gap-2 font-semibold text-[#008F25]">
+                          <RotateCw className="w-3.5 h-3.5 animate-spin text-[#00B32D] shrink-0" />
                           <span>Preparing & Spooling Document...</span>
                         </div>
                       );
@@ -2796,7 +2464,7 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                   </div>
                 </div>
 
-                <div className="pt-2 text-xs text-slate-500 flex justify-between border-t border-slate-100">
+                <div className="pt-2 text-xs text-[#646B65] flex justify-between border-t border-[#E1E7E1]">
                   <span>Total Paid: ₹{activeJob.totalAmount.toFixed(0)}</span>
                   <span>{files.length} document(s)</span>
                 </div>
@@ -2808,13 +2476,13 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                       setActiveJob(null);
                       setFiles([]);
                     }}
-                    className="flex-1 h-11 bg-slate-100 hover:bg-slate-200 active:scale-95 text-slate-800 font-bold text-xs rounded-xl cursor-pointer transition-all"
+                    className="flex-1 h-11 bg-[#F7F8F7] hover:bg-[#E1E7E1] active:scale-95 text-[#111111] border border-[#E1E7E1] font-bold text-xs rounded-xl cursor-pointer transition-all"
                   >
                     Print More
                   </button>
                   <button
                     onClick={() => navigate('/')}
-                    className="flex-1 h-11 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-xs rounded-xl cursor-pointer transition-all shadow-xs"
+                    className="flex-1 h-11 bg-[#00B32D] hover:bg-[#008F25] active:scale-95 text-white font-bold text-xs rounded-xl cursor-pointer transition-all shadow-xs"
                   >
                     Done
                   </button>
@@ -2833,27 +2501,29 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
               initial={{ opacity: 0, scale: 0.95, y: 10 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.95, y: 10 }}
-              className="bg-white rounded-3xl max-w-xl w-full p-5 sm:p-6 shadow-2xl border border-slate-200 space-y-4 my-auto"
+              className="bg-white rounded-3xl max-w-2xl w-full p-5 sm:p-6 shadow-2xl border border-[#E1E7E1] space-y-4 my-auto font-sans"
             >
               {/* Modal Header */}
-              <div className="flex items-start justify-between pb-3 border-b border-slate-100 gap-3">
+              <div className="flex items-start justify-between pb-3 border-b border-[#E1E7E1] gap-3">
                 <div className="flex items-center gap-3 min-w-0">
                   <div
-                    className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                    className={`w-11 h-11 rounded-2xl flex items-center justify-center shrink-0 ${
                       previewFile.fileType.includes('pdf') || previewFile.fileName.endsWith('.pdf')
-                        ? 'bg-red-50 text-red-600'
+                        ? 'bg-[#E8F8EC] text-[#00B32D]'
                         : 'bg-emerald-50 text-emerald-600'
                     }`}
                   >
                     {previewFile.fileType.includes('pdf') || previewFile.fileName.endsWith('.pdf') ? (
-                      <FileText className="w-5 h-5 text-red-600" />
+                      <FileText className="w-5 h-5 text-[#00B32D]" />
                     ) : (
                       <ImageIcon className="w-5 h-5 text-emerald-600" />
                     )}
                   </div>
                   <div className="min-w-0">
-                    <h3 className="font-bold text-sm text-slate-900 truncate">{previewFile.fileName}</h3>
-                    <p className="text-[11px] text-slate-500">
+                    <h3 className="font-extrabold text-sm sm:text-base text-[#111111] truncate" title={previewFile.fileName}>
+                      {previewFile.fileName}
+                    </h3>
+                    <p className="text-xs text-[#646B65] mt-0.5 font-medium">
                       {(previewFile.fileSize / 1024 / 1024).toFixed(1)} MB · {previewFile.estimatedPages} page
                       {previewFile.estimatedPages > 1 ? 's' : ''}
                     </p>
@@ -2863,177 +2533,77 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                 <button
                   type="button"
                   onClick={() => setPreviewFile(null)}
-                  className="p-1.5 text-slate-400 hover:text-slate-700 rounded-lg hover:bg-slate-100 cursor-pointer transition-colors"
+                  className="p-1.5 text-slate-400 hover:text-[#111111] rounded-xl hover:bg-[#F7F8F7] cursor-pointer transition-colors"
                 >
                   <X className="w-5 h-5" />
                 </button>
               </div>
 
-              {/* Print Config Summary Badges */}
-              <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-bold text-slate-600">
-                <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-md">
+              {/* Print Config Summary Chips */}
+              <div className="flex flex-wrap items-center gap-1.5 text-xs font-bold">
+                <span className="px-2.5 py-1 bg-[#E8F8EC] text-[#008F25] border border-[#A7F3D0] rounded-xl">
                   {previewFile.color === 'COLOR' ? '🎨 Colour Print' : '⬛ B&W Print'}
                 </span>
-                <span className="px-2 py-0.5 bg-slate-100 rounded-md">📄 {previewFile.paperSize}</span>
-                <span className="px-2 py-0.5 bg-slate-100 rounded-md">
+                <span className="px-2.5 py-1 bg-[#F7F8F7] text-[#111111] border border-[#E1E7E1] rounded-xl">
+                  📄 {previewFile.paperSize}
+                </span>
+                <span className="px-2.5 py-1 bg-[#F7F8F7] text-[#111111] border border-[#E1E7E1] rounded-xl">
                   {previewFile.sides === 'DOUBLE' ? '🔁 Double Sided' : '⏹ Single Sided'}
                 </span>
-                <span className="px-2 py-0.5 bg-slate-100 rounded-md">
+                <span className="px-2.5 py-1 bg-[#F7F8F7] text-[#111111] border border-[#E1E7E1] rounded-xl">
                   {previewFile.orientation === 'LANDSCAPE' ? '↔ Landscape' : '↕ Portrait'}
                 </span>
-                <span className="px-2 py-0.5 bg-slate-100 rounded-md">
+                <span className="px-2.5 py-1 bg-[#F7F8F7] text-[#111111] border border-[#E1E7E1] rounded-xl">
                   {previewFile.pagesPerSheet || 1} page/sheet
                 </span>
                 {previewFile.pageSelection === 'CUSTOM' && previewFile.customRange && (
-                  <span className="px-2 py-0.5 bg-purple-50 text-purple-700 rounded-md font-mono">
+                  <span className="px-2.5 py-1 bg-[#E8F8EC] text-[#008F25] border border-[#A7F3D0] rounded-xl font-mono">
                     Pages: {previewFile.customRange}
                   </span>
                 )}
               </div>
 
-              {/* View Mode Switcher (For PDFs) */}
-              {(previewFile.fileType.includes('pdf') || previewFile.fileName.endsWith('.pdf')) && previewFile.previewUrl && (
-                <div className="flex items-center justify-center p-1 bg-slate-100 rounded-xl text-xs font-bold text-slate-600">
-                  <button
-                    type="button"
-                    onClick={() => setPreviewMode('SHEET')}
-                    className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer ${
-                      previewMode === 'SHEET'
-                        ? 'bg-white text-blue-700 shadow-2xs'
-                        : 'hover:text-slate-900'
-                    }`}
-                  >
-                    Print Sheet Simulation
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setPreviewMode('NATIVE')}
-                    className={`flex-1 py-1.5 rounded-lg transition-all cursor-pointer ${
-                      previewMode === 'NATIVE'
-                        ? 'bg-white text-blue-700 shadow-2xs'
-                        : 'hover:text-slate-900'
-                    }`}
-                  >
-                    PDF Document Viewer
-                  </button>
+              {/* Unified Document Preview Section */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-xs font-extrabold text-[#111111] uppercase tracking-wider">
+                    Document Preview
+                  </h4>
+                  <span className="text-[11px] text-[#646B65] font-medium">
+                    {previewFile.estimatedPages} page{previewFile.estimatedPages > 1 ? 's' : ''} · {previewFile.paperSize}
+                  </span>
                 </div>
-              )}
 
-              {/* Preview Body */}
-              <div className="bg-slate-100/90 rounded-2xl p-4 sm:p-6 flex items-center justify-center min-h-[300px] max-h-[420px] overflow-hidden">
-                {/* 1. Image Preview with selected color filter */}
-                {previewFile.fileType.startsWith('image/') && previewFile.previewUrl ? (
-                  <div
-                    className={`bg-white p-3 rounded-xl shadow-md border border-slate-200/80 max-h-72 overflow-hidden flex items-center justify-center ${
-                      previewFile.color === 'BW' ? 'grayscale contrast-125' : ''
-                    }`}
-                  >
-                    <img
-                      src={previewFile.previewUrl}
-                      alt={previewFile.fileName}
-                      className="max-h-64 w-auto object-contain rounded-lg"
-                    />
-                  </div>
-                ) : previewMode === 'NATIVE' && previewFile.previewUrl ? (
-                  /* 2. Continuous Vertical Scrolling PDF Viewer */
-                  <div className="w-full h-96 bg-slate-900 rounded-2xl overflow-hidden shadow-inner">
+                <div className="bg-[#F7F8F7] rounded-2xl border border-[#E1E7E1] p-2 sm:p-3 flex items-center justify-center min-h-[340px] max-h-[490px] overflow-hidden w-full">
+                  {previewFile.fileType.startsWith('image/') && previewFile.previewUrl ? (
+                    <div
+                      className={`bg-white p-3 rounded-xl shadow-md border border-[#E1E7E1] max-h-80 overflow-hidden flex items-center justify-center ${
+                        previewFile.color === 'BW' ? 'grayscale contrast-125' : ''
+                      }`}
+                    >
+                      <img
+                        src={previewFile.previewUrl}
+                        alt={previewFile.fileName}
+                        className="max-h-72 w-auto object-contain rounded-lg"
+                      />
+                    </div>
+                  ) : (
                     <ContinuousPdfViewer
+                      fileBlob={sourceFilesRef.current.get(previewFile.id)}
                       fileUrl={previewFile.previewUrl}
                       fileName={previewFile.fileName}
                       colorMode={previewFile.color}
+                      onClose={() => setPreviewFile(null)}
                     />
-                  </div>
-                ) : (
-                  /* 3. High-Fidelity Generated Print Sheet Simulation */
-                  <div
-                    className={`bg-white rounded-lg shadow-xl border border-slate-300/80 p-5 sm:p-6 flex flex-col justify-between relative overflow-hidden transition-all ${
-                      previewFile.orientation === 'LANDSCAPE'
-                        ? 'w-full max-w-[380px] aspect-[1.414/1]'
-                        : 'w-60 sm:w-64 aspect-[1/1.414]'
-                    } ${previewFile.color === 'BW' ? 'grayscale' : ''}`}
-                  >
-                    {/* Background Watermark */}
-                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none opacity-5 rotate-[-30deg]">
-                      <span className="text-3xl sm:text-4xl font-black font-mono tracking-widest text-slate-900">
-                        PRINT PREVIEW
-                      </span>
-                    </div>
-
-                    {/* Sheet Header */}
-                    <div className="space-y-2 z-10">
-                      <div className="flex items-center justify-between border-b pb-2 border-slate-200">
-                        <div className="flex items-center gap-1.5">
-                          <div
-                            className={`w-4 h-4 rounded flex items-center justify-center text-[8px] font-bold text-white ${
-                              previewFile.color === 'COLOR' ? 'bg-blue-600' : 'bg-slate-700'
-                            }`}
-                          >
-                            P
-                          </div>
-                          <span className="text-[10px] font-bold text-slate-800 truncate max-w-[140px]">
-                            {previewFile.fileName}
-                          </span>
-                        </div>
-                        <span className="text-[9px] font-mono text-slate-400">
-                          {previewFile.paperSize} · {previewFile.color === 'COLOR' ? 'Color' : 'B&W'}
-                        </span>
-                      </div>
-
-                      {/* Header Highlight Band */}
-                      <div
-                        className={`h-2 rounded-full w-3/4 ${
-                          previewFile.color === 'COLOR' ? 'bg-blue-600/80' : 'bg-slate-800'
-                        }`}
-                      />
-                      <div className="h-1.5 rounded-full w-1/2 bg-slate-300" />
-                    </div>
-
-                    {/* Sheet Content Simulation (Simulated Paragraphs or 2-up layout) */}
-                    <div className="py-2 space-y-2 z-10 flex-1 flex flex-col justify-center">
-                      {previewFile.pagesPerSheet === 2 ? (
-                        <div className="grid grid-cols-2 gap-2 h-full border border-dashed border-slate-200 p-2 rounded">
-                          <div className="space-y-1.5">
-                            <div className="h-1.5 bg-slate-300 rounded w-full" />
-                            <div className="h-1.5 bg-slate-200 rounded w-5/6" />
-                            <div className="h-1.5 bg-slate-200 rounded w-4/6" />
-                            <div className="h-1.5 bg-slate-200 rounded w-full" />
-                          </div>
-                          <div className="space-y-1.5 border-l border-dashed border-slate-200 pl-2">
-                            <div className="h-1.5 bg-slate-300 rounded w-full" />
-                            <div className="h-1.5 bg-slate-200 rounded w-5/6" />
-                            <div className="h-1.5 bg-slate-200 rounded w-4/6" />
-                            <div className="h-1.5 bg-slate-200 rounded w-full" />
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="h-1.5 bg-slate-200 rounded w-full" />
-                          <div className="h-1.5 bg-slate-200 rounded w-11/12" />
-                          <div className="h-1.5 bg-slate-200 rounded w-4/5" />
-                          <div className="h-1.5 bg-slate-200 rounded w-full" />
-                          <div className="h-1.5 bg-slate-200 rounded w-3/4" />
-                          <div className="h-1.5 bg-slate-200 rounded w-5/6" />
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Sheet Footer */}
-                    <div className="border-t border-slate-100 pt-2 flex items-center justify-between text-[8px] text-slate-400 font-mono z-10">
-                      <span>{shop.name} Print Counter</span>
-                      <span>
-                        Page 1 of {countPages(previewFile)} ({previewFile.copies} cop
-                        {previewFile.copies > 1 ? 'ies' : 'y'})
-                      </span>
-                    </div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
 
               {/* Modal Footer with Actions */}
               <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
-                <div className="text-xs text-slate-500">
+                <div className="text-xs text-[#646B65]">
                   <span>Price for this file: </span>
-                  <span className="font-mono font-bold text-slate-900 text-sm">
+                  <span className="font-mono font-extrabold text-[#111111] text-sm">
                     ₹{previewFile.totalPrice.toFixed(0)}
                   </span>
                 </div>
@@ -3046,15 +2616,15 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
                       setPreviewFile(null);
                       setCurrentStep(1);
                     }}
-                    className="flex-1 sm:flex-none px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1.5"
+                    className="flex-1 sm:flex-none px-4 py-2.5 bg-[#F7F8F7] hover:bg-[#E1E7E1] text-[#111111] border border-[#E1E7E1] text-xs font-bold rounded-xl cursor-pointer transition-colors flex items-center justify-center gap-1.5"
                   >
-                    <Edit3 className="w-3.5 h-3.5" />
+                    <Edit3 className="w-3.5 h-3.5 text-[#00B32D]" />
                     <span>Change Settings</span>
                   </button>
                   <button
                     type="button"
                     onClick={() => setPreviewFile(null)}
-                    className="flex-1 sm:flex-none px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl cursor-pointer transition-colors shadow-xs"
+                    className="flex-1 sm:flex-none px-6 py-2.5 bg-[#00B32D] hover:bg-[#008F25] text-white text-xs font-bold rounded-xl cursor-pointer transition-colors shadow-xs"
                   >
                     Done Reviewing
                   </button>
@@ -3075,6 +2645,90 @@ export const CustomerPrintFlow: React.FC<CustomerPrintFlowProps> = ({ shopSlug }
           if (el) el.click();
         }}
       />
+
+      {/* Help Modal */}
+      <AnimatePresence>
+        {helpOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 font-['Manrope',sans-serif]">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 bg-[#111111]/40 backdrop-blur-sm"
+              onClick={() => setHelpOpen(false)}
+            />
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="bg-white rounded-3xl shadow-xl w-full max-w-lg max-h-[90vh] overflow-hidden relative flex flex-col z-10 border border-[#E1E7E1]"
+            >
+              <div className="p-6 border-b border-[#E1E7E1] flex items-center justify-between">
+                <h2 className="text-lg font-extrabold text-[#111111]">How to Print</h2>
+                <button onClick={() => setHelpOpen(false)} className="p-2 hover:bg-[#F7F8F7] rounded-full transition-colors cursor-pointer">
+                  <X className="w-5 h-5 text-[#646B65]" />
+                </button>
+              </div>
+              <div className="p-6 overflow-y-auto space-y-6 bg-[#F7F8F7]/50">
+                <p className="text-sm text-[#646B65]">Follow these simple steps to upload your documents and get your prints.</p>
+                
+                <div className="space-y-4">
+                  {[
+                    { icon: Upload, title: 'Upload Documents', desc: 'Choose PDF, JPG or PNG files from your device. You can upload multiple documents.' },
+                    { icon: Edit3, title: 'Choose Print Settings', desc: 'Select your preferred print options, such as black & white or colour, paper size, number of copies and orientation.' },
+                    { icon: Eye, title: 'Review Your Documents', desc: 'Check your document preview, selected print settings and estimated price before continuing.' },
+                    { icon: CreditCard, title: 'Make Payment', desc: 'Complete your order payment using the available payment options.' },
+                    { icon: Printer, title: 'Collect Your Prints', desc: 'Once your order is processed, visit the shop and collect your printed documents.' },
+                  ].map((step, i) => (
+                    <div key={i} className="flex gap-4 p-4 rounded-2xl bg-white border border-[#E1E7E1] shadow-2xs">
+                      <div className="w-10 h-10 rounded-xl bg-[#E8F8EC] flex items-center justify-center shrink-0 border border-[#A7F3D0]">
+                        <step.icon className="w-5 h-5 text-[#00B32D]" />
+                      </div>
+                      <div>
+                        <h4 className="text-sm font-extrabold text-[#111111]">{i + 1}. {step.title}</h4>
+                        <p className="text-xs text-[#646B65] mt-1 leading-relaxed">{step.desc}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="pt-4 border-t border-[#E1E7E1] space-y-4">
+                  <h3 className="text-sm font-bold text-[#111111]">Frequently Asked Questions</h3>
+                  <div className="space-y-3">
+                    {[
+                      { q: 'Which file formats are supported?', a: 'PDF, JPG and PNG, subject to the displayed file size limit.' },
+                      { q: 'Can I print multiple copies?', a: 'Yes. Select the required number of copies in Print Settings.' },
+                      { q: 'Can I select specific pages?', a: 'Yes. Use Custom Pages in Print Settings.' },
+                      { q: 'Why can\'t I upload documents?', a: 'Uploading may be paused when the print shop or its connected agent is offline. Try again when the shop is online.' },
+                    ].map((faq, i) => (
+                      <div key={i}>
+                        <p className="text-xs font-bold text-[#111111]">{faq.q}</p>
+                        <p className="text-xs text-[#646B65] mt-0.5 leading-relaxed">{faq.a}</p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Temporary Status Popup for Refresh Button Loading Feedback */}
+      <AnimatePresence>
+        {isManualCheckingStatus && (
+          <motion.div
+            initial={{ opacity: 0, y: 16, scale: 0.95 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 16, scale: 0.95 }}
+            transition={{ duration: 0.2 }}
+            className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2.5 px-4 py-2.5 bg-white border border-[#E1E7E1] rounded-2xl shadow-xl text-[#111111] font-['Manrope',sans-serif] text-xs sm:text-sm font-medium pointer-events-none"
+          >
+            <RotateCw className="w-4 h-4 text-[#00B32D] animate-spin shrink-0" />
+            <span>Checking shop status...</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 };

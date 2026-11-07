@@ -57,7 +57,7 @@ export interface WebhookEventInput {
   shopId?: string;
 }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const uuid = (name: string, value: string) => {
   if (!UUID.test(value)) throw new Error(`${name} must be a UUID.`);
 };

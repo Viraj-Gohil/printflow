@@ -133,7 +133,7 @@ interface AppContextType {
     city: string;
     password: string;
     planId?: string;
-  }) => Promise<{ success: boolean; message?: string }> | { success: boolean; message?: string };
+  }) => Promise<{ success: boolean; message?: string; requireEmailVerification?: boolean; email?: string; devOtp?: string }> | { success: boolean; message?: string; requireEmailVerification?: boolean; email?: string; devOtp?: string };
   login: (email: string, password: string) => Promise<{ success: boolean; message?: string; user?: UserProfile }>;
   adminLogin: (email: string, password: string) => Promise<{ success: boolean; message?: string }>;
   forgotPassword: (email: string) => Promise<{ success: boolean; message?: string; devResetLink?: string }>;
@@ -268,6 +268,10 @@ interface AppContextType {
   // Router path & navigation helper
   currentPath: string;
   navigate: (path: string) => void;
+
+  // Global QR Scanner
+  isQrScannerOpen: boolean;
+  setIsQrScannerOpen: (open: boolean) => void;
 }
 
 const AppContext = createContext<AppContextType | null>(null);
@@ -348,6 +352,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     return '/';
   });
+  const [isQrScannerOpen, setIsQrScannerOpen] = useState(false);
 
   const navigate = (path: string) => {
     setCurrentPath(path);
@@ -484,7 +489,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     city: string;
     password: string;
     planId?: string;
-  }): Promise<{ success: boolean; message?: string }> => {
+  }): Promise<{ success: boolean; message?: string; requireEmailVerification?: boolean; email?: string; devOtp?: string }> => {
     const trimmedEmail = data.email.trim().toLowerCase();
 
     // Check if email already registered locally in memory
@@ -526,6 +531,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (!response.ok || !resData.success) {
         return { success: false, message: resData.error || 'Registration failed. Database is currently unavailable.' };
+      }
+      if (resData.requireEmailVerification) {
+        return { success: true, requireEmailVerification: true, email: resData.email, devOtp: resData.devOtp };
       }
       if (resData.accessToken) {
         localStorage.setItem('printflow_access_token', resData.accessToken);
@@ -1708,7 +1716,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           const updates = new Map(backendJobs.map((job: PrintJob) => [job.id, job]));
           const next = previous.map((job) => {
             const update = updates.get(job.id);
-            return update ? { ...job, ...update, files: job.files } : job;
+            return update ? { ...job, ...(update as PrintJob), files: job.files } : job;
           });
           const existingIds = new Set(previous.map((job) => job.id));
           next.push(...backendJobs.filter((job: PrintJob) => !existingIds.has(job.id)));
@@ -2710,7 +2718,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         addTicketMessage,
         updateSupportSettings,
         currentPath,
-        navigate
+        navigate,
+        isQrScannerOpen,
+        setIsQrScannerOpen
       }}
     >
       {children}

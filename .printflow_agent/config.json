@@ -1,0 +1,49 @@
+{
+  "serverUrl": "https://printflow.devpixel.space",
+  "shopId": "",
+  "shopSlug": "",
+  "agentId": "",
+  "authToken": "",
+  "deviceName": "",
+  "pollIntervalMs": 5000,
+  "autoStartOnBoot": false,
+  "selectedPrinterName": "",
+  "disabledPrinterNames": [],
+  "allowColorFallback": true,
+  "spoolerTimeoutMs": 30000,
+  "themePreference": "system",
+  "loadBalancingEnabled": true,
+  "loadBalancingStrategy": "CAPABILITY_LEAST_WORKLOAD",
+  "entitlements": {
+    "plan": "growth",
+    "planName": "Growth",
+    "status": "active",
+    "trialEndsAt": null,
+    "currentPeriodEnd": "2026-12-31T00:00:00Z",
+    "limits": {
+      "monthlyPrintJobs": 2000,
+      "printers": 5,
+      "shops": 1
+    },
+    "usage": {
+      "monthlyPrintJobs": 150,
+      "printers": 2
+    },
+    "features": {
+      "canAutoPrint": true,
+      "canMultipleQueues": true,
+      "canSmartPrinterSelection": true,
+      "canPriorityQueue": true,
+      "canLoadBalancing": false,
+      "canQueueOptimization": false,
+      "canFailureMonitoring": false,
+      "canAdvancedAnalytics": true,
+      "canPrinterPerformanceReports": true
+    }
+  },
+  "registeredPrinterNames": [
+    "HP_LaserJet_Mono",
+    "Canon_Color_Duplex"
+  ],
+  "configVersion": 1
+}

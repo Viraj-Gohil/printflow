@@ -168,6 +168,8 @@ export interface FilePrintConfig {
   isIdCardMerge?: boolean;
   frontPreviewUrl?: string;
   backPreviewUrl?: string;
+  isMerged?: boolean;
+  mergedCount?: number;
   idCardType?: string;
 }
 export type PrintFileItem = FilePrintConfig;

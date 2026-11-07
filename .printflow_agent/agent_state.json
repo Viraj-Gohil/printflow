@@ -1,0 +1,40 @@
+{
+  "lastHeartbeatAt": null,
+  "lastSyncAt": null,
+  "entitlements": {
+    "plan": "growth",
+    "planName": "Growth",
+    "status": "active",
+    "isOperational": true,
+    "remainingTrialDays": null,
+    "limits": {
+      "monthlyPrintJobs": 2000,
+      "printers": 5,
+      "shops": 1,
+      "trialDays": 0
+    },
+    "usage": {
+      "printJobsUsed": 150,
+      "printersUsed": 2,
+      "usagePercent": 7,
+      "warningThreshold": "NORMAL"
+    },
+    "features": {
+      "qrUpload": true,
+      "automaticPrinting": true,
+      "basicQueue": true,
+      "manualPrinterSelection": true,
+      "smartPrinterSelection": true,
+      "multipleQueues": true,
+      "advancedQueue": true,
+      "priorityManagement": true,
+      "loadBalancing": false,
+      "queueOptimization": false,
+      "advancedAnalytics": true,
+      "printerFailureMonitoring": false,
+      "advancedPrinterManagement": false
+    },
+    "entitlementVersion": "1.0",
+    "syncedAt": "2026-11-05T05:21:12.010Z"
+  }
+}

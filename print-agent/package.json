@@ -10,13 +10,18 @@
     "build:renderer": "vite build",
     "build:main": "tsc -p tsconfig.node.json",
     "build": "npm run build:renderer && npm run build:main",
-    "start": "electron .",
+    "prestart": "npm run build",
+    "start": "node scripts/ensure-electron.mjs && electron .",
+    "verify:electron": "node scripts/ensure-electron.mjs",
+    "fix:electron": "node scripts/fix-electron.mjs",
+    "postinstall": "node scripts/ensure-electron.mjs",
     "pack": "electron-builder --dir",
     "dist": "electron-builder"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.1.0",
     "clsx": "^2.1.1",
+    "d3": "^7.9.0",
     "lucide-react": "^0.546.0",
     "pdfjs-dist": "^6.4.299",
     "react": "^19.3.1",
@@ -25,6 +30,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
+    "@types/d3": "^7.4.3",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",

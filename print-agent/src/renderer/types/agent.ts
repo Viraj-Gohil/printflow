@@ -42,6 +42,46 @@ export interface ShopDetails {
   isOperational: boolean;
   restrictionReason: string | null;
   permissions: string[];
+  entitlements?: PlanEntitlements;
+}
+
+export interface PlanFeatures {
+  qrUpload: boolean;
+  automaticPrinting: boolean;
+  basicQueue: boolean;
+  manualPrinterSelection: boolean;
+  smartPrinterSelection: boolean;
+  multipleQueues: boolean;
+  advancedQueue: boolean;
+  priorityManagement: boolean;
+  loadBalancing: boolean;
+  queueOptimization: boolean;
+  advancedAnalytics: boolean;
+  printerFailureMonitoring: boolean;
+  advancedPrinterManagement: boolean;
+}
+
+export interface PlanEntitlements {
+  plan: 'starter' | 'growth' | 'business';
+  planName: string;
+  status: 'trialing' | 'active' | 'past_due' | 'cancelled' | 'expired' | 'suspended';
+  isOperational: boolean;
+  remainingTrialDays: number | null;
+  limits: {
+    monthlyPrintJobs: number;
+    printers: number;
+    shops: number;
+    trialDays: number;
+  };
+  usage: {
+    printJobsUsed: number;
+    printersUsed: number;
+    usagePercent: number;
+    warningThreshold: 'NORMAL' | 'WARNING_80' | 'WARNING_90' | 'LIMIT_100';
+  };
+  features: PlanFeatures;
+  entitlementVersion: string;
+  syncedAt: string;
 }
 
 export interface AgentConfig {
@@ -65,6 +105,7 @@ export interface AgentConfig {
   loadBalancingEnabled?: boolean;
   loadBalancingStrategy?: 'CAPABILITY_LEAST_WORKLOAD' | 'LEAST_QUEUE' | 'LEAST_WORKLOAD' | 'FASTEST_AVAILABLE' | 'MANUAL_ASSIGNMENT';
   shopDetails?: ShopDetails;
+  entitlements?: PlanEntitlements;
 }
 
 import {
@@ -203,6 +244,7 @@ export interface ElectronAgentAPI {
   // Status & Metrics
   getStatus: () => Promise<{ status: AgentConnectionStatus; lastHeartbeat: string | null; error?: string }>;
   getShopInfo: () => Promise<{ success: boolean; shopInfo?: ShopDetails; error?: string }>;
+  getEntitlements: () => Promise<PlanEntitlements | null>;
   getMetrics: () => Promise<QueueMetrics>;
   
   // Printers
@@ -216,6 +258,12 @@ export interface ElectronAgentAPI {
   savePrinterOwnerConfig?: (printerName: string, config: Partial<OwnerPrinterConfiguration>) => Promise<{ success: boolean; config?: StoredPrinterConfig; error?: string }>;
   resetPrinterConfig?: (printerName: string) => Promise<{ success: boolean; config?: StoredPrinterConfig; error?: string }>;
   getPrinterDetectionDetails?: (printerName: string) => Promise<{ success: boolean; hardware?: HardwareCapabilities; error?: string }>;
+  getDriverStatus?: () => Promise<{
+    success: boolean;
+    drivers: Array<{ name: string; environment?: string; driverPath?: string; manufacturer?: string }>;
+    manufacturerLinks: Record<string, string>;
+    error?: string;
+  }>;
   
   // Jobs Queue & Per-Printer Queue Management
   getJobs: () => Promise<PrintJobItem[]>;
@@ -247,6 +295,8 @@ export interface ElectronAgentAPI {
   onPrintersUpdated: (callback: (printers: DiscoveredPrinter[]) => void) => () => void;
   onPrinterScanningChanged?: (callback: (isScanning: boolean) => void) => () => void;
   onQueueStateChanged?: (callback: (queues: PrinterQueueState[]) => void) => () => void;
+  onEntitlementsChanged?: (callback: (entitlements: PlanEntitlements) => void) => () => void;
+  onPairProgress?: (callback: (stage: string) => void) => () => void;
   copyText: (text: string) => Promise<boolean>;
 }
 

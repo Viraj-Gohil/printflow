@@ -52,15 +52,58 @@ export const validatePhone = (phone: string, isRequired = true): { isValid: bool
   return { isValid: true };
 };
 
-export const validatePassword = (password: string, fieldName = 'Password'): { isValid: boolean; error?: string } => {
+export interface PasswordStrengthResult {
+  strength: 'weak' | 'medium' | 'strong';
+  score: 1 | 2 | 3;
+  isValid: boolean;
+  error?: string;
+}
+
+export const evaluatePasswordStrength = (password: string): PasswordStrengthResult => {
   if (!password) {
-    return { isValid: false, error: `${fieldName} is required.` };
+    return { strength: 'weak', score: 1, isValid: false, error: 'Password is required.' };
   }
-  if (password.length < 6) {
-    return { isValid: false, error: `${fieldName} must be at least 6 characters long.` };
+
+  const hasLength = password.length >= 12;
+  const hasUpper = /[A-Z]/.test(password);
+  const hasLower = /[a-z]/.test(password);
+  const hasNumber = /\d/.test(password);
+  const hasSpecial = /[^A-Za-z0-9]/.test(password);
+
+  let criteriaCount = 0;
+  if (hasUpper) criteriaCount++;
+  if (hasLower) criteriaCount++;
+  if (hasNumber) criteriaCount++;
+  if (hasSpecial) criteriaCount++;
+
+  // Strong: length >= 12 and all 4 criteria
+  if (hasLength && criteriaCount === 4) {
+    return { strength: 'strong', score: 3, isValid: true };
   }
-  if (password.length > 50) {
-    return { isValid: false, error: `${fieldName} cannot exceed 50 characters.` };
+
+  // Medium: length >= 8 and at least 3 criteria, or length >= 12 with 3 criteria
+  if ((password.length >= 8 && criteriaCount >= 3) || (hasLength && criteriaCount >= 3)) {
+    return {
+      strength: 'medium',
+      score: 2,
+      isValid: false,
+      error: 'Password must be at least 12 characters and include uppercase, lowercase, numbers, and special characters.'
+    };
+  }
+
+  // Weak otherwise
+  return {
+    strength: 'weak',
+    score: 1,
+    isValid: false,
+    error: 'Use at least 12 characters with uppercase, lowercase, numbers and special characters.'
+  };
+};
+
+export const validatePassword = (password: string, fieldName = 'Password'): { isValid: boolean; error?: string } => {
+  const result = evaluatePasswordStrength(password);
+  if (!result.isValid) {
+    return { isValid: false, error: result.error || `${fieldName} must meet strong password requirements.` };
   }
   return { isValid: true };
 };

@@ -8,7 +8,9 @@ import { CustomerPrintFlow } from './components/customer/CustomerPrintFlow';
 import { TrackPrintPage } from './components/customer/TrackPrintPage';
 import { AuthPages } from './components/auth/AuthPages';
 import { AdminLogin } from './components/admin/AdminLogin';
+import { PricingPage } from './components/pricing/PricingPage';
 import { ToastContainer } from './components/common/ToastContainer';
+import { QrScannerModal } from './components/common/QrScannerModal';
 import { ShieldAlert, Shield, LogOut } from 'lucide-react';
 
 // Shop Owner Components & Layout
@@ -104,8 +106,7 @@ const AppRouter: React.FC = () => {
   // 1.5. Track Print Page: /track-print
   if (path === '/track-print' || path === '#/track-print' || path.startsWith('/track-print')) {
     return (
-      <div className="min-h-screen bg-[#f8fafc] flex flex-col">
-        <Navbar />
+      <div className="min-h-screen bg-[#F6F6F6] flex flex-col w-full overflow-x-hidden">
         <AnimatePresence mode="wait">
           <motion.main
             key="track-print-page"
@@ -113,11 +114,33 @@ const AppRouter: React.FC = () => {
             initial="initial"
             animate="animate"
             exit="exit"
-            className="flex-1"
+            className="flex-1 w-full"
           >
             <TrackPrintPage />
           </motion.main>
         </AnimatePresence>
+      </div>
+    );
+  }
+
+  // 1.8. Public Pricing Page: /pricing
+  if (path === '/pricing' || path === '#/pricing' || path.startsWith('/pricing')) {
+    return (
+      <div className="min-h-screen bg-[#f8fafc] flex flex-col">
+        <Navbar />
+        <AnimatePresence mode="wait">
+          <motion.main
+            key="pricing-page"
+            variants={pageTransitionVariants}
+            initial="initial"
+            animate="animate"
+            exit="exit"
+            className="flex-1"
+          >
+            <PricingPage />
+          </motion.main>
+        </AnimatePresence>
+        <Footer />
       </div>
     );
   }
@@ -357,11 +380,29 @@ const AppRouter: React.FC = () => {
   );
 };
 
+const AppContent: React.FC = () => {
+  const { isQrScannerOpen, setIsQrScannerOpen, navigate } = useApp();
+
+  return (
+    <>
+      <AppRouter />
+      <QrScannerModal
+        isOpen={isQrScannerOpen}
+        onClose={() => setIsQrScannerOpen(false)}
+        onSuccess={(shopSlug: string) => {
+          setIsQrScannerOpen(false);
+          navigate(`/s/${shopSlug}`);
+        }}
+      />
+      <ToastContainer />
+    </>
+  );
+};
+
 export default function App() {
   return (
     <AppProvider>
-      <AppRouter />
-      <ToastContainer />
+      <AppContent />
     </AppProvider>
   );
 }

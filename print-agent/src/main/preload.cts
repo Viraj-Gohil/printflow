@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
     ipcRenderer.invoke('agent:get-status'),
   getShopInfo: (): Promise<{ success: boolean; shopInfo?: import('../renderer/types/agent.js').ShopDetails; error?: string }> =>
     ipcRenderer.invoke('agent:get-shop-info'),
+  getEntitlements: (): Promise<any> => ipcRenderer.invoke('agent:get-entitlements'),
   getMetrics: (): Promise<QueueMetrics> => ipcRenderer.invoke('agent:get-metrics'),
 
   // Printers
@@ -38,6 +39,12 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
     ipcRenderer.invoke('printer:reset-config', printerName),
   getPrinterDetectionDetails: (printerName: string): Promise<{ success: boolean; hardware?: any; error?: string }> =>
     ipcRenderer.invoke('printer:get-detection-details', printerName),
+  getDriverStatus: (): Promise<{
+    success: boolean;
+    drivers: Array<{ name: string; environment?: string; driverPath?: string; manufacturer?: string }>;
+    manufacturerLinks: Record<string, string>;
+    error?: string;
+  }> => ipcRenderer.invoke('printer:get-driver-status'),
 
   // Jobs Queue & Multi-Printer Management
   getJobs: (): Promise<PrintJobItem[]> => ipcRenderer.invoke('jobs:get-list'),
@@ -101,5 +108,17 @@ contextBridge.exposeInMainWorld('electronAgentAPI', {
     const handler = (_event: Electron.IpcRendererEvent, queues: any[]) => callback(queues);
     ipcRenderer.on('event:queue-state-changed', handler);
     return () => ipcRenderer.removeListener('event:queue-state-changed', handler);
+  },
+
+  onEntitlementsChanged: (callback: (entitlements: any) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, entitlements: any) => callback(entitlements);
+    ipcRenderer.on('event:entitlements-changed', handler);
+    return () => ipcRenderer.removeListener('event:entitlements-changed', handler);
+  },
+
+  onPairProgress: (callback: (stage: string) => void): (() => void) => {
+    const handler = (_event: Electron.IpcRendererEvent, stage: string) => callback(stage);
+    ipcRenderer.on('event:pair-progress', handler);
+    return () => ipcRenderer.removeListener('event:pair-progress', handler);
   }
 });

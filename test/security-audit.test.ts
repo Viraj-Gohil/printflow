@@ -159,8 +159,11 @@ async function runSecurityTests() {
   // ==========================================================================
   console.log('\n4. Testing Secure File Upload & Magic Byte Verification...');
   {
-    // 1. Legitimate PDF binary (%PDF-)
-    const validPdfBuffer = Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34]);
+    // 1. Legitimate PDF binary (%PDF-1.4 with trailing structure)
+    const validPdfBuffer = Buffer.concat([
+      Buffer.from([0x25, 0x50, 0x44, 0x46, 0x2D, 0x31, 0x2E, 0x34]),
+      Buffer.from('\n%âãÏÓ\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n')
+    ]);
     const pdfCheck = verifyFileSignature(validPdfBuffer);
     assert(pdfCheck.isValid && pdfCheck.mimeType === 'application/pdf', 'Verifies genuine PDF binary signature');
 

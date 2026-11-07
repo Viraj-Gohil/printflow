@@ -2,7 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import crypto from 'crypto';
-import { AgentConfig, DiscoveredPrinter, PrintJobItem } from '../../renderer/types/agent.js';
+import { AgentConfig, DiscoveredPrinter, PrintJobItem, PlanEntitlements } from '../../renderer/types/agent.js';
 import { M2MCrypto } from '../security/M2MCrypto.js';
 import { logger } from '../logger/AgentLogger.js';
 
@@ -264,6 +264,33 @@ export class ApiClient {
         planName: data.planName,
         registeredCount: data.registeredCount,
         agentRegisteredCount: data.agentRegisteredCount
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message };
+    }
+  }
+
+  public async fetchEntitlements(): Promise<{
+    success: boolean;
+    entitlements?: PlanEntitlements;
+    error?: string;
+  }> {
+    try {
+      const response = await fetch(`${this.getBaseUrl()}/api/agent/entitlements`, {
+        method: 'GET',
+        headers: this.getHeaders()
+      });
+      const data = (await response.json()) as {
+        success?: boolean;
+        entitlements?: PlanEntitlements;
+        error?: string;
+      };
+      if (!response.ok || !data.success || !data.entitlements) {
+        return { success: false, error: data.error || `HTTP ${response.status}: could not read subscription entitlements.` };
+      }
+      return {
+        success: true,
+        entitlements: data.entitlements
       };
     } catch (err: any) {
       return { success: false, error: err.message };

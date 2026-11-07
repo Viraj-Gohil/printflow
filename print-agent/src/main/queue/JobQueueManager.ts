@@ -1,5 +1,9 @@
+/**
+ * JobQueueManager: Per-printer FIFO queues for physical Windows printers.
+ * Runtime queue begins empty; authoritative jobs are reconciled from Neon on startup.
+ */
 import fs from 'fs';
-import { PrintJobItem, PrinterQueueState, PrinterQueueItem } from '../../renderer/types/agent.js';
+import { PrintJobItem, PrinterQueueState, PrinterQueueItem, PlanEntitlements, DiscoveredPrinter } from '../../renderer/types/agent.js';
 import { ApiClient } from '../api/ApiClient.js';
 import { WindowsPrinterManager } from '../printer/WindowsPrinterManager.js';
 import { localVault } from '../storage/LocalDataVault.js';
@@ -17,6 +21,7 @@ export class JobQueueManager {
   private onQueueStateChangeListener?: (queues: PrinterQueueState[]) => void;
   private activeDownloadsCount = 0;
   private maxConcurrentDownloads = 3;
+  private entitlements: PlanEntitlements | null = null;
 
   constructor(apiClient: ApiClient, printerManager: WindowsPrinterManager) {
     this.apiClient = apiClient;
@@ -30,6 +35,15 @@ export class JobQueueManager {
 
   public setOnQueueStateChangeListener(listener: (queues: PrinterQueueState[]) => void): void {
     this.onQueueStateChangeListener = listener;
+  }
+
+  public setEntitlements(entitlements: PlanEntitlements): void {
+    this.entitlements = entitlements;
+    this.notifyQueueStateChanged();
+  }
+
+  public getEntitlements(): PlanEntitlements | null {
+    return this.entitlements;
   }
 
   public getPhysicalDeviceId(printerName: string): string {
@@ -115,14 +129,45 @@ export class JobQueueManager {
     return Boolean(this.printerPaused.get(printerName.trim()));
   }
 
+  public getEffectiveFeatures(): {
+    canAutoPrint: boolean;
+    canMultipleQueues: boolean;
+    canSmartPrinterSelection: boolean;
+    canLoadBalancing: boolean;
+    canQueueOptimization: boolean;
+    canFailureMonitoring: boolean;
+  } {
+    const ent = this.entitlements || localVault.getEntitlements();
+    const f: any = ent?.features || {};
+    const plan = (ent?.plan || 'starter').toLowerCase();
+    const isOperational = ent ? (ent.status === 'active' || (ent.status as string) === 'trial' || ent.status === 'trialing') : true;
+
+    return {
+      canAutoPrint: isOperational && (f.canAutoPrint ?? f.automaticPrinting ?? true),
+      canMultipleQueues: f.canMultipleQueues ?? f.multipleQueues ?? (plan !== 'starter'),
+      canSmartPrinterSelection: f.canSmartPrinterSelection ?? f.smartPrinterSelection ?? (plan !== 'starter'),
+      canLoadBalancing: f.canLoadBalancing ?? f.loadBalancing ?? (plan === 'business'),
+      canQueueOptimization: f.canQueueOptimization ?? f.queueOptimization ?? (plan === 'business'),
+      canFailureMonitoring: f.canFailureMonitoring ?? f.printerFailureMonitoring ?? (plan === 'business')
+    };
+  }
+
   public getPrinterQueues(): PrinterQueueState[] {
     const config = localVault.getConfig();
     const registeredNames = config.registeredPrinterNames || [];
     const discoveredPrinters = this.printerManager.getCachedPrinters();
     const allStoredJobs = localVault.getAllJobs();
+    const features = this.getEffectiveFeatures();
+    const canMultipleQueues = features.canMultipleQueues;
 
     // Include registered printers + any cached printers
-    const targetPrinters = discoveredPrinters.filter(p => registeredNames.includes(p.name) || registeredNames.length === 0);
+    let targetPrinters = discoveredPrinters.filter(p => registeredNames.includes(p.name) || registeredNames.length === 0);
+
+    // STARTER TIER: Multiple printer queues blocked (only 1 active printer queue permitted)
+    if (!canMultipleQueues && targetPrinters.length > 1) {
+      const primaryName = config.selectedPrinterName || targetPrinters[0]?.name;
+      targetPrinters = targetPrinters.filter(p => p.name === primaryName);
+    }
 
     return targetPrinters.map((printer) => {
       const isPaused = Boolean(this.printerPaused.get(printer.name));
@@ -220,38 +265,93 @@ export class JobQueueManager {
    * Selects best eligible online registered printer based on strategy,
    * capabilities, availability, pause state, and least estimated workload.
    */
-  private selectEligiblePrinter(job: PrintJobItem): string | null {
+  public selectEligiblePrinter(job: PrintJobItem, printerListOverride?: DiscoveredPrinter[]): string | null {
     const config = localVault.getConfig();
     const registeredNames = config.registeredPrinterNames || [];
     const disabledNames = config.disabledPrinterNames || [];
-    const lbEnabled = config.loadBalancingEnabled !== false;
-    const strategy = config.loadBalancingStrategy || 'CAPABILITY_LEAST_WORKLOAD';
+    const entitlements = this.entitlements || localVault.getEntitlements();
+    const features = this.getEffectiveFeatures();
 
-    const availablePrinters = this.printerManager.getCachedPrinters().filter((printer) =>
+    // Rule 0: Subscription status check
+    if (entitlements && !entitlements.isOperational && entitlements.status !== 'active' && entitlements.status !== 'trialing') {
+      job.assignmentReason = `Printing halted: Shop subscription status is ${entitlements.status.toUpperCase()}. Please renew your subscription plan.`;
+      return null;
+    }
+
+    if (!features.canAutoPrint) {
+      job.assignmentReason = 'Automatic printing is disabled for this subscription tier. Please upgrade or renew.';
+      return null;
+    }
+
+    const sourcePrinters = printerListOverride || this.printerManager.getCachedPrinters();
+    const availablePrinters = sourcePrinters.filter((printer) =>
       printer.isOnline &&
-      registeredNames.includes(printer.name) &&
+      (registeredNames.includes(printer.name) || registeredNames.length === 0) &&
       !disabledNames.includes(printer.name) &&
       !this.printerPaused.get(printer.name) &&
       printer.status !== 'OFFLINE'
     );
 
-    if (availablePrinters.length === 0) return null;
+    if (availablePrinters.length === 0) {
+      job.assignmentReason = 'No registered physical printers are currently online.';
+      return null;
+    }
 
     // 1. Comprehensive capability compatibility check
-    const canPrintJob = (printer: (typeof availablePrinters)[number]) =>
-      job.files.every((file) => {
-        const requestedSize = (file.paperSize || 'A4').toUpperCase();
-        const printerSizes = (printer.capabilities.paperSizes || ['A4']).map((s) => s.toUpperCase());
-        const sizeMatches = printerSizes.length === 0 || printerSizes.includes(requestedSize);
-        const colorMatches = file.colorMode !== 'COLOR' || printer.capabilities.supportsColor !== false;
-        const duplexMatches = !file.duplex || printer.capabilities.supportsDuplex !== false;
-        return sizeMatches && colorMatches && duplexMatches;
-      });
+    const canPrintJob = (printer: (typeof availablePrinters)[number]) => {
+      const jobSettings: any = (job as any).settings;
+      const requestedColor = jobSettings?.colorMode || (job.files.some((f) => f.colorMode === 'COLOR') ? 'COLOR' : 'BW');
+      const requestedDuplex = Boolean(jobSettings?.duplex || job.files.some((f) => f.duplex));
+      const requestedPaper = (jobSettings?.paperSize || job.files[0]?.paperSize || 'A4').toUpperCase();
+
+      const printerSizes = (printer.capabilities?.paperSizes || ['A4']).map((s: string) => s.toUpperCase());
+      const sizeMatches = printerSizes.length === 0 || printerSizes.includes(requestedPaper);
+      const colorMatches = requestedColor !== 'COLOR' || printer.capabilities?.supportsColor === true;
+      const duplexMatches = !requestedDuplex || printer.capabilities?.supportsDuplex === true;
+
+      return sizeMatches && colorMatches && duplexMatches;
+    };
+
+    // Rule 1: STARTER TIER (Smart printer selection is BLOCKED, manual selection required)
+    if (!features.canSmartPrinterSelection) {
+      const selectedName = config.selectedPrinterName || availablePrinters[0]?.name;
+      if (!selectedName) {
+        job.assignmentReason = 'Manual printer selection required on Starter plan. Select a default printer in settings, or upgrade to Growth for Smart Selection.';
+        return null;
+      }
+      const preferred = availablePrinters.find((p) => p.name === selectedName);
+      if (!preferred) {
+        job.assignmentReason = `Selected printer "${selectedName}" is offline.`;
+        return null;
+      }
+      job.assignmentReason = `Assigned to manual printer "${preferred.name}" (Starter plan manual printer selection).`;
+      return preferred.name;
+    }
 
     const compatiblePrinters = availablePrinters.filter(canPrintJob);
-    if (compatiblePrinters.length === 0) return null;
+    if (compatiblePrinters.length === 0) {
+      job.assignmentReason = 'No available online printers match this document\'s color, paper size, or duplex requirements.';
+      return null;
+    }
 
-    // If load balancing is disabled or strategy is MANUAL, prioritize selectedPrinterName if compatible
+    // Rule 2: GROWTH TIER (Smart printer selection ALLOWED, Load Balancing is BLOCKED)
+    if (!features.canLoadBalancing) {
+      // Smart printer selection evaluates printer availability and matches paper size, color capability, and print requirements
+      let chosen = compatiblePrinters[0];
+      if (config.selectedPrinterName) {
+        const preferred = compatiblePrinters.find((p) => p.name === config.selectedPrinterName);
+        if (preferred) chosen = preferred;
+      }
+      const colorDesc = chosen.capabilities.supportsColor ? 'Colour' : 'B&W';
+      const paperDesc = chosen.capabilities.paperSizes?.join(', ') || 'A4';
+      job.assignmentReason = `Assigned to "${chosen.name}" (${colorDesc}, ${paperDesc}) via Smart Printer Selection. (Growth plan active · Load Balancing requires Business plan).`;
+      return chosen.name;
+    }
+
+    // Rule 3: BUSINESS TIER (Smart Load Balancing ALLOWED across compatible available printers)
+    const strategy = config.loadBalancingStrategy || 'CAPABILITY_LEAST_WORKLOAD';
+    const lbEnabled = config.loadBalancingEnabled !== false;
+
     if (!lbEnabled || strategy === 'MANUAL_ASSIGNMENT') {
       if (config.selectedPrinterName) {
         const preferred = compatiblePrinters.find((p) => p.name === config.selectedPrinterName);
@@ -313,7 +413,7 @@ export class JobQueueManager {
       const qCount = printerJobCounts.get(selected.name) || 0;
       const colorDesc = selected.capabilities.supportsColor ? 'Colour' : 'B&W';
       const paperDesc = selected.capabilities.paperSizes?.join(', ') || 'A4';
-      job.assignmentReason = `Assigned to "${selected.name}" (${colorDesc}, ${paperDesc}) using ${strategy} strategy (Active Queue: ${qCount} jobs, Workload: ${wLoad} pages).`;
+      job.assignmentReason = `Assigned to "${selected.name}" (${colorDesc}, ${paperDesc}) using ${strategy} load balancing (Active Queue: ${qCount} jobs, Workload: ${wLoad} pages) [Business Plan].`;
     }
 
     return selected?.name || null;
@@ -323,15 +423,34 @@ export class JobQueueManager {
    * Dispatches pending jobs to their respective printer queues concurrently.
    */
   public async dispatchQueue(): Promise<void> {
-    const pendingJobs = Array.from(this.activeJobs.values()).filter(
+    let pendingJobs = Array.from(this.activeJobs.values()).filter(
       (j) => j.printStatus === 'QUEUED' || j.printStatus === 'ASSIGNED'
     );
 
     if (pendingJobs.length === 0) return;
 
+    const entitlements = this.entitlements || localVault.getEntitlements();
+    const canAutoPrint = entitlements?.features?.automaticPrinting ?? true;
+    const canOptimizeQueue = entitlements?.features?.queueOptimization ?? false;
+
+    if (!canAutoPrint) {
+      logger.info('QUEUE', 'Automatic printing is disabled for this subscription tier.');
+      return;
+    }
+
+    // BUSINESS TIER: Automated Queue Optimization
+    if (canOptimizeQueue) {
+      pendingJobs.sort((a, b) => {
+        const priorityA = (a as any).priority || 0;
+        const priorityB = (b as any).priority || 0;
+        if (priorityA !== priorityB) return priorityB - priorityA;
+        return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      });
+    }
+
     for (const job of pendingJobs) {
       const printerName = this.selectEligiblePrinter(job);
-      if (!printerName) continue; // Keep queued until a compatible printer comes online
+      if (!printerName) continue; // Keep queued until a compatible printer is available
 
       job.printerName = printerName;
       if (!this.printerProcessing.get(printerName) && !this.printerPaused.get(printerName)) {

@@ -1,5 +1,5 @@
 import { BrowserWindow } from 'electron';
-import { AgentConfig, AgentConnectionStatus, DiscoveredPrinter, PrintJobItem } from '../../renderer/types/agent.js';
+import { AgentConfig, AgentConnectionStatus, DiscoveredPrinter, PrintJobItem, PlanEntitlements } from '../../renderer/types/agent.js';
 import { localVault } from '../storage/LocalDataVault.js';
 import { ApiClient } from '../api/ApiClient.js';
 import { WindowsPrinterManager } from '../printer/WindowsPrinterManager.js';
@@ -31,6 +31,10 @@ export class PrintAgentService {
     this.apiClient = new ApiClient(config);
     this.printerManager = WindowsPrinterManager.getInstance();
     this.queueManager = new JobQueueManager(this.apiClient, this.printerManager);
+    const cachedEntitlements = localVault.getEntitlements();
+    if (cachedEntitlements) {
+      this.queueManager.setEntitlements(cachedEntitlements);
+    }
   }
 
   public static getInstance(): PrintAgentService {
@@ -285,6 +289,27 @@ export class PrintAgentService {
     }, delay);
   }
 
+  public async syncEntitlements(): Promise<PlanEntitlements | null> {
+    try {
+      const res = await this.apiClient.fetchEntitlements();
+      if (res.success && res.entitlements) {
+        localVault.saveEntitlements(res.entitlements);
+        this.queueManager.setEntitlements(res.entitlements);
+        if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+          this.mainWindow.webContents.send('event:entitlements-changed', res.entitlements);
+        }
+        return res.entitlements;
+      }
+    } catch (err) {
+      logger.warn('AUTH', `Failed to sync subscription entitlements: ${err instanceof Error ? err.message : err}`);
+    }
+    return localVault.getEntitlements();
+  }
+
+  public getEntitlements(): PlanEntitlements | null {
+    return this.queueManager.getEntitlements() || localVault.getEntitlements();
+  }
+
   public async getShopInfo(): Promise<{ success: boolean; shopInfo?: import('../../renderer/types/agent.js').ShopDetails; error?: string }> {
     const res = await this.apiClient.getShopInfo();
     if (res.success && res.shopInfo) {
@@ -297,6 +322,7 @@ export class PrintAgentService {
       if (!res.shopInfo.isOperational) {
         this.setStatus('RESTRICTED');
       }
+      await this.syncEntitlements();
     }
     return res;
   }
@@ -335,6 +361,7 @@ export class PrintAgentService {
             return { success: true, status: 'RESTRICTED' };
           }
         }
+        await this.syncEntitlements();
 
         this.setStatus('ONLINE');
         if (shouldResumeQueue) {
@@ -633,18 +660,31 @@ export class PrintAgentService {
     return { success: ok, error: ok ? undefined : 'Job not found.' };
   }
 
+  private notifyPairProgress(stage: string): void {
+    if (this.mainWindow && !this.mainWindow.isDestroyed()) {
+      this.mainWindow.webContents.send('event:pair-progress', stage);
+    }
+  }
+
   public async pairDevice(pairingData: {
     serverUrl: string;
     shopId: string;
     authToken: string;
     deviceName?: string;
-  }): Promise<{ success: boolean; error?: string }> {
+  }): Promise<{ success: boolean; error?: string; shopId?: string; agentId?: string; code?: string; activeDevice?: any }> {
     this.configRevision++;
     this.pairingInProgress = true;
     try {
-      const res = await this.apiClient.pairDevice(pairingData);
-      if (!res.success) return { success: false, error: res.error };
+      this.notifyPairProgress('Validating credentials...');
+      if (!pairingData.shopId?.trim() || !pairingData.authToken?.trim()) {
+        return { success: false, error: 'Shop ID and Authentication Token are required.' };
+      }
 
+      this.notifyPairProgress('Authenticating shop...');
+      const res = await this.apiClient.pairDevice(pairingData);
+      if (!res.success) return { success: false, error: res.error, code: res.code, activeDevice: res.activeDevice };
+
+      this.notifyPairProgress('Registering this device...');
       try {
         localVault.saveConfig({
           serverUrl: pairingData.serverUrl.trim().replace(/\/+$/, ''),
@@ -672,6 +712,8 @@ export class PrintAgentService {
       localVault.saveConfig({ printerLimit: entitlement.printerLimit, registeredPrinterNames });
       this.apiClient.updateConfig(localVault.getConfig());
       this.configRevision++;
+
+      this.notifyPairProgress('Establishing secure connection...');
       this.pairingInProgress = false;
       this.startBackgroundLoops();
       const heartbeat = await this.triggerHeartbeat();
@@ -684,7 +726,7 @@ export class PrintAgentService {
         return { success: false, error: error instanceof Error ? error.message : 'Could not sync registered printers.' };
       }
 
-      return { success: true };
+      return { success: true, shopId: res.shopId || pairingData.shopId, agentId: res.agentId };
     } finally {
       this.pairingInProgress = false;
     }

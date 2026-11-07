@@ -345,6 +345,8 @@ try {
     if (combined.includes('SAMSUNG')) return 'Samsung';
     if (combined.includes('XEROX')) return 'Xerox';
     if (combined.includes('RICOH')) return 'Ricoh';
+    if (combined.includes('KYOCERA')) return 'Kyocera';
+    if (combined.includes('LEXMARK')) return 'Lexmark';
     if (combined.includes('KONICA')) return 'Konica Minolta';
     return 'Generic / Other';
   }

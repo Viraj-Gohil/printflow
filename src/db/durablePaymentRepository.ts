@@ -13,6 +13,7 @@
 import crypto from 'node:crypto';
 import type { PoolClient } from 'pg';
 import type { DurableDatabase } from './durableCheckoutRepository';
+import { subscriptionRepository } from './subscriptionRepository.js';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ensureUuid = (name: string, value: string) => {
@@ -541,6 +542,13 @@ export class DurablePaymentRepository {
            WHERE id = $1`,
           [order.job_id, finalJobPrintStatus, input.providerPaymentId]
         );
+
+        // Atomically increment shop subscription print job usage inside this transaction
+        try {
+          await subscriptionRepository.reserveAndIncrementJobUsage(order.shop_id, client);
+        } catch (subErr) {
+          console.error('[SUBSCRIPTION_USAGE] Failed to atomically increment job usage for shop:', order.shop_id, subErr);
+        }
 
         // Record print_job_event
         await client.query(

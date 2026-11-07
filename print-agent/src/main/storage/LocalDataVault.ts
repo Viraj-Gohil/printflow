@@ -1,3 +1,8 @@
+/**
+ * LocalDataVault: Local configuration vault for PrintFlow Windows Agent.
+ * Neon PostgreSQL is the sole authoritative database for all print jobs and business state.
+ * Purge legacy jobs_queue.json if present on disk to ensure queue reconciles from Neon.
+ */
 import fs from 'fs';
 import path from 'path';
 let app: any;
@@ -16,12 +21,12 @@ import {
   createDefaultOwnerConfig,
   validateOwnerConfigAgainstHardware
 } from '../../renderer/types/capabilities.js';
-import { AgentConfig, PrintJobItem, QueueMetrics } from '../../renderer/types/agent.js';
+import { AgentConfig, PrintJobItem, QueueMetrics, PlanEntitlements } from '../../renderer/types/agent.js';
 import { safeVault } from './SafeStorageVault.js';
 import { logger } from '../logger/AgentLogger.js';
 
 const DEFAULT_CONFIG: AgentConfig = {
-  serverUrl: '',
+  serverUrl: 'https://printflow.devpixel.space',
   shopId: '',
   shopSlug: '',
   agentId: '',
@@ -49,6 +54,7 @@ export class LocalDataVault {
   private jobs: Map<string, PrintJobItem> = new Map();
   private lastHeartbeatAt: string | null = null;
   private lastSyncAt: string | null = null;
+  private cachedEntitlements: PlanEntitlements | null = null;
   private credentialStorageSecure = true;
 
   private constructor() {
@@ -185,6 +191,10 @@ export class LocalDataVault {
       const parsed = JSON.parse(fs.readFileSync(this.stateFilePath, 'utf8')) as Record<string, unknown>;
       this.lastHeartbeatAt = this.validTimestamp(parsed.lastHeartbeatAt) ? parsed.lastHeartbeatAt : null;
       this.lastSyncAt = this.validTimestamp(parsed.lastSyncAt) ? parsed.lastSyncAt : null;
+      if (parsed.entitlements && typeof parsed.entitlements === 'object') {
+        this.cachedEntitlements = parsed.entitlements as PlanEntitlements;
+        this.config.entitlements = this.cachedEntitlements;
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown state error';
       logger.warn('STORAGE', 'Could not load saved agent status timestamps', { error: message });
@@ -199,13 +209,30 @@ export class LocalDataVault {
     try {
       fs.writeFileSync(
         this.stateFilePath,
-        JSON.stringify({ lastHeartbeatAt: this.lastHeartbeatAt, lastSyncAt: this.lastSyncAt }, null, 2),
+        JSON.stringify({
+          lastHeartbeatAt: this.lastHeartbeatAt,
+          lastSyncAt: this.lastSyncAt,
+          entitlements: this.cachedEntitlements
+        }, null, 2),
         'utf8'
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown state storage error';
       logger.error('STORAGE', 'Could not persist agent status timestamps', { error: message });
     }
+  }
+
+  public getEntitlements(): PlanEntitlements | null {
+    return this.cachedEntitlements;
+  }
+
+  public saveEntitlements(entitlements: PlanEntitlements): void {
+    this.cachedEntitlements = entitlements;
+    this.config.entitlements = entitlements;
+    if (entitlements.limits?.printers) {
+      this.config.printerLimit = entitlements.limits.printers;
+    }
+    this.persistAgentState();
   }
 
   public recordSuccessfulHeartbeat(timestamp = new Date().toISOString()): void {

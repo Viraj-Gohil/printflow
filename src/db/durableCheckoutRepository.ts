@@ -4,7 +4,7 @@ export interface CheckoutQuoteInput { jobId: string; shopId: string; currency: '
 export interface PaymentOrderInput { jobId: string; shopId: string; providerOrderId: string; providerAccountRef: string; amountMinor: number; idempotencyKey: string; }
 export interface DurableDatabase { connect(): Promise<PoolClient>; }
 
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ensureUuid = (name: string, value: string) => { if (!UUID.test(value)) throw new Error(`${name} must be a UUID.`); };
 const ensureMinor = (value: number) => { if (!Number.isSafeInteger(value) || value <= 0) throw new Error('amountMinor must be a positive integer.'); };
 

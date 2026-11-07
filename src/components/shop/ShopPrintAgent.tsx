@@ -357,7 +357,24 @@ export const ShopPrintAgent: React.FC = () => {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              <div className="p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-between">
+                <div className="truncate mr-2">
+                  <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Server URL</span>
+                  <span className="text-xs font-mono font-bold text-slate-800 truncate block">
+                    {typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : 'https://printflow.devpixel.space'}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleCopyText(typeof window !== 'undefined' && window.location.origin.startsWith('http') ? window.location.origin : 'https://printflow.devpixel.space', 'Server URL')}
+                  className="p-1 hover:bg-slate-200 rounded text-slate-500 shrink-0 cursor-pointer"
+                  title="Copy Server URL"
+                >
+                  {copiedKey === 'Server URL' ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+
               <div className="p-2.5 rounded-lg border border-slate-200 bg-slate-50 flex items-center justify-between">
                 <div>
                   <span className="text-[10px] text-slate-500 uppercase tracking-wider block font-semibold">Shop ID</span>

@@ -69,6 +69,9 @@ if (!gotTheLock) {
   });
 }
 
+// Allow local ES module asset loading across file:// protocol
+app.commandLine.appendSwitch('allow-file-access-from-files');
+
 function createMainWindow() {
   mainWindow = new BrowserWindow({
     width: 1080,
@@ -83,20 +86,62 @@ function createMainWindow() {
       preload: path.join(__dirname, 'preload.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true,
-      devTools: process.env.NODE_ENV !== 'production'
+      sandbox: false,
+      webSecurity: false,
+      devTools: true
     }
   });
 
+  // Diagnostics: Wire renderer console and loading events to agent logger
+  mainWindow.webContents.on('console-message', (event) => {
+    // Pipe all renderer errors and warnings directly into the logger
+    if (event.level >= 2) {
+      logger.warn(`[RENDERER-CONSOLE] [Level ${event.level}] ${event.message} (${event.sourceId}:${event.lineNumber})`);
+    }
+  });
+
+  mainWindow.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL) => {
+    logger.error(`[WINDOW] Failed to load renderer: ${errorDescription} (${errorCode}) at ${validatedURL}`);
+  });
+
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logger.error(`[RENDERER-CRASH] Renderer process gone: reason=${details.reason}, exitCode=${details.exitCode}`);
+  });
+
+  // Enable F12 and Ctrl+Shift+I to toggle DevTools for troubleshooting
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if ((input.key === 'F12' && input.type === 'keyDown') ||
+        (input.control && input.shift && input.key.toLowerCase() === 'i' && input.type === 'keyDown')) {
+      mainWindow?.webContents.toggleDevTools();
+      event.preventDefault();
+    }
+  });
+
+  const loadLocalBundle = () => {
+    const primaryBundlePath = path.join(__dirname, '../renderer/index.html');
+    const fallbackBundlePath = path.resolve(__dirname, '../../dist/renderer/index.html');
+
+    if (fs.existsSync(primaryBundlePath)) {
+      mainWindow?.loadFile(primaryBundlePath).catch((err) => {
+        logger.error(`[WINDOW] Failed to load primary bundle: ${err.message}`);
+      });
+    } else if (fs.existsSync(fallbackBundlePath)) {
+      mainWindow?.loadFile(fallbackBundlePath).catch((err) => {
+        logger.error(`[WINDOW] Failed to load fallback bundle: ${err.message}`);
+      });
+    } else {
+      logger.error(`[WINDOW] No built renderer bundle found at ${primaryBundlePath} or ${fallbackBundlePath}. Please run 'npm run build:renderer'.`);
+    }
+  };
+
   const isDev = process.env.NODE_ENV === 'development' || !app.isPackaged;
   if (isDev && process.env.VITE_DEV_SERVER_URL) {
-    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL);
-  } else {
-    // Load bundled HTML in production or dist
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html')).catch(() => {
-      // In local dev without separate renderer build, fall back to index.html
-      mainWindow?.loadFile(path.resolve(__dirname, '../../index.html')).catch(() => {});
+    mainWindow.loadURL(process.env.VITE_DEV_SERVER_URL).catch((err) => {
+      logger.warn(`[WINDOW] Could not connect to dev server (${process.env.VITE_DEV_SERVER_URL}): ${err.message}. Loading local bundle...`);
+      loadLocalBundle();
     });
+  } else {
+    loadLocalBundle();
   }
 
   mainWindow.once('ready-to-show', () => {
@@ -271,6 +316,10 @@ ipcMain.handle('agent:get-shop-info', async () => {
   return agentService.getShopInfo();
 });
 
+ipcMain.handle('agent:get-entitlements', () => {
+  return agentService.getEntitlements();
+});
+
 ipcMain.handle('agent:test-connection', async () => agentService.testConnection());
 
 ipcMain.handle('agent:reset-config', () => {
@@ -344,6 +393,10 @@ ipcMain.handle('printer:get-detection-details', (_event, printerName: unknown) =
   }
   const cfg = localVault.getPrinterConfig(printerName);
   return { success: Boolean(cfg), hardware: cfg?.hardware };
+});
+
+ipcMain.handle('printer:get-driver-status', async () => {
+  return printerManager.checkDriverStatus();
 });
 
 ipcMain.handle('jobs:get-list', () => {

@@ -16,7 +16,8 @@ import {
   AlertTriangle,
   Printer,
   Copy,
-  Check
+  Check,
+  Loader2
 } from 'lucide-react';
 import packageMetadata from '../../../package.json';
 
@@ -46,7 +47,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   required = false
 }) => {
   const [shopId, setShopId] = useState(config.shopId || '');
-  const [authToken, setAuthToken] = useState(config.authToken || '');
+  const [authToken, setAuthToken] = useState('');
   const [showToken, setShowToken] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{
     type: 'success' | 'error';
@@ -57,7 +58,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       lastSeen?: string;
     };
   } | null>(null);
+  const [inlineError, setInlineError] = useState<{ shopId?: string; authToken?: string } | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [connectionStage, setConnectionStage] = useState<string | null>(null);
   const [isDisconnecting, setIsDisconnecting] = useState(false);
   const [showDisconnectConfirm, setShowDisconnectConfirm] = useState(false);
   const [detectedHostName, setDetectedHostName] = useState(config.deviceName || 'PrintFlow Desktop');
@@ -77,7 +80,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     setAuthToken('');
     setShowToken(false);
     setStatusMessage(null);
+    setInlineError(null);
     setShowDisconnectConfirm(false);
+    setConnectionStage(null);
 
     if (window.electronAgentAPI?.getHostname) {
       window.electronAgentAPI.getHostname().then((detected) => {
@@ -108,39 +113,59 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   const handlePairAndConnect = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
+
+    const trimmedShopId = shopId.trim();
+    const trimmedToken = authToken.trim();
+
+    const errors: { shopId?: string; authToken?: string } = {};
+    if (!trimmedShopId) {
+      errors.shopId = 'Shop ID is required.';
+    }
+    if (!trimmedToken) {
+      errors.authToken = 'Authentication Token is required.';
+    }
+
+    if (errors.shopId || errors.authToken) {
+      setInlineError(errors);
+      return;
+    }
+
     setIsSaving(true);
     setStatusMessage(null);
+    setInlineError(null);
 
     try {
-      if (!shopId.trim()) {
-        throw new Error('Please enter your Shop ID.');
-      }
-      if (!authToken.trim()) {
-        throw new Error('Please enter the Agent Authentication Token.');
+      setConnectionStage('Validating credentials...');
+      await new Promise((r) => setTimeout(r, 350));
+
+      setConnectionStage('Authenticating shop...');
+      let effectiveServerUrl = (config.serverUrl || 'https://printflow.devpixel.space').trim().replace(/\/+$/, '');
+      if (!effectiveServerUrl.startsWith('http://') && !effectiveServerUrl.startsWith('https://')) {
+        effectiveServerUrl = `https://${effectiveServerUrl}`;
       }
 
-      const effectiveServerUrl = (config.serverUrl && config.serverUrl.trim())
-        ? config.serverUrl.trim()
-        : (window.location.origin.startsWith('http') ? window.location.origin : 'https://printflow.cloud');
+      setConnectionStage('Registering this device...');
       const effectiveDeviceName = detectedHostName || config.deviceName || 'PrintFlow Desktop';
 
       const pairRes = await onPair({
         serverUrl: effectiveServerUrl,
-        shopId: shopId.trim(),
-        authToken: authToken.trim(),
+        shopId: trimmedShopId,
+        authToken: trimmedToken,
         deviceName: effectiveDeviceName
       });
 
       if (!pairRes.success) {
         setStatusMessage({
           type: 'error',
-          text: pairRes.error || 'Authentication with PrintFlow server failed.',
+          text: pairRes.error || 'Authentication failed. Verify your Shop ID and Token.',
           activeDevice: pairRes.activeDevice
         });
         return;
       }
 
+      setConnectionStage('Establishing secure connection...');
       await onSave({
+        serverUrl: effectiveServerUrl,
         deviceName: effectiveDeviceName,
         pollIntervalMs: config.pollIntervalMs || 5000,
         selectedPrinterName: config.selectedPrinterName || undefined
@@ -149,21 +174,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
       setAuthToken('');
       setStatusMessage({
         type: 'success',
-        text: 'Device successfully authenticated and paired to your shop.'
+        text: 'Device successfully authenticated and paired.'
       });
 
       if (!required) {
         setTimeout(() => {
           onClose();
-        }, 1200);
+        }, 1000);
       }
     } catch (error: any) {
       setStatusMessage({
         type: 'error',
-        text: error?.message || 'Could not connect to the PrintFlow server.'
+        text: error?.message || 'Could not connect to the PrintFlow server. Please try again.'
       });
     } finally {
       setIsSaving(false);
+      setConnectionStage(null);
     }
   };
 
@@ -172,20 +198,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     try {
       if (onDisconnect) {
         const res = await onDisconnect();
-        if (!res.success) {
-          throw new Error(res.error || 'Disconnect failed');
-        }
+        if (!res.success) throw new Error(res.error || 'Disconnect failed');
       } else if (window.electronAgentAPI?.disconnectDevice) {
         const res = await window.electronAgentAPI.disconnectDevice();
-        if (!res.success) {
-          throw new Error(res.error || 'Disconnect failed');
-        }
+        if (!res.success) throw new Error(res.error || 'Disconnect failed');
       }
 
       setShowDisconnectConfirm(false);
       setStatusMessage({
         type: 'success',
-        text: 'Agent session disconnected successfully. Shop assignment released.'
+        text: 'Agent session disconnected successfully.'
       });
     } catch (error: any) {
       setStatusMessage({
@@ -199,362 +221,229 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   if (!isOpen) return null;
 
-  const modalContent = (
-    <div
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="setup-dialog-title"
-      className={
-        required
-          ? "w-full space-y-4 text-xs relative"
-          : "w-full max-w-lg max-h-[92vh] overflow-y-auto p-6 bg-white dark:bg-[#131D33] border border-[#E2E8F0] dark:border-slate-800 rounded-2xl shadow-xl space-y-4 text-xs animate-scale-in relative"
-      }
-    >
-      {/* Modal Header */}
-      {!required && (
-        <div className="flex items-center justify-between pb-3 border-b border-[#E2E8F0] dark:border-slate-800">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#EFF6FF] dark:bg-blue-950/50 text-[#2563EB] flex items-center justify-center">
-              <Server className="w-4 h-4" />
-            </div>
-            <div>
-              <h2 id="setup-dialog-title" className="text-sm font-bold text-[#0F172A] dark:text-white">
-                {isConnected ? 'Agent Connection & Credentials' : 'Connect Print Agent to Shop'}
-              </h2>
-              <p className="text-[11px] text-[#64748B] dark:text-slate-400">
-                {isConnected ? 'Active print agent session details' : 'Enter shop credentials to activate this station'}
-              </p>
-            </div>
+  // Main Pairing Form Component (Centered Login Card)
+  const pairingFormContent = (
+    <div className="w-full bg-white dark:bg-[#131D33] border border-[#E1E7E1] dark:border-slate-800 rounded-2xl shadow-xl p-8 space-y-6 animate-scale-in relative font-['Manrope',sans-serif]">
+      {/* Top Branding & Logo */}
+      <div className="text-center space-y-3">
+        <div className="w-14 h-14 rounded-2xl bg-[#E8F8EC] dark:bg-emerald-950/60 border border-[#A7F3D0] dark:border-emerald-800 text-[#00B32D] flex items-center justify-center mx-auto shadow-xs">
+          <Printer className="w-7 h-7 stroke-[2]" />
+        </div>
+        <div>
+          <h1 className="text-[24px] font-bold text-[#111111] dark:text-white tracking-tight">
+            Connect Your Shop
+          </h1>
+          <p className="text-[13px] text-[#646B65] dark:text-slate-400 mt-1">
+            Connect your Windows PC with PrintFlow.
+          </p>
+        </div>
+      </div>
+
+      {/* Revoked Handover Notice if session replaced */}
+      {status === 'REVOKED' && (
+        <div role="alert" className="p-3.5 rounded-xl bg-[#FEF2F2] border border-[#FECACA] text-xs text-[#DC2626] space-y-1 animate-fade-in">
+          <div className="flex items-center gap-2 font-bold">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-[#DC2626]" />
+            <span>Agent Session Replaced</span>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="p-1 rounded-lg text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white hover:bg-[#F8FAFC] dark:hover:bg-slate-800 transition-colors cursor-pointer"
-            title="Close (Esc)"
-          >
-            <X className="w-4 h-4" />
-          </button>
+          <p className="text-[11.5px] leading-relaxed">
+            Another PC connected for this shop. Printing on this PC was paused. Re-enter your Shop ID and Token to reconnect.
+          </p>
         </div>
       )}
 
-        {/* Feedback Alert */}
-        {statusMessage && (
-          <div
-            className={`p-3.5 rounded-xl border flex flex-col gap-1.5 animate-fade-in ${
-              statusMessage.type === 'success'
-                ? 'bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-                : 'bg-[#FEF2F2] border-[#FECACA] text-[#991B1B] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800'
-            }`}
-          >
-            <div className="flex items-start gap-2">
-              {statusMessage.type === 'success' ? (
-                <CheckCircle2 className="w-4 h-4 text-[#10B981] shrink-0 mt-0.5" />
-              ) : (
-                <AlertCircle className="w-4 h-4 text-[#EF4444] shrink-0 mt-0.5" />
+      {/* Error Feedback Banner */}
+      {statusMessage && (
+        <div
+          role={statusMessage.type === 'error' ? 'alert' : 'status'}
+          className={`p-3.5 rounded-xl border flex flex-col gap-1.5 text-xs animate-fade-in ${
+            statusMessage.type === 'success'
+              ? 'bg-[#E8F8EC] border-[#A7F3D0] text-[#008F25] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+              : 'bg-[#FEF2F2] border-[#FECACA] text-[#DC2626] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800'
+          }`}
+        >
+          <div className="flex items-start gap-2">
+            {statusMessage.type === 'success' ? (
+              <CheckCircle2 className="w-4 h-4 text-[#00B32D] shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className="w-4 h-4 text-[#DC2626] shrink-0 mt-0.5" />
+            )}
+            <div className="space-y-1">
+              <span className="font-semibold leading-relaxed block">{statusMessage.text}</span>
+              {statusMessage.activeDevice && (
+                <div className="text-[11px] font-mono bg-red-100 p-2 rounded-lg mt-1 border border-red-200 text-red-900">
+                  <p className="font-bold">Active Device: {statusMessage.activeDevice.deviceName || 'Counter PC'}</p>
+                  <p>Last seen: {statusMessage.activeDevice.lastSeenFormatted || 'recently'}</p>
+                </div>
               )}
-              <div className="space-y-1">
-                <span className="font-semibold leading-relaxed block">{statusMessage.text}</span>
-                {statusMessage.activeDevice && (
-                  <div className="text-[11px] font-mono bg-[#FEE2E2] p-2 rounded-lg mt-1 border border-[#FECACA] text-[#991B1B]">
-                    <p className="font-bold">Active Device: {statusMessage.activeDevice.deviceName || 'Counter PC'}</p>
-                    <p>Last seen: {statusMessage.activeDevice.lastSeenFormatted || 'recently'}</p>
-                    <p className="mt-1 font-sans">
-                      Connecting from this PC will automatically transfer active status to this device.
-                    </p>
-                  </div>
-                )}
-              </div>
             </div>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* ------------------------------------------------------------- */}
-        {/* CASE 1: CONNECTED STATE                                       */}
-        {/* ------------------------------------------------------------- */}
-        {isConnected ? (
-          <div className="space-y-4 animate-fade-in">
-            {/* Status card */}
-            <div className="p-4 rounded-xl border border-[#A7F3D0] bg-[#ECFDF5] dark:bg-emerald-950/20 dark:border-emerald-800/60 space-y-3">
-              <div className="flex items-center justify-between pb-2.5 border-b border-[#A7F3D0]/60 dark:border-emerald-800/40">
-                <span className="text-[11px] font-semibold text-[#047857] dark:text-emerald-300 uppercase tracking-wider">
-                  Connection Status
-                </span>
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-white text-[#047857] border border-[#A7F3D0] shadow-xs">
-                  <span className="w-2 h-2 rounded-full bg-[#10B981] animate-pulse" />
-                  Connected &amp; Active
-                </span>
+      {/* Centered Login Form */}
+      <form onSubmit={handlePairAndConnect} className="space-y-5">
+        {/* Field 1: Shop ID */}
+        <div className="space-y-1.5">
+          <label htmlFor="login-shop-id" className="block text-[13px] font-semibold text-[#111111] dark:text-white">
+            Shop ID <span className="text-[#DC2626]">*</span>
+          </label>
+          <input
+            id="login-shop-id"
+            type="text"
+            required
+            disabled={isSaving}
+            value={shopId}
+            onChange={(e) => {
+              setShopId(e.target.value);
+              if (inlineError?.shopId) setInlineError((prev) => ({ ...prev, shopId: undefined }));
+            }}
+            placeholder="Enter your Shop ID"
+            className="w-full h-11 px-3.5 rounded-xl border border-[#E1E7E1] dark:border-slate-700 bg-[#FFFFFF] dark:bg-slate-900 text-[#111111] dark:text-white font-mono text-xs focus:outline-none focus:border-[#00B32D] focus:ring-2 focus:ring-[#00B32D]/20 transition-all disabled:bg-[#F7F8F7] disabled:text-[#646B65] disabled:cursor-not-allowed"
+          />
+          {inlineError?.shopId && (
+            <p role="alert" className="text-[11.5px] text-[#DC2626] font-medium flex items-center gap-1">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>{inlineError.shopId}</span>
+            </p>
+          )}
+        </div>
+
+        {/* Field 2: Authentication Token */}
+        <div className="space-y-1.5">
+          <label htmlFor="login-auth-token" className="block text-[13px] font-semibold text-[#111111] dark:text-white">
+            Authentication Token <span className="text-[#DC2626]">*</span>
+          </label>
+          <div className="relative">
+            <input
+              id="login-auth-token"
+              type={showToken ? 'text' : 'password'}
+              required
+              disabled={isSaving}
+              value={authToken}
+              onChange={(e) => {
+                setAuthToken(e.target.value);
+                if (inlineError?.authToken) setInlineError((prev) => ({ ...prev, authToken: undefined }));
+              }}
+              placeholder="Enter your authentication token"
+              className="w-full h-11 pl-3.5 pr-10 rounded-xl border border-[#E1E7E1] dark:border-slate-700 bg-[#FFFFFF] dark:bg-slate-900 text-[#111111] dark:text-white font-mono text-xs focus:outline-none focus:border-[#00B32D] focus:ring-2 focus:ring-[#00B32D]/20 transition-all disabled:bg-[#F7F8F7] disabled:text-[#646B65] disabled:cursor-not-allowed"
+            />
+            <button
+              type="button"
+              disabled={isSaving}
+              onClick={() => setShowToken(!showToken)}
+              className="absolute right-3 top-3 text-[#646B65] hover:text-[#111111] dark:hover:text-white cursor-pointer transition-colors"
+              title={showToken ? 'Hide password' : 'Show password'}
+            >
+              {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+            </button>
+          </div>
+          {inlineError?.authToken && (
+            <p role="alert" className="text-[11.5px] text-[#DC2626] font-medium flex items-center gap-1">
+              <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+              <span>{inlineError.authToken}</span>
+            </p>
+          )}
+        </div>
+
+        {/* Primary Connect Button */}
+        <div className="pt-2 space-y-2">
+          <button
+            type="submit"
+            disabled={isSaving}
+            className="w-full h-11 rounded-xl text-sm font-bold bg-[#00B32D] hover:bg-[#008F25] active:bg-[#00701D] text-white flex items-center justify-center gap-2 transition-all cursor-pointer shadow-sm disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            {isSaving ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Connecting...</span>
+              </>
+            ) : (
+              <span>Connect Agent</span>
+            )}
+          </button>
+
+          {/* Connection Stage Feedback */}
+          {isSaving && connectionStage && (
+            <div className="text-center animate-fade-in pt-1">
+              <span className="text-xs font-medium text-[#646B65] dark:text-slate-400 flex items-center justify-center gap-1.5">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#00B32D] animate-pulse" />
+                {connectionStage}
+              </span>
+            </div>
+          )}
+        </div>
+      </form>
+    </div>
+  );
+
+  // If in Connected state while opening inside app modal
+  if (isConnected) {
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in font-['Manrope',sans-serif]">
+        <div className="w-full max-w-lg max-h-[92vh] overflow-y-auto p-6 bg-white dark:bg-[#131D33] border border-[#E1E7E1] dark:border-slate-800 rounded-2xl shadow-xl space-y-4 text-xs relative">
+          <div className="flex items-center justify-between pb-3 border-b border-[#E1E7E1] dark:border-slate-800">
+            <div className="flex items-center gap-2.5">
+              <div className="w-8 h-8 rounded-lg bg-[#E8F8EC] text-[#00B32D] flex items-center justify-center">
+                <Server className="w-4 h-4" />
               </div>
-
-              {/* Shop Name & Shop ID */}
-              <div className="flex items-center justify-between py-1 text-xs">
-                <span className="text-[#047857] dark:text-emerald-300 flex items-center gap-1.5 font-medium">
-                  <Store className="w-3.5 h-3.5" />
-                  <span>Shop Name</span>
-                </span>
-                <span className="font-bold text-[#0F172A] dark:text-white">
-                  {config.shopDetails?.shopName || config.shopSlug || 'PrintFlow Shop'}
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between py-1 text-xs">
-                <span className="text-[#047857] dark:text-emerald-300 flex items-center gap-1.5 font-medium">
-                  <Key className="w-3.5 h-3.5" />
-                  <span>Shop ID</span>
-                </span>
-                <div className="flex items-center gap-1.5 font-mono">
-                  <span className="font-semibold text-[#0F172A] dark:text-white">{config.shopId}</span>
-                  <button
-                    type="button"
-                    onClick={() => handleCopyId(config.shopId)}
-                    title="Copy Shop ID"
-                    className="p-1 rounded hover:bg-white/60 text-[#047857] transition-colors cursor-pointer"
-                  >
-                    {copiedShopId ? <Check className="w-3 h-3 text-[#10B981]" /> : <Copy className="w-3 h-3" />}
-                  </button>
-                </div>
-              </div>
-
-              {/* Device Hostname */}
-              <div className="flex items-center justify-between py-1 text-xs">
-                <span className="text-[#047857] dark:text-emerald-300 flex items-center gap-1.5 font-medium">
-                  <Laptop className="w-3.5 h-3.5" />
-                  <span>Device Hostname</span>
-                </span>
-                <span className="font-mono font-semibold text-[#0F172A] dark:text-white">
-                  {detectedHostName || config.deviceName || 'Local PC'}
-                </span>
-              </div>
-
-              {/* Agent Version */}
-              <div className="flex items-center justify-between py-1 text-xs">
-                <span className="text-[#047857] dark:text-emerald-300 flex items-center gap-1.5 font-medium">
-                  <Server className="w-3.5 h-3.5" />
-                  <span>Agent Version</span>
-                </span>
-                <span className="font-mono font-semibold text-[#0F172A] dark:text-white">
-                  v{packageMetadata.version}
-                </span>
-              </div>
-
-              {/* Connected Printer Count */}
-              <div className="flex items-center justify-between py-1 text-xs">
-                <span className="text-[#047857] dark:text-emerald-300 flex items-center gap-1.5 font-medium">
-                  <Printer className="w-3.5 h-3.5" />
-                  <span>Connected Printers</span>
-                </span>
-                <span className="font-semibold text-[#0F172A] dark:text-white">
-                  {printers.length} Installed ({printers.filter(p => p.isOnline).length} Online)
-                </span>
-              </div>
-
-              {/* Last Successful Heartbeat */}
-              <div className="flex items-center justify-between py-1 text-xs">
-                <span className="text-[#047857] dark:text-emerald-300 flex items-center gap-1.5 font-medium">
-                  <Clock className="w-3.5 h-3.5" />
-                  <span>Last Heartbeat</span>
-                </span>
-                <span className="font-mono text-[#0F172A] dark:text-white">
-                  {lastHeartbeat ? new Date(lastHeartbeat).toLocaleString() : 'Active session'}
-                </span>
-              </div>
-
-              {/* Single device security guarantee */}
-              <div className="pt-2 border-t border-[#A7F3D0]/60 dark:border-emerald-800/40 flex items-center gap-1.5 text-[11px] text-[#047857] dark:text-emerald-300">
-                <ShieldCheck className="w-3.5 h-3.5 text-[#10B981] shrink-0" />
-                <span>Single active device policy enforced. Windows safeStorage DPAPI hardware isolation enabled.</span>
+              <div>
+                <h2 className="text-sm font-bold text-[#111111] dark:text-white">Agent Session &amp; Status</h2>
+                <p className="text-[11px] text-[#646B65] dark:text-slate-400">Active station pairing details</p>
               </div>
             </div>
-
-            {/* Disconnect Agent Button */}
-            <div className="pt-2">
+            {!required && (
               <button
                 type="button"
-                onClick={() => setShowDisconnectConfirm(true)}
-                disabled={isDisconnecting}
-                className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[#B91C1C] border border-[#FECACA] shadow-xs transition-colors cursor-pointer"
+                onClick={onClose}
+                className="p-1 rounded-lg text-[#646B65] hover:bg-[#F7F8F7] cursor-pointer"
               >
-                <LogOut className="w-4 h-4 text-[#EF4444]" />
-                <span>Disconnect Agent from this PC</span>
+                <X className="w-4 h-4" />
               </button>
-            </div>
-          </div>
-        ) : (
-          /* ------------------------------------------------------------- */
-          /* CASE 2: DISCONNECTED / PAIRING FORM                           */
-          /* ------------------------------------------------------------- */
-          <div className="space-y-4 animate-fade-in">
-            {/* Status Indicator */}
-            <div className="flex items-center justify-between p-3 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800">
-              <span className="text-[11px] font-semibold text-[#64748B] dark:text-slate-400 uppercase tracking-wider">
-                Connection Status
-              </span>
-              {status === 'REVOKED' ? (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#FFF1F2] text-[#BE123C] border border-[#FECDD3]">
-                  <span className="w-2 h-2 rounded-full bg-[#E11D48]" />
-                  Session Replaced
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-[#F1F5F9] text-[#475569] border border-[#E2E8F0]">
-                  <span className="w-2 h-2 rounded-full bg-[#94A3B8]" />
-                  Disconnected
-                </span>
-              )}
-            </div>
-
-            {/* Clear Handover Notice when Replaced */}
-            {status === 'REVOKED' && (
-              <div role="alert" className="p-3.5 rounded-xl bg-[#FFF1F2] border border-[#FECDD3] text-xs text-[#9F1239] flex flex-col gap-1.5 animate-fade-in">
-                <div className="flex items-center gap-2">
-                  <AlertTriangle className="w-4 h-4 text-[#E11D48] shrink-0" />
-                  <span className="font-bold">This agent session has been replaced by another device.</span>
-                </div>
-                <p className="text-[11.5px] leading-relaxed text-[#9F1239]">
-                  Another PC signed in using valid credentials for this shop. Printing on this PC was automatically stopped to prevent conflicts.
-                </p>
-                <p className="text-[11.5px] text-[#9F1239] font-medium">
-                  To take over and make this PC the active station again, enter your Shop ID and Agent Token below.
-                </p>
-              </div>
             )}
+          </div>
 
-            {/* Handover Notice */}
-            <div className="p-3 bg-[#EFF6FF] border border-[#BFDBFE] dark:bg-blue-950/40 dark:border-blue-800 rounded-xl text-xs text-[#1E40AF] dark:text-blue-300 flex items-start gap-2.5">
-              <ShieldCheck className="w-4 h-4 text-[#2563EB] shrink-0 mt-0.5" />
-              <div className="space-y-0.5 leading-relaxed">
-                <p className="font-semibold text-[#1E40AF] dark:text-blue-200">Single Active Device Rule</p>
-                <p className="text-[11.5px]">
-                  One shop can have only <strong>ONE active Agent PC</strong> at a time. Connecting this device automatically revokes the previous PC session and makes this PC active.
-                </p>
-              </div>
+          <div className="p-4 rounded-xl border border-[#A7F3D0] bg-[#E8F8EC] dark:bg-emerald-950/20 dark:border-emerald-800/60 space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-[#A7F3D0]/60">
+              <span className="text-[11px] font-semibold text-[#008F25] uppercase tracking-wider">Status</span>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-white text-[#008F25] border border-[#A7F3D0]">
+                <span className="w-2 h-2 rounded-full bg-[#00B32D] animate-pulse" />
+                Active &amp; Connected
+              </span>
             </div>
 
-            {/* Simple Connection Form: Only Shop ID & Auth Token */}
-            <form onSubmit={handlePairAndConnect} className="space-y-4 pt-1">
-              {/* Field 1: Shop ID */}
-              <div>
-                <label className="font-semibold text-xs text-[#0F172A] dark:text-white block mb-1.5 flex items-center gap-1.5">
-                  <Store className="w-3.5 h-3.5 text-[#2563EB] shrink-0" />
-                  <span>Shop ID</span>
-                  <span className="text-[#EF4444]">*</span>
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={shopId}
-                  onChange={(e) => setShopId(e.target.value)}
-                  placeholder="e.g. printflow-counter or full UUID"
-                  className="settings-input font-mono !text-xs"
-                />
-                <p className="text-[11px] text-[#64748B] dark:text-slate-400 mt-1">
-                  Found in your Web Dashboard header or URL.
-                </p>
-              </div>
-
-              {/* Field 2: Agent Auth Token with Secure Toggle */}
-              <div>
-                <label className="font-semibold text-xs text-[#0F172A] dark:text-white block mb-1.5 flex items-center gap-1.5">
-                  <Key className="w-3.5 h-3.5 text-[#F59E0B] shrink-0" />
-                  <span>Agent Authentication Token</span>
-                  <span className="text-[#EF4444]">*</span>
-                </label>
-                <div className="relative">
-                  <input
-                    type={showToken ? 'text' : 'password'}
-                    required
-                    value={authToken}
-                    onChange={(e) => setAuthToken(e.target.value)}
-                    placeholder="agt_tok_..."
-                    className="settings-input !pr-10 font-mono !text-xs"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowToken(!showToken)}
-                    className="absolute right-2.5 top-2.5 text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white cursor-pointer"
-                    title={showToken ? 'Hide token' : 'Show token'}
-                  >
-                    {showToken ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                  </button>
-                </div>
-                <p className="text-[11px] text-[#64748B] dark:text-slate-400 mt-1">
-                  Generate or copy in Web Dashboard under <strong>Settings → Print Agent</strong>.
-                </p>
-              </div>
-
-              {/* Device Hostname Tag */}
-              <div className="flex items-center gap-2 p-2.5 rounded-lg bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-[11px] text-[#64748B] dark:text-slate-400">
-                <Laptop className="w-3.5 h-3.5 text-[#94A3B8]" />
-                <span>This PC will register as: <strong className="text-[#0F172A] dark:text-slate-200">{detectedHostName}</strong></span>
-              </div>
-
-              {/* Form Action Buttons */}
-              <div className="pt-2 flex items-center justify-end gap-2.5">
-                {!required && (
-                  <button
-                    type="button"
-                    onClick={onClose}
-                    className="secondary-button"
-                  >
-                    Cancel
-                  </button>
-                )}
-                <button
-                  type="submit"
-                  disabled={isSaving}
-                  className="primary-button text-xs font-semibold"
-                >
-                  <Key className="w-3.5 h-3.5" />
-                  <span>{isSaving ? 'Authenticating...' : 'Connect Agent'}</span>
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-
-        {/* ------------------------------------------------------------- */}
-        {/* CONFIRMATION DIALOG: DISCONNECT CONFIRMATION MODAL            */}
-        {/* ------------------------------------------------------------- */}
-        {showDisconnectConfirm && (
-          <div className="absolute inset-0 bg-slate-900/60 backdrop-blur-xs rounded-2xl flex items-center justify-center p-4 z-50 animate-fade-in">
-            <div className="bg-white dark:bg-[#131D33] border border-[#E2E8F0] dark:border-slate-800 p-6 rounded-2xl shadow-xl space-y-4 max-w-sm w-full text-center">
-              <div className="w-11 h-11 rounded-full bg-[#FEF2F2] text-[#EF4444] flex items-center justify-center mx-auto">
-                <AlertTriangle className="w-5 h-5 stroke-[2]" />
-              </div>
-              <div className="space-y-1">
-                <h3 className="text-base font-bold text-[#0F172A] dark:text-white">
-                  Disconnect Print Agent?
-                </h3>
-                <p className="text-xs text-[#64748B] dark:text-slate-400 leading-relaxed">
-                  Disconnecting will stop automatic printing on this PC and release the active device assignment for this shop.
-                </p>
-              </div>
-              <div className="flex items-center justify-center gap-3 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowDisconnectConfirm(false)}
-                  disabled={isDisconnecting}
-                  className="secondary-button flex-1"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void handleDisconnectConfirm()}
-                  disabled={isDisconnecting}
-                  className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#EF4444] hover:bg-[#DC2626] text-white transition-colors cursor-pointer flex-1"
-                >
-                  {isDisconnecting ? 'Disconnecting...' : 'Yes, Disconnect'}
-                </button>
-              </div>
+            <div className="flex items-center justify-between py-1 text-xs">
+              <span className="text-[#646B65] dark:text-slate-400">Shop ID</span>
+              <span className="font-mono font-bold text-[#111111] dark:text-white">{config.shopId}</span>
+            </div>
+            <div className="flex items-center justify-between py-1 text-xs">
+              <span className="text-[#646B65] dark:text-slate-400">Hostname</span>
+              <span className="font-mono font-semibold text-[#111111] dark:text-white">{detectedHostName}</span>
             </div>
           </div>
-        )}
+
+          <div className="pt-2">
+            <button
+              type="button"
+              onClick={() => setShowDisconnectConfirm(true)}
+              disabled={isDisconnecting}
+              className="w-full flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl font-semibold text-xs bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA] cursor-pointer"
+            >
+              <LogOut className="w-4 h-4 text-[#DC2626]" />
+              <span>Disconnect Agent from this PC</span>
+            </button>
+          </div>
+        </div>
       </div>
     );
-
-  if (required) {
-    return modalContent;
   }
 
+  // If in Standalone Required Mode (Unauthenticated Screen)
+  if (required) {
+    return pairingFormContent;
+  }
+
+  // If in Modal Mode
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in"
@@ -563,7 +452,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         if (!showDisconnectConfirm && e.target === e.currentTarget) onClose();
       }}
     >
-      {modalContent}
+      <div className="w-full max-w-md">
+        {pairingFormContent}
+      </div>
     </div>
   );
 };

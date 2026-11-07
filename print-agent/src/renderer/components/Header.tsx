@@ -27,38 +27,38 @@ export const Header: React.FC<HeaderProps> = ({
   const { theme, resolvedTheme, setTheme } = useTheme();
 
   return (
-    <header className="agent-topbar px-6 py-3 flex items-center justify-between border-b border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] transition-colors">
+    <header className="agent-topbar px-6 py-3 flex items-center justify-between border-b border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] transition-colors">
       {/* Brand & Terminal Meta */}
       <div className="flex items-center gap-3 min-w-0">
-        <div className="w-9 h-9 rounded-xl bg-[#2563EB] text-white flex items-center justify-center shadow-xs shrink-0">
+        <div className="w-9 h-9 rounded-lg bg-[#00B32D] text-white flex items-center justify-center shadow-xs shrink-0">
           <Printer className="w-5 h-5 stroke-[2]" />
         </div>
 
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="text-[14px] font-bold text-[#0F172A] dark:text-white tracking-tight">
-              PrintFlow <span className="font-medium text-[#64748B] dark:text-slate-400">Agent</span>
+            <span className="text-[14px] font-bold text-[#111111] dark:text-white tracking-tight">
+              PrintFlow <span className="font-medium text-[#00B32D] dark:text-emerald-400">Agent</span>
             </span>
-            <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded-md bg-[#F1F5F9] dark:bg-slate-800 text-[#64748B] dark:text-slate-400 border border-[#E2E8F0] dark:border-slate-700">
+            <span className="text-[10px] font-mono font-semibold px-1.5 py-0.5 rounded-md bg-[#F0F4F1] dark:bg-slate-800 text-[#646B65] dark:text-slate-400 border border-[#E1E7E1] dark:border-slate-700">
               v{packageMetadata.version}
             </span>
           </div>
 
-          <div className="flex items-center gap-2 text-[11.5px] text-[#64748B] dark:text-slate-400 mt-0.5 min-w-0">
-            <span className="inline-flex items-center gap-1 font-medium text-[#475569] dark:text-slate-300 truncate">
-              <Store className="w-3 h-3 text-[#94A3B8] shrink-0" />
+          <div className="flex items-center gap-2 text-[11.5px] text-[#646B65] dark:text-slate-400 mt-0.5 min-w-0">
+            <span className="inline-flex items-center gap-1 font-medium text-[#111111] dark:text-slate-300 truncate">
+              <Store className="w-3 h-3 text-[#848D86] shrink-0" />
               {config.shopDetails?.shopName || config.shopSlug || config.shopId || 'Unlinked Shop'}
             </span>
-            <span className="text-[#CBD5E1] dark:text-slate-700">•</span>
-            <span className="inline-flex items-center gap-1 font-mono text-[#64748B] dark:text-slate-400 truncate">
-              <Laptop className="w-3 h-3 text-[#94A3B8] shrink-0" />
+            <span className="text-[#E1E7E1] dark:text-slate-700">•</span>
+            <span className="inline-flex items-center gap-1 font-mono text-[#646B65] dark:text-slate-400 truncate">
+              <Laptop className="w-3 h-3 text-[#848D86] shrink-0" />
               {config.deviceName || 'Desktop PC'}
             </span>
             {lastHeartbeat && (
               <>
-                <span className="hidden sm:inline text-[#CBD5E1] dark:text-slate-700">•</span>
+                <span className="hidden sm:inline text-[#E1E7E1] dark:text-slate-700">•</span>
                 <span
-                  className="hidden sm:inline text-[11px] text-[#94A3B8] dark:text-slate-500"
+                  className="hidden sm:inline text-[11px] text-[#848D86] dark:text-slate-500"
                   title={`Last successful heartbeat: ${new Date(lastHeartbeat).toLocaleString()}`}
                 >
                   Heartbeat {new Date(lastHeartbeat).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
@@ -81,8 +81,8 @@ export const Header: React.FC<HeaderProps> = ({
           className="secondary-button !min-h-[32px] !py-1 !px-2.5 text-xs font-semibold"
           title="Force poll cloud queue immediately"
         >
-          <RefreshCw className={`w-3.5 h-3.5 text-[#2563EB] dark:text-blue-400 ${isPolling ? 'animate-spin' : ''}`} />
-          <span className="hidden md:inline font-medium text-[#0F172A] dark:text-slate-200">
+          <RefreshCw className={`w-3.5 h-3.5 text-[#00B32D] dark:text-emerald-400 ${isPolling ? 'animate-spin' : ''}`} />
+          <span className="hidden md:inline font-medium text-[#111111] dark:text-slate-200">
             {isPolling ? 'Checking...' : 'Check Jobs'}
           </span>
         </button>
@@ -91,7 +91,7 @@ export const Header: React.FC<HeaderProps> = ({
         <div
           role="group"
           aria-label="Appearance Mode"
-          className="flex items-center p-0.5 rounded-lg border border-[#E2E8F0] dark:border-slate-800 bg-[#F8FAFC] dark:bg-slate-900"
+          className="flex items-center p-0.5 rounded-lg border border-[#E1E7E1] dark:border-slate-800 bg-[#F0F4F1] dark:bg-slate-900"
         >
           <button
             type="button"
@@ -99,7 +99,7 @@ export const Header: React.FC<HeaderProps> = ({
             className={`p-1 rounded-md transition-colors ${
               theme === 'light'
                 ? 'bg-white text-amber-500 shadow-xs'
-                : 'text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white'
+                : 'text-[#848D86] hover:text-[#111111] dark:hover:text-white'
             }`}
             title="Light Theme"
             aria-pressed={theme === 'light'}
@@ -113,8 +113,8 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setTheme('dark')}
             className={`p-1 rounded-md transition-colors ${
               theme === 'dark'
-                ? 'bg-[#131D33] text-blue-400 shadow-xs'
-                : 'text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white'
+                ? 'bg-[#131D33] text-emerald-400 shadow-xs'
+                : 'text-[#848D86] hover:text-[#111111] dark:hover:text-white'
             }`}
             title="Dark Theme"
             aria-pressed={theme === 'dark'}
@@ -128,8 +128,8 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setTheme('system')}
             className={`p-1 rounded-md transition-colors ${
               theme === 'system'
-                ? 'bg-white dark:bg-[#131D33] text-[#2563EB] shadow-xs'
-                : 'text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white'
+                ? 'bg-white dark:bg-[#131D33] text-[#00B32D] shadow-xs'
+                : 'text-[#848D86] hover:text-[#111111] dark:hover:text-white'
             }`}
             title={`System Theme (${resolvedTheme === 'dark' ? 'Dark OS' : 'Light OS'})`}
             aria-pressed={theme === 'system'}
@@ -143,7 +143,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           type="button"
           onClick={onOpenSettings}
-          className="p-1.5 rounded-lg border border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] text-[#64748B] hover:text-[#0F172A] dark:text-slate-400 dark:hover:text-white hover:bg-[#F8FAFC] dark:hover:bg-slate-800 transition-colors"
+          className="p-1.5 rounded-lg border border-[#E1E7E1] dark:border-slate-800 bg-white dark:bg-[#131D33] text-[#646B65] hover:text-[#111111] dark:text-slate-400 dark:hover:text-white hover:bg-[#E8F8EC] dark:hover:bg-slate-800 transition-colors"
           title="Agent Setup & Connection"
           aria-label="Agent Setup & Connection"
         >
@@ -154,7 +154,7 @@ export const Header: React.FC<HeaderProps> = ({
         <button
           type="button"
           onClick={onMinimizeToTray}
-          className="p-1.5 rounded-lg text-[#94A3B8] hover:text-[#0F172A] dark:hover:text-white hover:bg-[#F8FAFC] dark:hover:bg-slate-800 transition-colors"
+          className="p-1.5 rounded-lg text-[#848D86] hover:text-[#111111] dark:hover:text-white hover:bg-[#E8F8EC] dark:hover:bg-slate-800 transition-colors"
           title="Minimize to System Tray"
           aria-label="Minimize to System Tray"
         >

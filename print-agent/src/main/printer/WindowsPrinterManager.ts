@@ -209,6 +209,75 @@ export class WindowsPrinterManager {
   }
 
   /**
+   * Queries Windows printer drivers and retrieves official manufacturer support links.
+   */
+  public async checkDriverStatus(): Promise<{
+    success: boolean;
+    drivers: Array<{ name: string; environment?: string; driverPath?: string; manufacturer?: string }>;
+    manufacturerLinks: Record<string, string>;
+    error?: string;
+  }> {
+    const manufacturerLinks: Record<string, string> = {
+      HP: 'https://support.hp.com/us-en/drivers',
+      Canon: 'https://www.canon.com/support/',
+      Epson: 'https://epson.com/Support/sl',
+      Brother: 'https://support.brother.com/',
+      Xerox: 'https://www.support.xerox.com/',
+      Ricoh: 'https://www.ricoh.com/downloads/',
+      Kyocera: 'https://www.kyoceradocumentsolutions.com/download/'
+    };
+
+    const driverList: Array<{ name: string; environment?: string; driverPath?: string; manufacturer?: string }> = [];
+
+    if (process.platform === 'win32') {
+      try {
+        const psCommand = `powershell -NoProfile -Command "Get-CimInstance Win32_PrinterDriver | Select-Object Name, DriverPath, Environment | ConvertTo-Json -Depth 2"`;
+        const { stdout } = await execAsync(psCommand, { timeout: 8000 });
+        if (stdout && stdout.trim()) {
+          const parsed = JSON.parse(stdout);
+          const rawList = Array.isArray(parsed) ? parsed : [parsed];
+          for (const d of rawList) {
+            if (d && d.Name) {
+              const driverName = String(d.Name).split(',')[0].trim();
+              const mfr = printerCapabilityDetector.detectManufacturer(driverName, driverName);
+              driverList.push({
+                name: driverName,
+                environment: d.Environment || 'Windows x64',
+                driverPath: d.DriverPath || '',
+                manufacturer: mfr
+              });
+            }
+          }
+        }
+      } catch (err: any) {
+        logger.warn('SPOOLER', 'PowerShell Win32_PrinterDriver query notice', { error: err.message });
+      }
+    }
+
+    // Include cached printer drivers if array is empty
+    if (driverList.length === 0) {
+      for (const p of this.cachedPrinters) {
+        if (p.driverName) {
+          const mfr = printerCapabilityDetector.detectManufacturer(p.name, p.driverName);
+          if (!driverList.some((d) => d.name === p.driverName)) {
+            driverList.push({
+              name: p.driverName,
+              environment: 'Windows x64',
+              manufacturer: mfr
+            });
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      drivers: driverList,
+      manufacturerLinks
+    };
+  }
+
+  /**
    * Lightweight status poll: checks only online/offline status and queue state without re-running capability detection.
    */
   public async refreshPrinterStatuses(): Promise<DiscoveredPrinter[]> {

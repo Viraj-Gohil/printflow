@@ -20,10 +20,19 @@ import {
   Sun,
   Moon,
   LogOut,
-  Server
+  Server,
+  Sparkles,
+  Lock,
+  ArrowUpRight,
+  Zap,
+  Copy,
+  FileText,
+  LifeBuoy,
+  X
 } from 'lucide-react';
 import { useTheme } from '../context/ThemeContext';
 import { AgentStatusBadge } from './StatusBadge';
+import { PlanEntitlements } from '../types/agent';
 import {
   FormField,
   ReadOnlyField,
@@ -40,6 +49,7 @@ export interface DevicePreferencesViewProps {
   status: AgentConnectionStatus;
   lastHeartbeat: string | null;
   printers: DiscoveredPrinter[];
+  entitlements?: PlanEntitlements | null;
   onSave: (values: Partial<AgentConfig>) => Promise<{ success: boolean; error?: string }>;
   onTestConnection: () => Promise<{ success: boolean; error?: string }>;
   onReset: () => Promise<{ success: boolean; error?: string }>;
@@ -55,6 +65,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
   status,
   lastHeartbeat,
   printers,
+  entitlements,
   onSave,
   onTestConnection,
   onReset,
@@ -123,7 +134,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
       const result = await onSave({ deviceName: deviceName.trim() });
       if (result.success) {
         setNameSaveStatus('saved');
-        setGlobalMessage({ type: 'success', text: 'Terminal device name updated.' });
+        setGlobalMessage({ type: 'success', text: 'Terminal device name updated successfully.' });
         setTimeout(() => setNameSaveStatus('idle'), 2500);
       } else {
         setNameSaveStatus('error');
@@ -179,7 +190,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
       if (result.success) {
         setGlobalMessage({
           type: 'success',
-          text: 'PrintFlow Cloud handshake successful! Terminal is connected.'
+          text: 'PrintFlow Cloud handshake successful! Agent connection active.'
         });
       } else {
         setGlobalMessage({
@@ -197,18 +208,6 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
     }
   };
 
-  const handleRefreshStatus = async () => {
-    if (isRefreshingStatus) return;
-    setIsRefreshingStatus(true);
-    try {
-      await onTestConnection();
-      setGlobalMessage({ type: 'success', text: 'Status refreshed.' });
-      setTimeout(() => setGlobalMessage(null), 2000);
-    } finally {
-      setIsRefreshingStatus(false);
-    }
-  };
-
   const handleResetSettings = async () => {
     if (!window.confirm('Reset local agent configuration and erase stored device credentials?')) return;
     setGlobalMessage(null);
@@ -217,7 +216,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
       if (result.success) {
         setGlobalMessage({
           type: 'success',
-          text: 'Settings and credentials were reset.'
+          text: 'Settings and stored credentials reset successfully.'
         });
       } else {
         setGlobalMessage({
@@ -233,25 +232,47 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
     }
   };
 
-  const onlinePrintersCount = printers.filter((p) => p.isOnline).length;
-
   return (
-    <div className="space-y-6 animate-fade-in pb-12">
+    <div className="space-y-6 animate-fade-in pb-12 font-['Manrope',sans-serif]">
+      {/* Page Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-2 border-b border-[#E1E7E1] dark:border-slate-800">
+        <div>
+          <h1 className="text-[24px] font-bold text-[#111111] dark:text-white tracking-tight">
+            Settings
+          </h1>
+          <p className="text-[14px] text-[#646B65] dark:text-slate-400 mt-0.5">
+            Manage your PrintFlow Agent, device identity, connection security, queue preferences and subscription entitlements.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={handleTestConnection}
+            disabled={isTestingConnection}
+            className="secondary-button !h-9 !px-3.5 !text-xs font-semibold cursor-pointer"
+          >
+            <Wifi className={`w-3.5 h-3.5 text-[#00B32D] ${isTestingConnection ? 'animate-pulse' : ''}`} />
+            <span>{isTestingConnection ? 'Testing...' : 'Test Connection'}</span>
+          </button>
+        </div>
+      </div>
+
       {/* Global Feedback Banner */}
       {globalMessage && (
         <div
           role={globalMessage.type === 'error' ? 'alert' : 'status'}
           className={`p-4 rounded-xl border flex items-center justify-between gap-3 text-xs animate-fade-in ${
             globalMessage.type === 'success'
-              ? 'bg-[#ECFDF5] border-[#A7F3D0] text-[#065F46] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
-              : 'bg-[#FEF2F2] border-[#FECACA] text-[#991B1B] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800'
+              ? 'bg-[#E8F8EC] border-[#A7F3D0] text-[#008F25] dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800'
+              : 'bg-[#FEF2F2] border-[#FECACA] text-[#DC2626] dark:bg-red-950/40 dark:text-red-300 dark:border-red-800'
           }`}
         >
           <div className="flex items-center gap-2.5">
             {globalMessage.type === 'success' ? (
-              <Check className="w-4 h-4 text-[#10B981] shrink-0" />
+              <Check className="w-4 h-4 text-[#00B32D] shrink-0" />
             ) : (
-              <AlertTriangle className="w-4 h-4 text-[#EF4444] shrink-0" />
+              <AlertTriangle className="w-4 h-4 text-[#DC2626] shrink-0" />
             )}
             <span className="font-semibold">{globalMessage.text}</span>
           </div>
@@ -265,20 +286,20 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
         </div>
       )}
 
-      {/* Row 1: Identity & Security Cards */}
+      {/* Row 1: Identity & Session Cards */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Section A: Device Identity */}
+        {/* Section 1: Station Identity */}
         <SettingsCard
           title="Station Identity"
           description="Hardware computer identity registered to your PrintFlow shop."
-          icon={<Laptop className="w-4 h-4 text-[#2563EB]" />}
+          icon={<Laptop className="w-4 h-4 text-[#00B32D]" />}
         >
           <div className="space-y-4">
             <ReadOnlyField
               label="Agent Device ID"
               value={config.agentId || 'Not Paired'}
               description="Cryptographic terminal identifier bound to this computer."
-              icon={<Fingerprint className="w-4 h-4" />}
+              icon={<Fingerprint className="w-4 h-4 text-[#00B32D]" />}
               copyable={Boolean(config.agentId)}
               onCopy={onCopyDeviceId}
             />
@@ -287,7 +308,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
               label="Paired Shop ID"
               value={config.shopId || 'Not Paired'}
               description="Authorized shop instance receiving customer print orders."
-              icon={<Store className="w-4 h-4" />}
+              icon={<Store className="w-4 h-4 text-[#00B32D]" />}
               copyable={Boolean(config.shopId)}
               onCopy={(val) => handleCopyText(val, 'Paired Shop ID')}
             />
@@ -296,12 +317,12 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
               label="Detected System Hostname"
               value={config.deviceName || 'Detecting...'}
               description="Windows operating system hostname bound to this agent."
-              icon={<HardDrive className="w-4 h-4" />}
+              icon={<HardDrive className="w-4 h-4 text-[#00B32D]" />}
               copyable={Boolean(config.deviceName)}
               onCopy={(val) => handleCopyText(val, 'Host Name')}
             />
 
-            <form onSubmit={handleSaveDeviceName} className="pt-2 border-t border-[#E2E8F0] dark:border-slate-800">
+            <form onSubmit={handleSaveDeviceName} className="pt-2 border-t border-[#E1E7E1] dark:border-slate-800">
               <FormField
                 label="Friendly Counter Name"
                 htmlFor="terminal-device-name"
@@ -316,7 +337,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                     onChange={(e) => setDeviceName(e.target.value)}
                     placeholder="e.g. Counter PC 1"
                     maxLength={100}
-                    icon={<Laptop className="w-4 h-4" />}
+                    icon={<Laptop className="w-4 h-4 text-[#646B65]" />}
                     disabled={nameSaveStatus === 'saving'}
                   />
                   <SaveButton
@@ -326,7 +347,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                     savedText="Saved ✓"
                     errorText="Error"
                     disabled={!deviceName.trim() || deviceName === config.deviceName}
-                    className="sm:w-auto shrink-0"
+                    className="sm:w-auto shrink-0 !bg-[#00B32D] hover:!bg-[#008F25]"
                   />
                 </div>
               </FormField>
@@ -334,20 +355,20 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
           </div>
         </SettingsCard>
 
-        {/* Section B: Connection & Security */}
+        {/* Section 2: Session & Security */}
         <SettingsCard
           title="Session & Security"
-          description="Cloud synchronization telemetry, DPAPI vault, and session management."
-          icon={<ShieldCheck className="w-4 h-4 text-[#2563EB]" />}
+          description="Cloud synchronization telemetry, DPAPI vault, and session status."
+          icon={<ShieldCheck className="w-4 h-4 text-[#00B32D]" />}
         >
           <div className="space-y-4">
             {/* Status Item */}
-            <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800">
+            <div className="flex items-center justify-between p-3.5 rounded-xl bg-[#F7F8F7] dark:bg-slate-900 border border-[#E1E7E1] dark:border-slate-800">
               <div>
-                <span className="text-[11px] font-semibold text-[#64748B] dark:text-slate-400 uppercase tracking-wider block">
+                <span className="text-[11px] font-semibold text-[#646B65] dark:text-slate-400 uppercase tracking-wider block">
                   Session Status
                 </span>
-                <span className="text-xs font-bold text-[#0F172A] dark:text-white mt-0.5 block">
+                <span className="text-xs font-bold text-[#111111] dark:text-white mt-0.5 block">
                   {status === 'ONLINE' || status === 'CONNECTED'
                     ? 'Active Station'
                     : status === 'CONNECTING'
@@ -361,14 +382,14 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
             </div>
 
             {/* Heartbeat Status */}
-            <div className="p-3.5 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 space-y-1">
-              <span className="text-[11px] font-semibold text-[#64748B] dark:text-slate-400 uppercase tracking-wider block">
+            <div className="p-3.5 rounded-xl bg-[#F7F8F7] dark:bg-slate-900 border border-[#E1E7E1] dark:border-slate-800 space-y-1">
+              <span className="text-[11px] font-semibold text-[#646B65] dark:text-slate-400 uppercase tracking-wider block">
                 Last Heartbeat
               </span>
-              <p className="text-xs font-mono font-bold text-[#0F172A] dark:text-slate-200">
+              <p className="text-xs font-mono font-bold text-[#111111] dark:text-slate-200">
                 {lastHeartbeat ? new Date(lastHeartbeat).toLocaleString() : 'No authenticated heartbeat'}
               </p>
-              <p className="text-[11px] text-[#64748B] dark:text-slate-400">
+              <p className="text-[11px] text-[#646B65] dark:text-slate-400">
                 Background ping proves this station is ready to receive and print documents.
               </p>
             </div>
@@ -379,27 +400,27 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                 type="button"
                 onClick={handleTestConnection}
                 disabled={isTestingConnection}
-                className="secondary-button !min-h-[38px] !text-xs font-semibold"
+                className="secondary-button !min-h-[38px] !text-xs font-semibold cursor-pointer"
               >
-                <Wifi className={`w-3.5 h-3.5 text-[#2563EB] ${isTestingConnection ? 'animate-pulse' : ''}`} />
+                <Wifi className={`w-3.5 h-3.5 text-[#00B32D] ${isTestingConnection ? 'animate-pulse' : ''}`} />
                 <span>{isTestingConnection ? 'Testing...' : 'Test Connection'}</span>
               </button>
 
               <button
                 type="button"
                 onClick={onOpenLogs}
-                className="secondary-button !min-h-[38px] !text-xs font-semibold"
+                className="secondary-button !min-h-[38px] !text-xs font-semibold cursor-pointer"
               >
-                <Activity className="w-3.5 h-3.5 text-[#64748B]" />
+                <Activity className="w-3.5 h-3.5 text-[#646B65]" />
                 <span>View Diagnostics</span>
               </button>
 
               <button
                 type="button"
                 onClick={onOpenSettings}
-                className="secondary-button !min-h-[38px] !text-xs font-semibold col-span-full"
+                className="secondary-button !min-h-[38px] !text-xs font-semibold col-span-full cursor-pointer"
               >
-                <Store className="w-3.5 h-3.5 text-[#2563EB]" />
+                <Store className="w-3.5 h-3.5 text-[#00B32D]" />
                 <span>Change Shop / Re-pair Token</span>
               </button>
 
@@ -407,9 +428,9 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                 type="button"
                 onClick={() => setShowDisconnectModal(true)}
                 disabled={isDisconnecting}
-                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[#B91C1C] border border-[#FECACA] shadow-xs transition-colors cursor-pointer col-span-full"
+                className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-xl text-xs font-semibold bg-[#FEF2F2] hover:bg-[#FEE2E2] text-[#DC2626] border border-[#FECACA] shadow-xs transition-colors cursor-pointer col-span-full"
               >
-                <LogOut className="w-3.5 h-3.5 text-[#EF4444]" />
+                <LogOut className="w-3.5 h-3.5 text-[#DC2626]" />
                 <span>Disconnect Agent from this PC</span>
               </button>
             </div>
@@ -419,16 +440,16 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
 
       {/* Disconnect Confirmation Dialog */}
       {showDisconnectModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
-          <div className="bg-white dark:bg-[#131D33] border border-[#E2E8F0] dark:border-slate-800 p-6 rounded-2xl shadow-xl space-y-4 max-w-sm w-full text-center">
-            <div className="w-11 h-11 rounded-full bg-[#FEF2F2] text-[#EF4444] flex items-center justify-center mx-auto">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in font-['Manrope',sans-serif]">
+          <div className="bg-white dark:bg-[#131D33] border border-[#E1E7E1] dark:border-slate-800 p-6 rounded-2xl shadow-xl space-y-4 max-w-sm w-full text-center">
+            <div className="w-11 h-11 rounded-full bg-[#FEF2F2] text-[#DC2626] flex items-center justify-center mx-auto border border-[#FECACA]">
               <AlertTriangle className="w-5 h-5 stroke-[2]" />
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-bold text-[#0F172A] dark:text-white">
+              <h3 className="text-base font-bold text-[#111111] dark:text-white">
                 Disconnect Print Agent?
               </h3>
-              <p className="text-xs text-[#64748B] dark:text-slate-400 leading-relaxed">
+              <p className="text-xs text-[#646B65] dark:text-slate-400 leading-relaxed">
                 Disconnecting will stop automatic printing on this PC and release the active device assignment for this shop.
               </p>
             </div>
@@ -437,7 +458,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                 type="button"
                 onClick={() => setShowDisconnectModal(false)}
                 disabled={isDisconnecting}
-                className="secondary-button flex-1"
+                className="secondary-button flex-1 cursor-pointer"
               >
                 Cancel
               </button>
@@ -456,7 +477,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
                   }
                 }}
                 disabled={isDisconnecting}
-                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#EF4444] hover:bg-[#DC2626] text-white transition-colors cursor-pointer flex-1"
+                className="px-4 py-2 rounded-xl text-xs font-semibold bg-[#DC2626] hover:bg-[#B91C1C] text-white transition-colors cursor-pointer flex-1"
               >
                 {isDisconnecting ? 'Disconnecting...' : 'Yes, Disconnect'}
               </button>
@@ -465,15 +486,15 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
         </div>
       )}
 
-      {/* Row 2: Agent Preferences */}
+      {/* Section 3: Agent Preferences */}
       <SettingsCard
         title="Spooler & Agent Preferences"
         description="Configure polling frequency, Windows autostart behavior, and monochrome fallback rules."
-        icon={<SlidersHorizontal className="w-4 h-4 text-[#2563EB]" />}
+        icon={<SlidersHorizontal className="w-4 h-4 text-[#00B32D]" />}
       >
         <form onSubmit={handleSavePreferences} className="space-y-5">
           {prefError && (
-            <div role="alert" className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FECACA] text-xs text-[#991B1B] flex items-center gap-2">
+            <div role="alert" className="p-3 rounded-xl bg-[#FEF2F2] border border-[#FECACA] text-xs text-[#DC2626] flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 shrink-0" />
               <span>{prefError}</span>
             </div>
@@ -499,7 +520,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
           </div>
 
           {/* Toggle Switches */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#E2E8F0] dark:border-slate-800">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2 border-t border-[#E1E7E1] dark:border-slate-800">
             <ToggleSwitch
               id="autostart-on-boot"
               checked={autoStartOnBoot}
@@ -518,7 +539,7 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
           </div>
 
           {/* Action Button */}
-          <div className="pt-4 border-t border-[#E2E8F0] dark:border-slate-800 flex items-center justify-between gap-3">
+          <div className="pt-4 border-t border-[#E1E7E1] dark:border-slate-800 flex items-center justify-between gap-3">
             <SaveButton
               status={prefSaveStatus}
               idleText="Save Preferences"
@@ -526,75 +547,161 @@ export const DevicePreferencesView: React.FC<DevicePreferencesViewProps> = ({
               savedText="Preferences Saved ✓"
               errorText="Save Failed"
               disabled={prefSaveStatus === 'saving'}
+              className="!bg-[#00B32D] hover:!bg-[#008F25]"
             />
 
             <button
               type="button"
               onClick={handleResetSettings}
-              className="secondary-button !text-xs text-[#64748B] hover:text-[#EF4444]"
+              className="secondary-button !text-xs text-[#646B65] hover:text-[#DC2626] cursor-pointer"
               title="Reset configuration and erase saved device credentials"
             >
-              <WifiOff className="w-4 h-4" />
+              <WifiOff className="w-4 h-4 text-[#DC2626]" />
               <span>Reset Configuration</span>
             </button>
           </div>
         </form>
       </SettingsCard>
+
+      {/* Section 4: Subscription Plan & Feature Entitlements */}
+      {(() => {
+        const ent = entitlements || config.entitlements || config.shopDetails?.entitlements;
+        const plan = (ent?.plan || 'starter').toLowerCase();
+        const planName = ent?.planName || config.shopDetails?.planName || (plan === 'business' ? 'Business' : plan === 'growth' ? 'Growth' : 'Starter');
+        const printerLimit = ent?.limits?.printers ?? (plan === 'business' ? 10 : plan === 'growth' ? 5 : 1);
+        const jobLimit = ent?.limits?.monthlyPrintJobs ?? (plan === 'business' ? 5000 : plan === 'growth' ? 2000 : 500);
+
+        const canSmartRouting = ent?.features?.canSmartPrinterSelection ?? (plan !== 'starter');
+        const canMultiQueues = ent?.features?.canMultipleQueues ?? (plan !== 'starter');
+        const canLoadBalancing = ent?.features?.canLoadBalancing ?? (plan === 'business');
+        const canQueueOptimization = ent?.features?.canQueueOptimization ?? (plan === 'business');
+
+        return (
+          <SettingsCard
+            title="Subscription & Feature Entitlements"
+            description="Active SaaS plan limits, hardware quotas, and feature flags enforced by PrintFlow."
+            icon={<Sparkles className="w-4 h-4 text-[#00B32D]" />}
+          >
+            <div className="space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 rounded-xl bg-[#F7F8F7] dark:bg-slate-900 border border-[#E1E7E1] dark:border-slate-800 gap-3">
+                <div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-[#111111] dark:text-white">{planName} Plan</span>
+                    <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-[#E8F8EC] text-[#008F25] dark:bg-emerald-950/60 dark:text-emerald-300 uppercase">
+                      {ent?.status || 'Active'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-[#646B65] dark:text-slate-400 mt-1">
+                    Includes up to {printerLimit} printer connection(s) and {jobLimit.toLocaleString()} print jobs per month.
+                  </p>
+                </div>
+
+                {plan !== 'business' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const server = (config.serverUrl || 'https://printflow.devpixel.space').replace(/\/+$/, '');
+                      const portalUrl = `${server}/shop/subscription`;
+                      if (window.electronAgentAPI?.openExternal) {
+                        window.electronAgentAPI.openExternal(portalUrl);
+                      } else {
+                        window.open(portalUrl, '_blank');
+                      }
+                    }}
+                    className="primary-button !min-h-[34px] !text-xs font-semibold shrink-0 cursor-pointer !bg-[#00B32D] hover:!bg-[#008F25]"
+                  >
+                    <ArrowUpRight className="w-3.5 h-3.5" />
+                    <span>Upgrade Subscription</span>
+                  </button>
+                )}
+              </div>
+
+              {/* Feature Matrix */}
+              <div className="divide-y divide-[#E1E7E1] dark:divide-slate-800 text-xs">
+                <div className="py-2.5 flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold text-[#111111] dark:text-slate-200">Automatic Windows Printing</span>
+                    <p className="text-[11px] text-[#646B65] dark:text-slate-400">Direct background spooling of customer orders</p>
+                  </div>
+                  <span className="text-[#008F25] dark:text-emerald-400 font-bold flex items-center gap-1">
+                    <Check className="w-3.5 h-3.5" /> Available
+                  </span>
+                </div>
+
+                <div className="py-2.5 flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold text-[#111111] dark:text-slate-200">Independent Multi-Printer Queues</span>
+                    <p className="text-[11px] text-[#646B65] dark:text-slate-400">Concurrent non-blocking queues for each physical printer</p>
+                  </div>
+                  {canMultiQueues ? (
+                    <span className="text-[#008F25] dark:text-emerald-400 font-bold flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" /> Up to {printerLimit} Queues
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-500 font-semibold flex items-center gap-1">
+                      <Lock className="w-3.5 h-3.5" /> Growth Plan Required
+                    </span>
+                  )}
+                </div>
+
+                <div className="py-2.5 flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold text-[#111111] dark:text-slate-200">Smart Capability Routing</span>
+                    <p className="text-[11px] text-[#646B65] dark:text-slate-400">Route jobs by paper size, color, and duplex capability</p>
+                  </div>
+                  {canSmartRouting ? (
+                    <span className="text-[#008F25] dark:text-emerald-400 font-bold flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" /> Active
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-500 font-semibold flex items-center gap-1">
+                      <Lock className="w-3.5 h-3.5" /> Growth Plan Required
+                    </span>
+                  )}
+                </div>
+
+                <div className="py-2.5 flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold text-[#111111] dark:text-slate-200">Dynamic Intelligent Load Balancing</span>
+                    <p className="text-[11px] text-[#646B65] dark:text-slate-400">Distribute jobs dynamically across printers based on queue depth &amp; page counts</p>
+                  </div>
+                  {canLoadBalancing ? (
+                    <span className="text-[#008F25] dark:text-emerald-400 font-bold flex items-center gap-1">
+                      <Zap className="w-3.5 h-3.5" /> Active
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-500 font-semibold flex items-center gap-1">
+                      <Lock className="w-3.5 h-3.5" /> Business Plan Required
+                    </span>
+                  )}
+                </div>
+
+                <div className="py-2.5 flex items-center justify-between">
+                  <div>
+                    <span className="font-semibold text-[#111111] dark:text-slate-200">Automated Queue Optimization</span>
+                    <p className="text-[11px] text-[#646B65] dark:text-slate-400">Reorders jobs by urgency and batch optimization without stalling</p>
+                  </div>
+                  {canQueueOptimization ? (
+                    <span className="text-[#008F25] dark:text-emerald-400 font-bold flex items-center gap-1">
+                      <Check className="w-3.5 h-3.5" /> Active
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 dark:text-slate-500 font-semibold flex items-center gap-1">
+                      <Lock className="w-3.5 h-3.5" /> Business Plan Required
+                    </span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </SettingsCard>
+        );
+      })()}
     </div>
   );
 };
 
-export const AboutView: React.FC<{ onOpenExternal: (url: string) => Promise<void> }> = ({ onOpenExternal }) => (
-  <section className="max-w-2xl space-y-6 animate-fade-in">
-    <div className="pf-card p-6 border border-[#E2E8F0] dark:border-slate-800 bg-white dark:bg-[#131D33] rounded-2xl shadow-card space-y-5">
-      <div className="flex items-center gap-3.5">
-        <div className="w-12 h-12 rounded-xl bg-[#EFF6FF] dark:bg-blue-950/60 border border-[#BFDBFE] dark:border-blue-800 text-[#2563EB] flex items-center justify-center">
-          <Printer className="w-6 h-6 stroke-[2]" />
-        </div>
-        <div>
-          <h3 className="text-base font-bold text-[#0F172A] dark:text-white">PrintFlow Desktop Agent</h3>
-          <p className="text-xs text-[#64748B] dark:text-slate-400 font-mono mt-0.5">
-            Version v{packageMetadata.version} · Windows x64 Spooler Service
-          </p>
-        </div>
-      </div>
-
-      <p className="text-xs leading-relaxed text-[#475569] dark:text-slate-300">
-        Bridges your authorized PrintFlow web shop directly to Windows physical printers. Print orders are securely downloaded over TLS, rasterized locally, and sent to the native Windows Win32 Print Spooler with complete crash-resilient queue safety.
-      </p>
-
-      <div className="grid grid-cols-2 gap-3 p-4 rounded-xl bg-[#F8FAFC] dark:bg-slate-900 border border-[#E2E8F0] dark:border-slate-800 text-xs">
-        <div>
-          <span className="text-[#64748B] dark:text-slate-400 text-[11px] block font-medium">Application Version</span>
-          <span className="font-mono font-bold text-[#0F172A] dark:text-slate-200">v{packageMetadata.version}</span>
-        </div>
-        <div>
-          <span className="text-[#64748B] dark:text-slate-400 text-[11px] block font-medium">Target Subsystem</span>
-          <span className="font-semibold text-[#0F172A] dark:text-slate-200">Win32 Print Spooler</span>
-        </div>
-        <div>
-          <span className="text-[#64748B] dark:text-slate-400 text-[11px] block font-medium">Security Vault</span>
-          <span className="font-semibold text-[#0F172A] dark:text-slate-200">Windows safeStorage DPAPI</span>
-        </div>
-        <div>
-          <span className="text-[#64748B] dark:text-slate-400 text-[11px] block font-medium">Session Policy</span>
-          <span className="font-semibold text-[#10B981]">Single Active PC (Enforced)</span>
-        </div>
-      </div>
-
-      <div className="pt-2 flex items-center gap-3">
-        <button
-          type="button"
-          onClick={() => void onOpenExternal('https://printflow.cloud')}
-          className="secondary-button !text-xs font-semibold"
-        >
-          <ExternalLink className="w-3.5 h-3.5 text-[#2563EB]" />
-          <span>Open Web Dashboard</span>
-        </button>
-      </div>
-    </div>
-  </section>
-);
+export { AboutView } from './AboutView';
+export type { AboutViewProps } from './AboutView';
 
 export const ProfileDeviceView = DevicePreferencesView;
 export const SettingsPage = DevicePreferencesView;
